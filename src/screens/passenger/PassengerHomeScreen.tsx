@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, ScrollView, ActivityIndicator,
-  Platform, Alert,
+  Platform, Alert, StyleSheet as RNStyleSheet,
 } from 'react-native'
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps'
 import * as Location from 'expo-location'
@@ -11,8 +11,9 @@ import { useAuth } from '../../hooks/useAuth'
 import { useActiveRide } from '../../hooks/useActiveRide'
 import { supabase } from '../../lib/supabase'
 import RideTrackingSheet from '../../components/RideTrackingSheet'
-import Constants from 'expo-constants'
 import ProfileMenu from '../../components/ProfileMenu'
+import RideHistoryScreen from '../shared/RideHistoryScreen'
+import Constants from 'expo-constants'
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey
 
@@ -57,8 +58,8 @@ export default function PassengerHomeScreen() {
   const [sheet, setSheet] = useState<'search' | 'confirm' | null>(null)
   const [activeDrivers, setActiveDrivers] = useState<ActiveDriver[]>([])
   const [menuVisible, setMenuVisible] = useState(false)
+  const [historyVisible, setHistoryVisible] = useState(false)
 
-  // ── User location ──────────────────────────────────────────
   useEffect(() => {
     ;(async () => {
       const { status } = await Location.requestForegroundPermissionsAsync()
@@ -73,7 +74,6 @@ export default function PassengerHomeScreen() {
     })()
   }, [])
 
-  // ── Active drivers — always polling ───────────────────────
   useEffect(() => {
     fetchActiveDrivers()
     const interval = setInterval(fetchActiveDrivers, 15000)
@@ -97,7 +97,6 @@ export default function PassengerHomeScreen() {
     setActiveDrivers(withNames.filter(d => d.current_lat && d.current_lng) as ActiveDriver[])
   }
 
-  // ── Places search ──────────────────────────────────────────
   async function searchPlaces(query: string) {
     if (query.length < 3) { setPredictions([]); return }
     setSearchLoading(true)
@@ -136,8 +135,7 @@ export default function PassengerHomeScreen() {
         setSheet('confirm')
         getFareEstimate(pickup, dropoff)
         mapRef.current?.fitToCoordinates([pickup, dropoff], {
-          edgePadding: { top: 80, right: 60, bottom: 380, left: 60 },
-          animated: true,
+          edgePadding: { top: 80, right: 60, bottom: 380, left: 60 }, animated: true,
         })
       }
     } catch (e) { console.error(e) }
@@ -184,12 +182,9 @@ export default function PassengerHomeScreen() {
   }
 
   function resetBookingUI() {
-    setDropoffText('')
-    setDropoffCoords(null)
-    setFareEstimate(null)
-    setSheet(null)
-    setPredictions([])
-    setActiveField(null)
+    setDropoffText(''); setDropoffCoords(null)
+    setFareEstimate(null); setSheet(null)
+    setPredictions([]); setActiveField(null)
     if (userLocation)
       mapRef.current?.animateToRegion(
         { ...userLocation, latitudeDelta: 0.08, longitudeDelta: 0.08 }, 600
@@ -202,7 +197,6 @@ export default function PassengerHomeScreen() {
   return (
     <View style={styles.container}>
 
-      {/* ── MAP — always shows all active drivers ── */}
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -212,7 +206,6 @@ export default function PassengerHomeScreen() {
         showsMyLocationButton={false}
         customMapStyle={darkMapStyle}
       >
-        {/* All active drivers — always visible */}
         {activeDrivers.map(d => (
           <Marker
             key={d.id}
@@ -221,16 +214,11 @@ export default function PassengerHomeScreen() {
             title={d.name ?? 'Driver'}
             description={d.vehicle_make ?? ''}
           >
-            <View style={[
-              styles.driverMarker,
-              myDriverId === d.id && styles.driverMarkerMine,
-            ]}>
+            <View style={[styles.driverMarker, myDriverId === d.id && styles.driverMarkerMine]}>
               <Text style={styles.driverMarkerText}>🚗</Text>
             </View>
           </Marker>
         ))}
-
-        {/* Booking markers — only when no active ride */}
         {!hasActiveRide && pickupCoords && pickupText !== 'My location' && (
           <Marker coordinate={pickupCoords} pinColor="#4a9eff" title="Pickup" />
         )}
@@ -239,33 +227,20 @@ export default function PassengerHomeScreen() {
         )}
       </MapView>
 
-      {/* ── TOP BAR ── */}
       <View style={styles.topBar}>
         <View style={{ flex: 1 }}>
           <Text style={styles.topName}>
-            {hasActiveRide ? 'Your ride' : `Hey ${profile?.name?.split(' ')[0] ?? 'there'} 👋`}
+            {hasActiveRide ? 'Your ride' : `Hey ${profile?.name?.split(' ')[0] ?? 'there'}`}
           </Text>
           <Text style={styles.topSub}>
-            {hasActiveRide
-              ? statusLabel(ride.status, ride.driver?.name)
-              : 'Where are you headed?'
-            }
+            {hasActiveRide ? statusLabel(ride.status, ride.driver?.name) : 'Where are you headed?'}
           </Text>
         </View>
         <TouchableOpacity style={styles.avatarBtn} onPress={() => setMenuVisible(true)}>
           <Ionicons name="person-circle" size={36} color="#6B7280" />
         </TouchableOpacity>
-
-	<ProfileMenu
-	profile={profile}
-  	visible={menuVisible}
-  	onClose={() => setMenuVisible(false)}
-  	onSignOut={signOut}
-	/>
-
       </View>
 
-      {/* ── DRIVERS NEARBY PILL — always visible ── */}
       {activeDrivers.length > 0 && (
         <View style={styles.driversPill}>
           <View style={styles.driversPillDot} />
@@ -275,7 +250,6 @@ export default function PassengerHomeScreen() {
         </View>
       )}
 
-      {/* ── RECENTER ── */}
       {userLocation && (
         <TouchableOpacity
           style={styles.recenterBtn}
@@ -287,10 +261,8 @@ export default function PassengerHomeScreen() {
         </TouchableOpacity>
       )}
 
-      {/* ── BOOKING SHEET — only when no active ride ── */}
       {!hasActiveRide && (
         <View style={styles.sheet}>
-
           <View style={styles.inputsCard}>
             <TouchableOpacity
               style={styles.inputRow}
@@ -353,8 +325,7 @@ export default function PassengerHomeScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {QUICK_DESTINATIONS.map(d => (
                   <TouchableOpacity
-                    key={d.label}
-                    style={styles.quickChip}
+                    key={d.label} style={styles.quickChip}
                     onPress={() => {
                       setDropoffText(d.label.replace(/^.{2}/, '').trim())
                       setActiveField('dropoff')
@@ -399,8 +370,7 @@ export default function PassengerHomeScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.bookBtn, bookingLoading && { opacity: 0.6 }]}
-                  onPress={confirmBooking}
-                  disabled={bookingLoading}
+                  onPress={confirmBooking} disabled={bookingLoading}
                 >
                   {bookingLoading
                     ? <ActivityIndicator color="#fff" />
@@ -413,7 +383,6 @@ export default function PassengerHomeScreen() {
         </View>
       )}
 
-      {/* ── TRACKING SHEET — when active ride exists ── */}
       {hasActiveRide && (
         <RideTrackingSheet
           ride={ride}
@@ -424,6 +393,20 @@ export default function PassengerHomeScreen() {
         />
       )}
 
+      {historyVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
+        </View>
+      )}
+
+      <ProfileMenu
+        profile={profile}
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        onSignOut={signOut}
+        onOpenHistory={() => setHistoryVisible(true)}
+      />
+
     </View>
   )
 }
@@ -431,7 +414,6 @@ export default function PassengerHomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111827' },
   map: { flex: 1 },
-
   topBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
@@ -442,86 +424,60 @@ const styles = StyleSheet.create({
   topName: { fontSize: 20, fontWeight: '700', color: '#F1F5F9' },
   topSub: { fontSize: 13, color: '#6B7280', marginTop: 2 },
   avatarBtn: { padding: 4 },
-
   driversPill: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 110 : 96,
-    left: 20,
+    position: 'absolute', top: Platform.OS === 'ios' ? 110 : 96, left: 20,
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(30,42,58,0.92)',
-    borderRadius: 20, paddingVertical: 5, paddingHorizontal: 12,
+    backgroundColor: 'rgba(30,42,58,0.92)', borderRadius: 20,
+    paddingVertical: 5, paddingHorizontal: 12,
     borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
   },
   driversPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#1D9E75' },
   driversPillText: { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
-
   recenterBtn: {
     position: 'absolute', right: 16, bottom: 320,
     width: 42, height: 42, borderRadius: 21,
-    backgroundColor: '#1E2A3A',
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#1E2A3A', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center', justifyContent: 'center',
   },
-
   driverMarker: {
     backgroundColor: '#1E2A3A', borderRadius: 20, padding: 5,
     borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)',
   },
   driverMarkerMine: { borderColor: '#E8500A', backgroundColor: '#2A1A0E' },
   driverMarkerText: { fontSize: 16 },
-
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#111827',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    backgroundColor: '#111827', borderTopLeftRadius: 24, borderTopRightRadius: 24,
     borderTopWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
-    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36,
-    minHeight: 280,
+    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36, minHeight: 280,
   },
-
   inputsCard: {
     backgroundColor: '#1E2A3A', borderRadius: 16,
     borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
     marginBottom: 14, overflow: 'hidden',
   },
-  inputRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14,
-  },
+  inputRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
   inputDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
-  inputDivider: {
-    height: 0.5, backgroundColor: 'rgba(255,255,255,0.07)', marginHorizontal: 16,
-  },
+  inputDivider: { height: 0.5, backgroundColor: 'rgba(255,255,255,0.07)', marginHorizontal: 16 },
   inputText: { fontSize: 15, color: '#F1F5F9', flex: 1 },
   placeholder: { color: '#4B5563' },
-
   searchBox: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#1E2A3A', borderRadius: 12,
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
-    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E2A3A', borderRadius: 12,
+    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10,
   },
   searchInput: { flex: 1, fontSize: 15, color: '#F1F5F9' },
-
   predictionsList: { maxHeight: 220 },
   predictionRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 12, paddingHorizontal: 4,
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 4,
     borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.06)',
   },
   predictionText: { fontSize: 13, color: '#CBD5E1', flex: 1, lineHeight: 18 },
-
-  sectionLabel: {
-    fontSize: 10, fontWeight: '600', color: '#374151',
-    letterSpacing: 0.08, marginBottom: 10, marginTop: 4,
-  },
+  sectionLabel: { fontSize: 10, fontWeight: '600', color: '#374151', letterSpacing: 0.08, marginBottom: 10, marginTop: 4 },
   quickChip: {
-    backgroundColor: '#1E2A3A', borderRadius: 20,
-    paddingVertical: 8, paddingHorizontal: 14, marginRight: 8,
+    backgroundColor: '#1E2A3A', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 14, marginRight: 8,
     borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
   },
   quickChipText: { fontSize: 13, color: '#CBD5E1' },
-
   confirmTitle: { fontSize: 20, fontWeight: '700', color: '#F1F5F9', marginBottom: 16 },
   routeCard: {
     backgroundColor: '#1E2A3A', borderRadius: 14, padding: 14,
@@ -529,10 +485,7 @@ const styles = StyleSheet.create({
   },
   routeRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   routeDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
-  routeLine: {
-    width: 1, height: 14, backgroundColor: 'rgba(255,255,255,0.12)',
-    marginLeft: 4.5, marginVertical: 2,
-  },
+  routeLine: { width: 1, height: 14, backgroundColor: 'rgba(255,255,255,0.12)', marginLeft: 4.5, marginVertical: 2 },
   routeText: { fontSize: 14, color: '#CBD5E1', flex: 1 },
   fareRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -544,15 +497,11 @@ const styles = StyleSheet.create({
   fareAmount: { fontSize: 28, fontWeight: '700', color: '#F1F5F9' },
   confirmBtns: { flexDirection: 'row', gap: 12 },
   editBtn: {
-    flex: 1, paddingVertical: 14, borderRadius: 12,
-    backgroundColor: '#1E2A3A', alignItems: 'center',
+    flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#1E2A3A', alignItems: 'center',
     borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
   },
   editBtnText: { color: '#9CA3AF', fontSize: 15, fontWeight: '500' },
-  bookBtn: {
-    flex: 2, paddingVertical: 14, borderRadius: 12,
-    backgroundColor: '#E8500A', alignItems: 'center',
-  },
+  bookBtn: { flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: '#E8500A', alignItems: 'center' },
   bookBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 })
 

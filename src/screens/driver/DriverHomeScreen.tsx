@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Platform, Alert, Animated,
+  Platform, Alert, Animated, StyleSheet as RNStyleSheet,
 } from 'react-native'
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps'
 import * as Location from 'expo-location'
@@ -9,8 +9,8 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import RideRequestSheet from './RideRequestSheet'
-
 import ProfileMenu from '../../components/ProfileMenu'
+import RideHistoryScreen from '../shared/RideHistoryScreen'
 
 interface PendingRide {
   id: string
@@ -41,10 +41,10 @@ export default function DriverHomeScreen() {
   const [location, setLocation] = useState<LatLng | null>(null)
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null)
   const [togglingOnline, setTogglingOnline] = useState(false)
-  const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const [menuVisible, setMenuVisible] = useState(false)
+  const [historyVisible, setHistoryVisible] = useState(false)
+  const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ── Pulse animation for online dot ─────────────────────────
   useEffect(() => {
     if (!isOnline) return
     Animated.loop(
@@ -56,7 +56,6 @@ export default function DriverHomeScreen() {
     return () => pulseAnim.stopAnimation()
   }, [isOnline])
 
-  // ── Get location permission on mount ───────────────────────
   useEffect(() => {
     ;(async () => {
       const { status } = await Location.requestForegroundPermissionsAsync()
@@ -71,94 +70,58 @@ export default function DriverHomeScreen() {
     })()
   }, [])
 
-  // ── Load current online status from DB ─────────────────────
   useEffect(() => {
     if (!profile) return
     supabase
-      .from('drivers')
-      .select('is_active')
-      .eq('id', profile.id)
-      .single()
-      .then(({ data }) => {
-        if (data) setIsOnline(data.is_active)
-      })
+      .from('drivers').select('is_active').eq('id', profile.id).single()
+      .then(({ data }) => { if (data) setIsOnline(data.is_active) })
   }, [profile])
 
-  // ── Broadcast location every 10s when online ───────────────
   useEffect(() => {
     if (locationInterval.current) clearInterval(locationInterval.current)
     if (!isOnline || !profile) return
-
     locationInterval.current = setInterval(async () => {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude }
       setLocation(coords)
       await supabase.from('drivers').update({
-        current_lat: coords.latitude,
-        current_lng: coords.longitude,
+        current_lat: coords.latitude, current_lng: coords.longitude,
         updated_at: new Date().toISOString(),
       }).eq('id', profile.id)
     }, 10000)
-
-    return () => {
-      if (locationInterval.current) clearInterval(locationInterval.current)
-    }
+    return () => { if (locationInterval.current) clearInterval(locationInterval.current) }
   }, [isOnline, profile])
 
-  // ── Subscribe to pending ride requests ─────────────────────
   useEffect(() => {
     if (!isOnline || !profile) return
-
     const channel = supabase
       .channel('pending-rides-' + profile.id)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'rides',
-      }, async (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, async (payload) => {
         const row = payload.new as any
         if (row.status !== 'pending') {
-          // Ride was taken by another driver or cancelled
           setPendingRide(prev => prev?.id === row.id ? null : prev)
           return
         }
         await fetchPendingRide(row.id)
       })
       .subscribe()
-
-    // Also check for any existing pending rides immediately
     checkExistingPendingRides()
-
     return () => { supabase.removeChannel(channel) }
   }, [isOnline, profile])
 
   async function checkExistingPendingRides() {
     const { data } = await supabase
-      .from('rides')
-      .select('id')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-      .limit(1)
-    if (data && data.length > 0) {
-      await fetchPendingRide(data[0].id)
-    }
+      .from('rides').select('id').eq('status', 'pending')
+      .order('created_at', { ascending: true }).limit(1)
+    if (data && data.length > 0) await fetchPendingRide(data[0].id)
   }
 
   async function fetchPendingRide(rideId: string) {
     const { data: ride } = await supabase
-      .from('rides')
-      .select('*')
-      .eq('id', rideId)
-      .eq('status', 'pending')
-      .single()
+      .from('rides').select('*').eq('id', rideId).eq('status', 'pending').single()
     if (!ride) return
-
     const { data: passenger } = await supabase
-      .from('profiles')
-      .select('name, phone')
-      .eq('id', ride.passenger_id)
-      .single()
-
+      .from('profiles').select('name, phone').eq('id', ride.passenger_id).single()
     setPendingRide({
       id: ride.id,
       pickup_address: ride.pickup_address,
@@ -181,7 +144,6 @@ export default function DriverHomeScreen() {
     }
     setTogglingOnline(true)
     const goingOnline = !isOnline
-
     const update: any = { is_active: goingOnline }
     if (goingOnline && location) {
       update.current_lat = location.latitude
@@ -190,18 +152,9 @@ export default function DriverHomeScreen() {
       update.current_lat = null
       update.current_lng = null
     }
-
-    const { error } = await supabase
-      .from('drivers')
-      .update(update)
-      .eq('id', profile.id)
-
-    if (error) {
-      Alert.alert('Error', error.message)
-    } else {
-      setIsOnline(goingOnline)
-      if (!goingOnline) setPendingRide(null)
-    }
+    const { error } = await supabase.from('drivers').update(update).eq('id', profile.id)
+    if (error) { Alert.alert('Error', error.message) }
+    else { setIsOnline(goingOnline); if (!goingOnline) setPendingRide(null) }
     setTogglingOnline(false)
   }
 
@@ -211,26 +164,19 @@ export default function DriverHomeScreen() {
       .from('rides')
       .update({ driver_id: profile.id, status: 'assigned' })
       .eq('id', pendingRide.id)
-      .eq('status', 'pending') // prevent race condition
-
-    if (error) {
-      Alert.alert('Ride unavailable', 'This ride was already taken.')
-      setPendingRide(null)
-      return
-    }
+      .eq('status', 'pending')
+    if (error) { Alert.alert('Ride unavailable', 'This ride was already taken.'); setPendingRide(null); return }
     setPendingRide(null)
   }
 
   async function declineRide() {
     setPendingRide(null)
-    // Check for next pending ride
     setTimeout(checkExistingPendingRides, 1000)
   }
 
   return (
     <View style={styles.container}>
 
-      {/* ── MAP ── */}
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -241,11 +187,7 @@ export default function DriverHomeScreen() {
         customMapStyle={darkMapStyle}
       >
         {location && isOnline && (
-          <Marker
-            coordinate={location}
-            anchor={{ x: 0.5, y: 0.5 }}
-            title="You"
-          >
+          <Marker coordinate={location} anchor={{ x: 0.5, y: 0.5 }} title="You">
             <View style={styles.myMarker}>
               <Text style={{ fontSize: 18 }}>🚗</Text>
             </View>
@@ -253,17 +195,14 @@ export default function DriverHomeScreen() {
         )}
       </MapView>
 
-      {/* ── TOP BAR ── */}
       <View style={styles.topBar}>
         <View>
-          <Text style={styles.topName}>
-            {profile?.name?.split(' ')[0] ?? 'Driver'}
-          </Text>
+          <Text style={styles.topName}>{profile?.name?.split(' ')[0] ?? 'Driver'}</Text>
           <View style={styles.statusRow}>
             <Animated.View style={[
               styles.statusDot,
               { backgroundColor: isOnline ? '#1D9E75' : '#4B5563' },
-              isOnline && { transform: [{ scale: pulseAnim }] }
+              isOnline && { transform: [{ scale: pulseAnim }] },
             ]} />
             <Text style={styles.statusText}>
               {isOnline ? 'Online — accepting rides' : 'Offline'}
@@ -273,16 +212,8 @@ export default function DriverHomeScreen() {
         <TouchableOpacity style={styles.avatarBtn} onPress={() => setMenuVisible(true)}>
           <Ionicons name="person-circle" size={36} color="#6B7280" />
         </TouchableOpacity>
-
-	<ProfileMenu
-  profile={profile}
-  visible={menuVisible}
-  onClose={() => setMenuVisible(false)}
-  onSignOut={signOut}
-/>
       </View>
 
-      {/* ── RECENTER ── */}
       {location && (
         <TouchableOpacity
           style={styles.recenterBtn}
@@ -294,7 +225,6 @@ export default function DriverHomeScreen() {
         </TouchableOpacity>
       )}
 
-      {/* ── BOTTOM SHEET ── */}
       <View style={styles.bottomSheet}>
         {isOnline ? (
           <View style={styles.onlineSheet}>
@@ -307,12 +237,7 @@ export default function DriverHomeScreen() {
                 <Text style={styles.waitingSubtitle}>You'll be notified when a passenger books</Text>
               </View>
             </View>
-            <TouchableOpacity
-              style={styles.offlineBtn}
-              onPress={toggleOnline}
-              disabled={togglingOnline}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.offlineBtn} onPress={toggleOnline} disabled={togglingOnline} activeOpacity={0.8}>
               <Text style={styles.offlineBtnText}>Go offline</Text>
             </TouchableOpacity>
           </View>
@@ -324,9 +249,7 @@ export default function DriverHomeScreen() {
             </Text>
             <TouchableOpacity
               style={[styles.onlineBtn, togglingOnline && { opacity: 0.6 }]}
-              onPress={toggleOnline}
-              disabled={togglingOnline}
-              activeOpacity={0.85}
+              onPress={toggleOnline} disabled={togglingOnline} activeOpacity={0.85}
             >
               <Text style={styles.onlineBtnText}>
                 {togglingOnline ? 'Connecting…' : 'Go online'}
@@ -336,14 +259,23 @@ export default function DriverHomeScreen() {
         )}
       </View>
 
-      {/* ── RIDE REQUEST SHEET ── */}
       {pendingRide && isOnline && (
-        <RideRequestSheet
-          ride={pendingRide}
-          onAccept={acceptRide}
-          onDecline={declineRide}
-        />
+        <RideRequestSheet ride={pendingRide} onAccept={acceptRide} onDecline={declineRide} />
       )}
+
+      {historyVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
+        </View>
+      )}
+
+      <ProfileMenu
+        profile={profile}
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        onSignOut={signOut}
+        onOpenHistory={() => setHistoryVisible(true)}
+      />
 
     </View>
   )
@@ -352,7 +284,6 @@ export default function DriverHomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111827' },
   map: { flex: 1 },
-
   topBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
@@ -365,29 +296,23 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, color: '#6B7280' },
   avatarBtn: { padding: 4 },
-
   recenterBtn: {
     position: 'absolute', right: 16, bottom: 220,
     width: 42, height: 42, borderRadius: 21,
-    backgroundColor: '#1E2A3A',
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#1E2A3A', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center', justifyContent: 'center',
   },
-
   myMarker: {
     backgroundColor: '#1E2A3A', borderRadius: 20, padding: 5,
     borderWidth: 1.5, borderColor: '#1D9E75',
   },
-
   bottomSheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#111827',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    backgroundColor: '#111827', borderTopLeftRadius: 24, borderTopRightRadius: 24,
     borderTopWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
     paddingHorizontal: 20, paddingTop: 20,
     paddingBottom: Platform.OS === 'ios' ? 44 : 24,
   },
-
   onlineSheet: { gap: 16 },
   waitingRow: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
@@ -406,7 +331,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
   },
   offlineBtnText: { color: '#9CA3AF', fontSize: 15, fontWeight: '500' },
-
   offlineSheet: { alignItems: 'center', paddingVertical: 10 },
   offlineTitle: { fontSize: 22, fontWeight: '700', color: '#F1F5F9', marginBottom: 8 },
   offlineSubtitle: {
