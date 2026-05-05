@@ -25,18 +25,26 @@ export function useAuth() {
     return () => subscription.unsubscribe()
   }, [])
 
-  async function fetchProfile(userId: string) {
-    const { data } = await supabase
+  async function fetchProfile(userId: string, retries = 5) {
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single()
-    setProfile(data)
+
+    if ((error || !data) && retries > 0) {
+      // Row not ready yet — wait 500ms and retry
+      await new Promise(r => setTimeout(r, 500))
+      return fetchProfile(userId, retries - 1)
+    }
+
+    setProfile(data ?? null)
     setLoading(false)
   }
 
   async function signOut() {
     await supabase.auth.signOut()
+    setProfile(null)
   }
 
   return { session, profile, loading, signOut }
