@@ -12,6 +12,7 @@ import { useActiveRide } from '../../hooks/useActiveRide'
 import { supabase } from '../../lib/supabase'
 import RideTrackingSheet from '../../components/RideTrackingSheet'
 import Constants from 'expo-constants'
+import ProfileMenu from '../../components/ProfileMenu'
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey
 
@@ -55,6 +56,7 @@ export default function PassengerHomeScreen() {
   const [bookingLoading, setBookingLoading] = useState(false)
   const [sheet, setSheet] = useState<'search' | 'confirm' | null>(null)
   const [activeDrivers, setActiveDrivers] = useState<ActiveDriver[]>([])
+  const [menuVisible, setMenuVisible] = useState(false)
 
   // ── User location ──────────────────────────────────────────
   useEffect(() => {
@@ -250,9 +252,17 @@ export default function PassengerHomeScreen() {
             }
           </Text>
         </View>
-        <TouchableOpacity style={styles.avatarBtn} onPress={signOut}>
+        <TouchableOpacity style={styles.avatarBtn} onPress={() => setMenuVisible(true)}>
           <Ionicons name="person-circle" size={36} color="#6B7280" />
         </TouchableOpacity>
+
+	<ProfileMenu
+	profile={profile}
+  	visible={menuVisible}
+  	onClose={() => setMenuVisible(false)}
+  	onSignOut={signOut}
+	/>
+
       </View>
 
       {/* ── DRIVERS NEARBY PILL — always visible ── */}
