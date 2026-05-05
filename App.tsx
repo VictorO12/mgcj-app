@@ -9,12 +9,7 @@ import PhoneEntryScreen from './src/screens/auth/PhoneEntryScreen'
 import OTPVerifyScreen from './src/screens/auth/OTPVerifyScreen'
 import PassengerHomeScreen from './src/screens/passenger/PassengerHomeScreen'
 
-// Driver home placeholder — we build this soon
-const DriverHome = () => (
-  <View style={s.placeholder}>
-    <Text style={s.placeholderText}>Driver Home — coming soon</Text>
-  </View>
-)
+import DriverApp from './src/screens/driver/DriverApp'
 
 const Stack = createNativeStackNavigator<RootStackParamList>()
 
@@ -38,7 +33,7 @@ export default function App() {
             <Stack.Screen name="OTPVerify" component={OTPVerifyScreen} />
           </>
         ) : profile?.role === 'driver' ? (
-          <Stack.Screen name="DriverHome" component={DriverHome} />
+          <Stack.Screen name="DriverHome" component={DriverApp} />
         ) : (
           <Stack.Screen name="PassengerHome" component={PassengerHomeScreen} />
         )}
