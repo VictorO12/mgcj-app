@@ -31,5 +31,10 @@
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   },
+  "scripts": {
+  "start": "dotenv -e .env -- expo start --host lan",
+  "android": "dotenv -e .env -- expo start --android",
+  "ios": "dotenv -e .env -- expo start --ios"
+  },
   "private": true
 }
