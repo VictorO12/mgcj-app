@@ -10,6 +10,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import RideRequestSheet from './RideRequestSheet'
 
+import ProfileMenu from '../../components/ProfileMenu'
+
 interface PendingRide {
   id: string
   pickup_address: string
@@ -40,6 +42,7 @@ export default function DriverHomeScreen() {
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null)
   const [togglingOnline, setTogglingOnline] = useState(false)
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [menuVisible, setMenuVisible] = useState(false)
 
   // ── Pulse animation for online dot ─────────────────────────
   useEffect(() => {
@@ -267,9 +270,16 @@ export default function DriverHomeScreen() {
             </Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.avatarBtn} onPress={signOut}>
+        <TouchableOpacity style={styles.avatarBtn} onPress={() => setMenuVisible(true)}>
           <Ionicons name="person-circle" size={36} color="#6B7280" />
         </TouchableOpacity>
+
+	<ProfileMenu
+  profile={profile}
+  visible={menuVisible}
+  onClose={() => setMenuVisible(false)}
+  onSignOut={signOut}
+/>
       </View>
 
       {/* ── RECENTER ── */}
