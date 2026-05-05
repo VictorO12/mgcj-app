@@ -5,10 +5,23 @@ export default {
   orientation: 'portrait',
   icon: './assets/icon.png',
   splash: { image: './assets/splash.png', resizeMode: 'contain', backgroundColor: '#111827' },
-  ios: { supportsTablet: false },
-  android: { adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#111827' } },
+  ios: {
+    supportsTablet: false,
+    config: {
+      googleMapsApiKey: process.env.GOOGLE_MAPS_KEY,
+    },
+  },
+  android: {
+    config: {
+      googleMaps: {
+        apiKey: process.env.GOOGLE_MAPS_KEY,
+      },
+    },
+    adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#111827' },
+  },
   extra: {
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+	googleMapsKey: process.env.GOOGLE_MAPS_KEY,
   },
 }
