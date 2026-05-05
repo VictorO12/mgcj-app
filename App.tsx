@@ -1,26 +1,20 @@
 import React from 'react'
-import { View, ActivityIndicator } from 'react-native'
+import { View, ActivityIndicator, StyleSheet, Text } from 'react-native'
 import { NavigationContainer } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { useAuth } from './src/hooks/useAuth'
 import { RootStackParamList } from './src/types'
 
-// Auth screens
 import PhoneEntryScreen from './src/screens/auth/PhoneEntryScreen'
 import OTPVerifyScreen from './src/screens/auth/OTPVerifyScreen'
+import PassengerHomeScreen from './src/screens/passenger/PassengerHomeScreen'
 
-// Placeholder screens — we'll build these next
-import { View as RNView, Text, StyleSheet } from 'react-native'
-const PassengerHome = () => (
-  <RNView style={ph.c}><Text style={ph.t}>Passenger Home — coming next</Text></RNView>
-)
+// Driver home placeholder — we build this soon
 const DriverHome = () => (
-  <RNView style={ph.c}><Text style={ph.t}>Driver Home — coming next</Text></RNView>
+  <View style={s.placeholder}>
+    <Text style={s.placeholderText}>Driver Home — coming soon</Text>
+  </View>
 )
-const ph = StyleSheet.create({
-  c: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
-  t: { color: '#6B7280', fontSize: 16 },
-})
 
 const Stack = createNativeStackNavigator<RootStackParamList>()
 
@@ -29,7 +23,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' }}>
+      <View style={s.loading}>
         <ActivityIndicator color="#E8500A" size="large" />
       </View>
     )
@@ -37,21 +31,24 @@ export default function App() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
         {!session ? (
-          // Not logged in — show auth flow
           <>
             <Stack.Screen name="PhoneEntry" component={PhoneEntryScreen} />
             <Stack.Screen name="OTPVerify" component={OTPVerifyScreen} />
           </>
         ) : profile?.role === 'driver' ? (
-          // Logged in as driver
           <Stack.Screen name="DriverHome" component={DriverHome} />
         ) : (
-          // Logged in as passenger (default)
-          <Stack.Screen name="PassengerHome" component={PassengerHome} />
+          <Stack.Screen name="PassengerHome" component={PassengerHomeScreen} />
         )}
       </Stack.Navigator>
     </NavigationContainer>
   )
 }
+
+const s = StyleSheet.create({
+  loading: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  placeholder: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  placeholderText: { color: '#6B7280', fontSize: 16 },
+})
