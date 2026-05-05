@@ -158,24 +158,34 @@ export default function PassengerHomeScreen() {
 
   // ── Book the ride ──
   async function confirmBooking() {
-    if (!pickupCoords || !dropoffCoords || !profile) return
-    setBookingLoading(true)
-    const { error } = await supabase.from('rides').insert({
-      passenger_id: profile.id,
-      status: 'pending',
-      pickup_address: pickupText,
-      pickup_lat: pickupCoords.latitude,
-      pickup_lng: pickupCoords.longitude,
-      dropoff_address: dropoffText,
-      dropoff_lat: dropoffCoords.latitude,
-      dropoff_lng: dropoffCoords.longitude,
-      fare_estimate: fareEstimate,
-      payment_method: 'cash',
-    })
-    setBookingLoading(false)
-    if (error) { Alert.alert('Error', error.message); return }
-    setSheet('booked')
+  if (!pickupCoords || !dropoffCoords || !profile) {
+    Alert.alert('Missing info', `pickup: ${!!pickupCoords}, dropoff: ${!!dropoffCoords}, profile: ${!!profile}`)
+    return
   }
+  setBookingLoading(true)
+  const { data, error } = await supabase.from('rides').insert({
+    passenger_id: profile.id,
+    status: 'pending',
+    pickup_address: pickupText,
+    pickup_lat: pickupCoords.latitude,
+    pickup_lng: pickupCoords.longitude,
+    dropoff_address: dropoffText,
+    dropoff_lat: dropoffCoords.latitude,
+    dropoff_lng: dropoffCoords.longitude,
+    fare_estimate: fareEstimate,
+    payment_method: 'cash',
+  }).select().single()
+
+  setBookingLoading(false)
+
+  if (error) {
+    Alert.alert('Booking failed', `${error.message}\n\nCode: ${error.code}`)
+    return
+  }
+
+  console.log('Ride created:', data)
+  setSheet('booked')
+}
 
   function resetBooking() {
     setDropoffText('')
