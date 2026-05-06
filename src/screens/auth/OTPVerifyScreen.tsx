@@ -17,13 +17,12 @@ type Props = {
 const CODE_LENGTH = 6
 
 export default function OTPVerifyScreen({ navigation, route }: Props) {
-  const { phone } = route.params
+  const { phone, name, isNewUser } = route.params
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''))
   const [loading, setLoading] = useState(false)
   const [resendTimer, setResendTimer] = useState(30)
   const inputRefs = useRef<(TextInput | null)[]>([])
 
-  // Countdown timer for resend button
   useEffect(() => {
     if (resendTimer <= 0) return
     const t = setTimeout(() => setResendTimer(r => r - 1), 1000)
@@ -31,7 +30,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   }, [resendTimer])
 
   function handleDigit(value: string, index: number) {
-    // Handle paste of full 6-digit code
     if (value.length === CODE_LENGTH) {
       const pasted = value.replace(/\D/g, '').slice(0, CODE_LENGTH).split('')
       setDigits(pasted)
@@ -43,60 +41,53 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     const updated = [...digits]
     updated[index] = digit
     setDigits(updated)
-    if (digit && index < CODE_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus()
-    }
-    if (updated.every(d => d !== '') && digit) {
-      verifyCode(updated.join(''))
-    }
+    if (digit && index < CODE_LENGTH - 1) inputRefs.current[index + 1]?.focus()
+    if (updated.every(d => d !== '') && digit) verifyCode(updated.join(''))
   }
 
   function handleBackspace(index: number) {
     if (digits[index]) {
-      const updated = [...digits]
-      updated[index] = ''
-      setDigits(updated)
+      const updated = [...digits]; updated[index] = ''; setDigits(updated)
     } else if (index > 0) {
       inputRefs.current[index - 1]?.focus()
-      const updated = [...digits]
-      updated[index - 1] = ''
-      setDigits(updated)
+      const updated = [...digits]; updated[index - 1] = ''; setDigits(updated)
     }
   }
 
   async function verifyCode(code: string) {
     setLoading(true)
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone,
-      token: code,
-      type: 'sms',
-    })
+    const { data, error } = await supabase.auth.verifyOtp({ phone, token: code, type: 'sms' })
+
     if (error) {
       setLoading(false)
       setDigits(Array(CODE_LENGTH).fill(''))
       inputRefs.current[0]?.focus()
-      Alert.alert('Incorrect code', 'That code didn\'t match. Try again.')
+      Alert.alert('Incorrect code', "That code didn't match. Try again.")
       return
     }
 
-    // Create profile row if this is their first login
     if (data.user) {
+      // Check if profile exists
       const { data: existing } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', data.user.id)
-        .single()
+        .from('profiles').select('id, name').eq('id', data.user.id).single()
 
       if (!existing) {
+        // Brand new user — create profile with name from signup
         await supabase.from('profiles').insert({
           id: data.user.id,
           phone,
+          name: name ?? null,
           role: 'passenger',
         })
+      } else if (isNewUser && name && !existing.name) {
+        // Existing auth user but no name yet — update it
+        await supabase.from('profiles').update({ name }).eq('id', data.user.id)
       }
+      // If existing user logging in — profile already has their name, nothing to do
     }
-    // Navigation handled by useAuth listener in App.tsx
+
     setLoading(false)
+    // useAuth listener in App.tsx handles navigation automatically
   }
 
   async function handleResend() {
@@ -169,25 +160,18 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111827' },
-  inner: { flex: 1, paddingHorizontal: 28, paddingTop: 64 },
+  inner: { flex: 1, paddingHorizontal: 28, paddingTop: Platform.OS === 'ios' ? 60 : 40 },
   backBtn: { marginBottom: 36 },
   backText: { color: '#6B7280', fontSize: 15 },
-  title: {
-    fontSize: 28, fontWeight: '700', color: '#F1F5F9', marginBottom: 10,
-  },
+  title: { fontSize: 28, fontWeight: '700', color: '#F1F5F9', marginBottom: 10 },
   subtitle: { fontSize: 15, color: '#6B7280', lineHeight: 22, marginBottom: 40 },
   phoneHighlight: { color: '#E8500A', fontWeight: '600' },
-  codeRow: {
-    flexDirection: 'row', gap: 10, justifyContent: 'center', marginBottom: 32,
-  },
+  codeRow: { flexDirection: 'row', gap: 10, justifyContent: 'center', marginBottom: 32 },
   digitBox: {
-    width: 46, height: 58,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.12)',
+    width: 46, height: 58, borderRadius: 12,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.12)',
     backgroundColor: '#1E2A3A',
-    textAlign: 'center',
-    fontSize: 24, fontWeight: '600', color: '#F1F5F9',
+    textAlign: 'center', fontSize: 24, fontWeight: '600', color: '#F1F5F9',
   },
   digitBoxFilled: { borderColor: '#E8500A' },
   verifyingRow: {
