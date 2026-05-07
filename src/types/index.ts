@@ -9,8 +9,18 @@ export interface Profile {
 }
 
 export type RootStackParamList = {
+  Welcome: undefined
   PhoneEntry: undefined
-  OTPVerify: { phone: string }
+  SignUp: undefined
+  DriverWelcome: undefined
+  DriverSignUp: undefined
+  OTPVerify: {
+    phone: string
+    name?: string
+    isNewUser: boolean
+    isDriver?: boolean
+    inviteCode?: string
+  }
   PassengerHome: undefined
   DriverHome: undefined
 }
