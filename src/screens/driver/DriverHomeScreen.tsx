@@ -17,6 +17,7 @@ import { useAuth } from "../../hooks/AuthContext";
 import RideRequestSheet from "./RideRequestSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
+import { useNotifications } from "../../hooks/useNotifications";
 
 interface PendingRide {
   id: string;
@@ -55,6 +56,8 @@ export default function DriverHomeScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useNotifications();
 
   useEffect(() => {
     if (!isOnline) return;

@@ -4,6 +4,7 @@ import { useAuth } from "../../hooks/AuthContext";
 import DriverHomeScreen from "./DriverHomeScreen";
 import DriverActiveRideScreen from "./DriverActiveRideScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
+import * as Notifications from "expo-notifications";
 
 interface ActiveRide {
   id: string;
@@ -32,6 +33,30 @@ export default function DriverApp() {
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
   const [driverRecord, setDriverRecord] = useState<DriverRecord | null>(null);
   const [loadingDriver, setLoadingDriver] = useState(true);
+
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      async (response) => {
+        const action = response.actionIdentifier;
+        const rideId = response.notification.request.content.data?.rideId;
+
+        if (!rideId || !profile) return;
+
+        if (action === "ACCEPT") {
+          const { error } = await supabase
+            .from("rides")
+            .update({ driver_id: profile.id, status: "assigned" })
+            .eq("id", rideId)
+            .eq("status", "pending");
+          if (!error) fetchActiveRide();
+        } else if (action === "DECLINE") {
+          // Just dismiss — ride stays pending for other drivers
+          console.log("Driver declined ride:", rideId);
+        }
+      },
+    );
+    return () => sub.remove();
+  }, [profile]);
 
   useEffect(() => {
     if (!profile) return;
