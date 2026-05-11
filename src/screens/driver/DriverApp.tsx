@@ -41,6 +41,15 @@ interface DriverRecord {
   plate_number: string | null;
 }
 
+interface ConfirmedScheduledRide {
+  id: string;
+  pickup_address: string;
+  dropoff_address: string;
+  fare_estimate: number | null;
+  scheduled_at: string;
+  passenger_name: string | null;
+}
+
 const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
 export default function DriverApp() {
@@ -51,11 +60,15 @@ export default function DriverApp() {
   const [loadingDriver, setLoadingDriver] = useState(true);
   const [showAssigned, setShowAssigned] = useState(false);
   const [showAssignedList, setShowAssignedList] = useState(false);
+  const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
+    ConfirmedScheduledRide[]
+  >([]);
   useEffect(() => {
     if (!profile) return;
     fetchDriverRecord();
     fetchActiveRide();
     fetchAssignedRide();
+    fetchConfirmedScheduledRides(); // ← was missing ()
   }, [profile]);
 
   // ── Realtime: watch for ride changes ────────────────────────
@@ -69,15 +82,16 @@ export default function DriverApp() {
         (payload) => {
           const row = payload.new as any;
           if (row.driver_id !== profile.id) return;
-          if (ACTIVE_STATUSES.includes(row.status)) {
-            fetchActiveRide();
-            fetchAssignedRide();
-          } else if (row.status === "completed" || row.status === "cancelled") {
+
+          if (row.status === "completed" || row.status === "cancelled") {
             setActiveRide(null);
             setAssignedRide(null);
-          } else if (row.status === "assigned") {
-            // Newly assigned — check if needs confirmation
+            fetchConfirmedScheduledRides();
+          } else {
+            // Refresh everything on any other change
+            fetchActiveRide();
             fetchAssignedRide();
+            fetchConfirmedScheduledRides();
           }
         },
       )
@@ -164,16 +178,46 @@ export default function DriverApp() {
     });
   }
 
+  async function fetchConfirmedScheduledRides() {
+    if (!profile) return;
+    const { data } = await supabase
+      .from("rides")
+      .select("*")
+      .eq("driver_id", profile.id)
+      .eq("confirmed_by_driver", true)
+      .in("status", ["assigned", "scheduled"])
+      .not("scheduled_at", "is", null)
+      .order("scheduled_at", { ascending: true });
+    if (!data) return;
+    const enriched = await Promise.all(
+      data.map(async (ride) => {
+        const { data: p } = await supabase
+          .from("profiles")
+          .select("name")
+          .eq("id", ride.passenger_id)
+          .single();
+        return {
+          id: ride.id,
+          pickup_address: ride.pickup_address,
+          dropoff_address: ride.dropoff_address,
+          fare_estimate: ride.fare_estimate,
+          scheduled_at: ride.scheduled_at,
+          passenger_name: p?.name ?? null,
+        };
+      }),
+    );
+    setConfirmedScheduledRides(enriched);
+  }
+
   async function fetchAssignedRide() {
     if (!profile) return;
-    // Look for rides assigned to this driver that haven't been confirmed yet
     const { data: rides } = await supabase
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
-      .eq("status", "assigned")
-      .eq("confirmed_by_driver", false)
-      .order("created_at", { ascending: false })
+      .in("status", ["assigned", "scheduled"])
+      .eq("confirmed_by_driver", false) // only unresponded ones for the badge
+      .order("scheduled_at", { ascending: true, nullsFirst: false })
       .limit(1);
     if (!rides || rides.length === 0) {
       setAssignedRide(null);
@@ -212,6 +256,7 @@ export default function DriverApp() {
     setAssignedRide(null);
     setShowAssigned(false);
     await fetchActiveRide();
+    fetchConfirmedScheduledRides();
   }
 
   function handleDeclineRide() {
@@ -264,6 +309,7 @@ export default function DriverApp() {
     <DriverHomeScreen
       assignedRide={assignedRide}
       onOpenAssigned={() => setShowAssignedList(true)}
+      confirmedScheduledRides={confirmedScheduledRides}
     />
   );
 }

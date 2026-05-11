@@ -8,6 +8,9 @@ import {
   Alert,
   Animated,
   StyleSheet as RNStyleSheet,
+  ScrollView,
+  FlatList,
+  Dimensions,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -51,9 +54,19 @@ interface LatLng {
   longitude: number;
 }
 
+interface ConfirmedScheduledRide {
+  id: string;
+  pickup_address: string;
+  dropoff_address: string;
+  fare_estimate: number | null;
+  scheduled_at: string;
+  passenger_name: string | null;
+}
+
 interface Props {
   assignedRide: AssignedRide | null;
   onOpenAssigned: () => void;
+  confirmedScheduledRides: ConfirmedScheduledRide[];
 }
 
 const VALLEY_REGION = {
@@ -66,6 +79,7 @@ const VALLEY_REGION = {
 export default function DriverHomeScreen({
   assignedRide,
   onOpenAssigned,
+  confirmedScheduledRides,
 }: Props) {
   const { profile, signOut } = useAuth();
   useNotifications();
@@ -80,6 +94,8 @@ export default function DriverHomeScreen({
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const CARD_WIDTH = Dimensions.get("window").width - 32;
+  const [activeCard, setActiveCard] = useState(0);
 
   // Pulse animation for online dot
   useEffect(() => {
@@ -395,6 +411,76 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
+      {/* Scheduled panel — sits above the bottom sheet */}
+      {confirmedScheduledRides.length > 0 && (
+        <View style={styles.scheduledPanel}>
+          <View style={styles.scheduledPanelHeader}>
+            <Ionicons name="calendar" size={14} color="#A855F7" />
+            <Text style={styles.scheduledPanelTitle}>UPCOMING SCHEDULED</Text>
+            <View style={styles.scheduledPanelBadge}>
+              <Text style={styles.scheduledPanelBadgeText}>
+                {confirmedScheduledRides.length}
+              </Text>
+            </View>
+          </View>
+
+          <FlatList
+            data={confirmedScheduledRides}
+            keyExtractor={(r) => r.id}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onScroll={(e) => {
+              const index = Math.round(
+                e.nativeEvent.contentOffset.x / CARD_WIDTH,
+              );
+              setActiveCard(index);
+            }}
+            scrollEventThrottle={16}
+            renderItem={({ item: r }) => (
+              <View style={[styles.scheduledRideRow, { width: CARD_WIDTH }]}>
+                <View style={styles.scheduledRideTime}>
+                  <Text style={styles.scheduledRideTimeText}>
+                    {new Date(r.scheduled_at).toLocaleString("en-CA", {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </Text>
+                </View>
+                <View style={styles.scheduledRideInfo}>
+                  <Text style={styles.scheduledRidePassenger} numberOfLines={1}>
+                    {r.passenger_name ?? "Passenger"}
+                  </Text>
+                  <Text style={styles.scheduledRideRoute} numberOfLines={1}>
+                    {r.pickup_address} → {r.dropoff_address}
+                  </Text>
+                </View>
+                {r.fare_estimate && (
+                  <Text style={styles.scheduledRideFare}>
+                    ${r.fare_estimate.toFixed(2)}
+                  </Text>
+                )}
+              </View>
+            )}
+          />
+
+          {/* Pagination dots */}
+          {confirmedScheduledRides.length > 1 && (
+            <View style={styles.dotsRow}>
+              {confirmedScheduledRides.map((_, i) => (
+                <View
+                  key={i}
+                  style={[styles.dot, i === activeCard && styles.dotActive]}
+                />
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Bottom sheet */}
       <View style={styles.bottomSheet}>
         {isOnline ? (
@@ -632,6 +718,106 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     paddingHorizontal: 48,
     alignItems: "center",
+  },
+  scheduledPanel: {
+    position: "absolute",
+    bottom: Platform.OS === "ios" ? 210 : 190, // sits just above the sheet
+    left: 16,
+    right: 16,
+    backgroundColor: "#1A1F2E",
+    borderRadius: 14,
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.25)",
+    overflow: "hidden",
+    // shadow so it visually lifts above the map
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  dotsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 8,
+  },
+  dot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "rgba(168,85,247,0.25)",
+  },
+  dotActive: {
+    width: 14,
+    backgroundColor: "#A855F7",
+  },
+  scheduledPanelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "rgba(168,85,247,0.15)",
+  },
+  scheduledPanelTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#A855F7",
+    letterSpacing: 0.5,
+    flex: 1,
+  },
+  scheduledPanelBadge: {
+    backgroundColor: "#A855F7",
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 5,
+  },
+  scheduledPanelBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  scheduledRideRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "rgba(255,255,255,0.04)",
+  },
+  scheduledRideTime: {
+    backgroundColor: "rgba(168,85,247,0.12)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  scheduledRideTimeText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#C084FC",
+  },
+  scheduledRideInfo: { flex: 1 },
+  scheduledRidePassenger: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#F1F5F9",
+  },
+  scheduledRideRoute: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginTop: 1,
+  },
+  scheduledRideFare: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1D9E75",
   },
   onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 });

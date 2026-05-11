@@ -69,6 +69,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
     const query = supabase
       .from("rides")
       .select("*")
+      .in("status", ["completed", "cancelled"])
       .order("created_at", { ascending: false })
       .limit(50);
 

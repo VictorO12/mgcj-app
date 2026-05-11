@@ -28,7 +28,7 @@ interface AssignedRide {
 
 interface Props {
   onClose: () => void;
-  hasActiveRide: boolean; // whether driver currently has an in-progress immediate ride
+  hasActiveRide: boolean;
   onAccepted: () => void;
 }
 
@@ -53,7 +53,6 @@ export default function AssignedRidesListScreen({
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ["assigned", "scheduled"])
-      .eq("confirmed_by_driver", false)
       .order("scheduled_at", { ascending: true, nullsFirst: false });
     if (!data) {
       setLoading(false);
@@ -81,7 +80,6 @@ export default function AssignedRidesListScreen({
   async function acceptRide(ride: AssignedRide) {
     const isImmediate = !ride.scheduled_at;
 
-    // Block if driver has active immediate ride and this is also immediate
     if (isImmediate && hasActiveRide) {
       Alert.alert(
         "Cannot accept",
@@ -102,15 +100,23 @@ export default function AssignedRidesListScreen({
       Alert.alert("Error", error.message);
       return;
     }
-    setRides((prev) => prev.filter((r) => r.id !== ride.id));
+
+    // Move ride to confirmed instead of removing it
+    setRides((prev) =>
+      prev.map((r) =>
+        r.id === ride.id ? { ...r, confirmed_by_driver: true } : r,
+      ),
+    );
+
     if (isImmediate) {
       onAccepted();
       onClose();
-    } else
+    } else {
       Alert.alert(
         "Confirmed!",
         "Scheduled ride confirmed. It will appear in your active rides at the scheduled time.",
       );
+    }
   }
 
   async function declineRide(ride: AssignedRide) {
@@ -137,12 +143,16 @@ export default function AssignedRidesListScreen({
     Linking.openURL(`tel:${phone}`);
   }
 
-  function estimateKm(r: AssignedRide) {
-    return "—"; // We don't have coords here — placeholder
-  }
-
-  const immediateRides = rides.filter((r) => !r.scheduled_at);
-  const scheduledRides = rides.filter((r) => !!r.scheduled_at);
+  // Computed after rides is set — in render scope, not inside fetchAssignedRides
+  const pendingRides = rides.filter(
+    (r) => !r.confirmed_by_driver && !r.scheduled_at,
+  );
+  const pendingScheduled = rides.filter(
+    (r) => !r.confirmed_by_driver && !!r.scheduled_at,
+  );
+  const confirmedScheduled = rides.filter(
+    (r) => r.confirmed_by_driver && !!r.scheduled_at,
+  );
 
   return (
     <View style={styles.container}>
@@ -168,9 +178,12 @@ export default function AssignedRidesListScreen({
         </View>
       ) : (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-          {immediateRides.length > 0 && (
+          {/* Immediate — awaiting response */}
+          {pendingRides.length > 0 && (
             <>
-              <Text style={styles.sectionLabel}>IMMEDIATE RIDES</Text>
+              <Text style={styles.sectionLabel}>
+                IMMEDIATE — AWAITING RESPONSE
+              </Text>
               {hasActiveRide && (
                 <View style={styles.warningBanner}>
                   <Ionicons name="warning-outline" size={16} color="#F59E0B" />
@@ -180,13 +193,14 @@ export default function AssignedRidesListScreen({
                   </Text>
                 </View>
               )}
-              {immediateRides.map((ride) => (
+              {pendingRides.map((ride) => (
                 <RideCard
                   key={ride.id}
                   ride={ride}
                   isImmediate
                   blocked={hasActiveRide}
                   actionLoading={actionLoading}
+                  showActions={true}
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
                   onCall={() =>
@@ -197,20 +211,46 @@ export default function AssignedRidesListScreen({
             </>
           )}
 
-          {scheduledRides.length > 0 && (
+          {/* Scheduled — awaiting response */}
+          {pendingScheduled.length > 0 && (
             <>
               <Text style={[styles.sectionLabel, { marginTop: 16 }]}>
-                SCHEDULED RIDES
+                SCHEDULED — AWAITING RESPONSE
               </Text>
-              {scheduledRides.map((ride) => (
+              {pendingScheduled.map((ride) => (
                 <RideCard
                   key={ride.id}
                   ride={ride}
                   isImmediate={false}
                   blocked={false}
                   actionLoading={actionLoading}
+                  showActions={true}
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
+                  onCall={() =>
+                    ride.passenger_phone && callPassenger(ride.passenger_phone)
+                  }
+                />
+              ))}
+            </>
+          )}
+
+          {/* Confirmed scheduled */}
+          {confirmedScheduled.length > 0 && (
+            <>
+              <Text style={[styles.sectionLabel, { marginTop: 16 }]}>
+                CONFIRMED SCHEDULED
+              </Text>
+              {confirmedScheduled.map((ride) => (
+                <RideCard
+                  key={ride.id}
+                  ride={ride}
+                  isImmediate={false}
+                  blocked={false}
+                  actionLoading={actionLoading}
+                  showActions={false}
+                  onAccept={() => {}}
+                  onDecline={() => {}}
                   onCall={() =>
                     ride.passenger_phone && callPassenger(ride.passenger_phone)
                   }
@@ -234,6 +274,7 @@ function RideCard({
   onAccept,
   onDecline,
   onCall,
+  showActions,
 }: {
   ride: AssignedRide;
   isImmediate: boolean;
@@ -242,6 +283,7 @@ function RideCard({
   onAccept: () => void;
   onDecline: () => void;
   onCall: () => void;
+  showActions: boolean;
 }) {
   const isAccepting = actionLoading === ride.id;
   const isDeclining = actionLoading === ride.id + "-decline";
@@ -320,38 +362,45 @@ function RideCard({
         </Text>
       )}
 
-      {/* Actions */}
-      <View style={styles.actions}>
-        <TouchableOpacity
-          style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
-          onPress={onDecline}
-          disabled={!!actionLoading}
-          activeOpacity={0.8}
-        >
-          {isDeclining ? (
-            <ActivityIndicator color="#F87171" size="small" />
-          ) : (
-            <Text style={styles.declineBtnText}>Decline</Text>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.acceptBtn,
-            (blocked || isAccepting) && { opacity: 0.5 },
-          ]}
-          onPress={onAccept}
-          disabled={!!actionLoading || blocked}
-          activeOpacity={0.85}
-        >
-          {isAccepting ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.acceptBtnText}>
-              {blocked ? "Ride in progress" : "Accept"}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
+      {/* Actions or confirmed badge */}
+      {showActions ? (
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
+            onPress={onDecline}
+            disabled={!!actionLoading}
+            activeOpacity={0.8}
+          >
+            {isDeclining ? (
+              <ActivityIndicator color="#F87171" size="small" />
+            ) : (
+              <Text style={styles.declineBtnText}>Decline</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.acceptBtn,
+              (blocked || isAccepting) && { opacity: 0.5 },
+            ]}
+            onPress={onAccept}
+            disabled={!!actionLoading || blocked}
+            activeOpacity={0.85}
+          >
+            {isAccepting ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.acceptBtnText}>
+                {blocked ? "Ride in progress" : "Accept"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.confirmedBadge}>
+          <Ionicons name="checkmark-circle" size={14} color="#1D9E75" />
+          <Text style={styles.confirmedBadgeText}>Confirmed</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -497,4 +546,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   acceptBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  confirmedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(29,158,117,0.1)",
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderWidth: 0.5,
+    borderColor: "rgba(29,158,117,0.25)",
+    marginTop: 8,
+  },
+  confirmedBadgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#1D9E75",
+  },
 });
