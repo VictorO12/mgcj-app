@@ -14,10 +14,10 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useNotifications } from "../../hooks/useNotifications";
 import RideRequestSheet from "./RideRequestSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
-import { useNotifications } from "../../hooks/useNotifications";
 
 interface PendingRide {
   id: string;
@@ -32,9 +32,28 @@ interface PendingRide {
   passenger_phone: string | null;
 }
 
+interface AssignedRide {
+  id: string;
+  pickup_address: string;
+  dropoff_address: string;
+  pickup_lat: number;
+  pickup_lng: number;
+  dropoff_lat: number;
+  dropoff_lng: number;
+  fare_estimate: number | null;
+  scheduled_at: string | null;
+  passenger_name: string | null;
+  passenger_phone: string | null;
+}
+
 interface LatLng {
   latitude: number;
   longitude: number;
+}
+
+interface Props {
+  assignedRide: AssignedRide | null;
+  onOpenAssigned: () => void;
 }
 
 const VALLEY_REGION = {
@@ -44,10 +63,15 @@ const VALLEY_REGION = {
   longitudeDelta: 0.15,
 };
 
-export default function DriverHomeScreen() {
+export default function DriverHomeScreen({
+  assignedRide,
+  onOpenAssigned,
+}: Props) {
   const { profile, signOut } = useAuth();
+  useNotifications();
   const mapRef = useRef<MapView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const badgePulse = useRef(new Animated.Value(1)).current;
 
   const [isOnline, setIsOnline] = useState(false);
   const [location, setLocation] = useState<LatLng | null>(null);
@@ -57,8 +81,7 @@ export default function DriverHomeScreen() {
   const [historyVisible, setHistoryVisible] = useState(false);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useNotifications();
-
+  // Pulse animation for online dot
   useEffect(() => {
     if (!isOnline) return;
     Animated.loop(
@@ -77,6 +100,26 @@ export default function DriverHomeScreen() {
     ).start();
     return () => pulseAnim.stopAnimation();
   }, [isOnline]);
+
+  // Pulse animation for assigned ride badge
+  useEffect(() => {
+    if (!assignedRide) return;
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(badgePulse, {
+          toValue: 1.3,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(badgePulse, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+      ]),
+    ).start();
+    return () => badgePulse.stopAnimation();
+  }, [assignedRide]);
 
   useEffect(() => {
     (async () => {
@@ -206,7 +249,7 @@ export default function DriverHomeScreen() {
     if (!location && !isOnline) {
       Alert.alert(
         "Location unavailable",
-        "Please enable location services to go online.",
+        "Please enable location to go online.",
       );
       return;
     }
@@ -237,7 +280,11 @@ export default function DriverHomeScreen() {
     if (!pendingRide || !profile) return;
     const { error } = await supabase
       .from("rides")
-      .update({ driver_id: profile.id, status: "assigned" })
+      .update({
+        driver_id: profile.id,
+        status: "assigned",
+        confirmed_by_driver: true,
+      })
       .eq("id", pendingRide.id)
       .eq("status", "pending");
     if (error) {
@@ -252,6 +299,8 @@ export default function DriverHomeScreen() {
     setPendingRide(null);
     setTimeout(checkExistingPendingRides, 1000);
   }
+
+  const hasAssignedRide = !!assignedRide;
 
   return (
     <View style={styles.container}>
@@ -273,6 +322,7 @@ export default function DriverHomeScreen() {
         )}
       </MapView>
 
+      {/* Top bar */}
       <View style={styles.topBar}>
         <View>
           <Text style={styles.topName}>
@@ -291,14 +341,46 @@ export default function DriverHomeScreen() {
             </Text>
           </View>
         </View>
+
+        {/* Avatar with badge */}
         <TouchableOpacity
-          style={styles.avatarBtn}
+          style={styles.avatarWrap}
           onPress={() => setMenuVisible(true)}
         >
           <Ionicons name="person-circle" size={36} color="#6B7280" />
+          {hasAssignedRide && (
+            <Animated.View
+              style={[styles.badge, { transform: [{ scale: badgePulse }] }]}
+            >
+              <Text style={styles.badgeText}>1</Text>
+            </Animated.View>
+          )}
         </TouchableOpacity>
       </View>
 
+      {/* Assigned ride banner */}
+      {hasAssignedRide && (
+        <TouchableOpacity
+          style={styles.assignedBanner}
+          onPress={onOpenAssigned}
+          activeOpacity={0.85}
+        >
+          <View style={styles.assignedBannerDot} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.assignedBannerTitle}>
+              Ride assignment pending
+            </Text>
+            <Text style={styles.assignedBannerSub} numberOfLines={1}>
+              {assignedRide!.pickup_address} → {assignedRide!.dropoff_address}
+            </Text>
+          </View>
+          <View style={styles.assignedBannerBtn}>
+            <Text style={styles.assignedBannerBtnText}>View</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* Recenter */}
       {location && (
         <TouchableOpacity
           style={styles.recenterBtn}
@@ -313,6 +395,7 @@ export default function DriverHomeScreen() {
         </TouchableOpacity>
       )}
 
+      {/* Bottom sheet */}
       <View style={styles.bottomSheet}>
         {isOnline ? (
           <View style={styles.onlineSheet}>
@@ -379,6 +462,11 @@ export default function DriverHomeScreen() {
         onClose={() => setMenuVisible(false)}
         onSignOut={signOut}
         onOpenHistory={() => setHistoryVisible(true)}
+        hasAssignedRide={hasAssignedRide}
+        onOpenAssigned={() => {
+          setMenuVisible(false);
+          onOpenAssigned();
+        }}
       />
     </View>
   );
@@ -394,6 +482,7 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     paddingTop: Platform.OS === "ios" ? 56 : 40,
     paddingHorizontal: 20,
     paddingBottom: 12,
@@ -408,7 +497,56 @@ const styles = StyleSheet.create({
   },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, color: "#6B7280" },
-  avatarBtn: { padding: 4 },
+  avatarWrap: { position: "relative", padding: 4 },
+  badge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#E24B4A",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#111827",
+  },
+  badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
+  assignedBanner: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 110 : 96,
+    left: 16,
+    right: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(245,158,11,0.12)",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(245,158,11,0.35)",
+  },
+  assignedBannerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#F59E0B",
+    flexShrink: 0,
+  },
+  assignedBannerTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#F59E0B",
+    marginBottom: 2,
+  },
+  assignedBannerSub: { fontSize: 11, color: "#6B7280" },
+  assignedBannerBtn: {
+    backgroundColor: "#F59E0B",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  assignedBannerBtnText: { fontSize: 12, fontWeight: "600", color: "#111827" },
   recenterBtn: {
     position: "absolute",
     right: 16,
