@@ -48,12 +48,21 @@ export default function AssignedRidesListScreen({
 
   async function fetchAssignedRides() {
     if (!profile) return;
+
+    // Grace window: keep scheduled rides visible up to 10 mins after their time
+    // (the Edge Function will have auto-started them by then anyway)
+    const graceCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
     const { data } = await supabase
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ["assigned", "scheduled"])
+      .eq("confirmed_by_driver", false)
+      // Show immediate rides (no scheduled_at) OR future/recent scheduled rides
+      .or(`scheduled_at.is.null,scheduled_at.gte.${graceCutoff}`)
       .order("scheduled_at", { ascending: true, nullsFirst: false });
+
     if (!data) {
       setLoading(false);
       return;
@@ -96,17 +105,13 @@ export default function AssignedRidesListScreen({
       .eq("id", ride.id)
       .eq("driver_id", profile?.id);
     setActionLoading(null);
+
     if (error) {
       Alert.alert("Error", error.message);
       return;
     }
 
-    // Move ride to confirmed instead of removing it
-    setRides((prev) =>
-      prev.map((r) =>
-        r.id === ride.id ? { ...r, confirmed_by_driver: true } : r,
-      ),
-    );
+    setRides((prev) => prev.filter((r) => r.id !== ride.id));
 
     if (isImmediate) {
       onAccepted();
@@ -114,7 +119,7 @@ export default function AssignedRidesListScreen({
     } else {
       Alert.alert(
         "Confirmed!",
-        "Scheduled ride confirmed. It will appear in your active rides at the scheduled time.",
+        "Scheduled ride confirmed. You'll receive a notification when it's time to head to pickup.",
       );
     }
   }
@@ -143,16 +148,22 @@ export default function AssignedRidesListScreen({
     Linking.openURL(`tel:${phone}`);
   }
 
-  // Computed after rides is set — in render scope, not inside fetchAssignedRides
-  const pendingRides = rides.filter(
-    (r) => !r.confirmed_by_driver && !r.scheduled_at,
-  );
-  const pendingScheduled = rides.filter(
-    (r) => !r.confirmed_by_driver && !!r.scheduled_at,
-  );
-  const confirmedScheduled = rides.filter(
-    (r) => r.confirmed_by_driver && !!r.scheduled_at,
-  );
+  // Helper: how many minutes until the scheduled time
+  function minutesUntil(scheduledAt: string): number {
+    return Math.round((new Date(scheduledAt).getTime() - Date.now()) / 60000);
+  }
+
+  function countdownLabel(scheduledAt: string): string {
+    const mins = minutesUntil(scheduledAt);
+    if (mins <= 0) return "Starting now";
+    if (mins < 60) return `in ${mins} min`;
+    const hrs = Math.floor(mins / 60);
+    const rem = mins % 60;
+    return rem > 0 ? `in ${hrs}h ${rem}m` : `in ${hrs}h`;
+  }
+
+  const immediateRides = rides.filter((r) => !r.scheduled_at);
+  const scheduledRides = rides.filter((r) => !!r.scheduled_at);
 
   return (
     <View style={styles.container}>
@@ -178,12 +189,9 @@ export default function AssignedRidesListScreen({
         </View>
       ) : (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-          {/* Immediate — awaiting response */}
-          {pendingRides.length > 0 && (
+          {immediateRides.length > 0 && (
             <>
-              <Text style={styles.sectionLabel}>
-                IMMEDIATE — AWAITING RESPONSE
-              </Text>
+              <Text style={styles.sectionLabel}>IMMEDIATE RIDES</Text>
               {hasActiveRide && (
                 <View style={styles.warningBanner}>
                   <Ionicons name="warning-outline" size={16} color="#F59E0B" />
@@ -193,14 +201,14 @@ export default function AssignedRidesListScreen({
                   </Text>
                 </View>
               )}
-              {pendingRides.map((ride) => (
+              {immediateRides.map((ride) => (
                 <RideCard
                   key={ride.id}
                   ride={ride}
                   isImmediate
                   blocked={hasActiveRide}
                   actionLoading={actionLoading}
-                  showActions={true}
+                  countdownLabel={null}
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
                   onCall={() =>
@@ -211,46 +219,23 @@ export default function AssignedRidesListScreen({
             </>
           )}
 
-          {/* Scheduled — awaiting response */}
-          {pendingScheduled.length > 0 && (
+          {scheduledRides.length > 0 && (
             <>
               <Text style={[styles.sectionLabel, { marginTop: 16 }]}>
-                SCHEDULED — AWAITING RESPONSE
+                SCHEDULED RIDES
               </Text>
-              {pendingScheduled.map((ride) => (
+              {scheduledRides.map((ride) => (
                 <RideCard
                   key={ride.id}
                   ride={ride}
                   isImmediate={false}
                   blocked={false}
                   actionLoading={actionLoading}
-                  showActions={true}
+                  countdownLabel={
+                    ride.scheduled_at ? countdownLabel(ride.scheduled_at) : null
+                  }
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
-                  onCall={() =>
-                    ride.passenger_phone && callPassenger(ride.passenger_phone)
-                  }
-                />
-              ))}
-            </>
-          )}
-
-          {/* Confirmed scheduled */}
-          {confirmedScheduled.length > 0 && (
-            <>
-              <Text style={[styles.sectionLabel, { marginTop: 16 }]}>
-                CONFIRMED SCHEDULED
-              </Text>
-              {confirmedScheduled.map((ride) => (
-                <RideCard
-                  key={ride.id}
-                  ride={ride}
-                  isImmediate={false}
-                  blocked={false}
-                  actionLoading={actionLoading}
-                  showActions={false}
-                  onAccept={() => {}}
-                  onDecline={() => {}}
                   onCall={() =>
                     ride.passenger_phone && callPassenger(ride.passenger_phone)
                   }
@@ -271,22 +256,33 @@ function RideCard({
   isImmediate,
   blocked,
   actionLoading,
+  countdownLabel,
   onAccept,
   onDecline,
   onCall,
-  showActions,
 }: {
   ride: AssignedRide;
   isImmediate: boolean;
   blocked: boolean;
   actionLoading: string | null;
+  countdownLabel: string | null;
   onAccept: () => void;
   onDecline: () => void;
   onCall: () => void;
-  showActions: boolean;
 }) {
   const isAccepting = actionLoading === ride.id;
   const isDeclining = actionLoading === ride.id + "-decline";
+
+  // Urgency colour for the countdown pill
+  function countdownColor(): string {
+    if (!ride.scheduled_at) return "#A855F7";
+    const mins = Math.round(
+      (new Date(ride.scheduled_at).getTime() - Date.now()) / 60000,
+    );
+    if (mins <= 15) return "#EF4444"; // red — imminent
+    if (mins <= 30) return "#F59E0B"; // amber — soon
+    return "#A855F7"; // purple — plenty of time
+  }
 
   return (
     <View style={styles.rideCard}>
@@ -304,6 +300,7 @@ function RideCard({
             {isImmediate ? "Immediate" : "Scheduled"}
           </Text>
         </View>
+
         {ride.passenger_phone && (
           <TouchableOpacity style={styles.callBtn} onPress={onCall}>
             <Ionicons name="call-outline" size={15} color="#CBD5E1" />
@@ -311,7 +308,7 @@ function RideCard({
         )}
       </View>
 
-      {/* Scheduled time */}
+      {/* Scheduled time + countdown */}
       {ride.scheduled_at && (
         <View style={styles.scheduledRow}>
           <Ionicons name="calendar-outline" size={13} color="#A855F7" />
@@ -324,6 +321,21 @@ function RideCard({
               minute: "2-digit",
             })}
           </Text>
+          {countdownLabel && (
+            <View
+              style={[
+                styles.countdownPill,
+                {
+                  backgroundColor: `${countdownColor()}20`,
+                  borderColor: `${countdownColor()}50`,
+                },
+              ]}
+            >
+              <Text style={[styles.countdownText, { color: countdownColor() }]}>
+                {countdownLabel}
+              </Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -362,45 +374,38 @@ function RideCard({
         </Text>
       )}
 
-      {/* Actions or confirmed badge */}
-      {showActions ? (
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
-            onPress={onDecline}
-            disabled={!!actionLoading}
-            activeOpacity={0.8}
-          >
-            {isDeclining ? (
-              <ActivityIndicator color="#F87171" size="small" />
-            ) : (
-              <Text style={styles.declineBtnText}>Decline</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.acceptBtn,
-              (blocked || isAccepting) && { opacity: 0.5 },
-            ]}
-            onPress={onAccept}
-            disabled={!!actionLoading || blocked}
-            activeOpacity={0.85}
-          >
-            {isAccepting ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.acceptBtnText}>
-                {blocked ? "Ride in progress" : "Accept"}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View style={styles.confirmedBadge}>
-          <Ionicons name="checkmark-circle" size={14} color="#1D9E75" />
-          <Text style={styles.confirmedBadgeText}>Confirmed</Text>
-        </View>
-      )}
+      {/* Actions */}
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
+          onPress={onDecline}
+          disabled={!!actionLoading}
+          activeOpacity={0.8}
+        >
+          {isDeclining ? (
+            <ActivityIndicator color="#F87171" size="small" />
+          ) : (
+            <Text style={styles.declineBtnText}>Decline</Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.acceptBtn,
+            (blocked || isAccepting) && { opacity: 0.5 },
+          ]}
+          onPress={onAccept}
+          disabled={!!actionLoading || blocked}
+          activeOpacity={0.85}
+        >
+          {isAccepting ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <Text style={styles.acceptBtnText}>
+              {blocked ? "Ride in progress" : "Accept"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -429,13 +434,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  emptyWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
+  loadingWrap: { paddingTop: 60, alignItems: "center" },
+  emptyWrap: { paddingTop: 60, alignItems: "center", gap: 10 },
   emptyTitle: { fontSize: 18, fontWeight: "600", color: "#4B5563" },
   emptySub: {
     fontSize: 13,
@@ -443,32 +443,32 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingHorizontal: 40,
   },
-  list: { flex: 1, paddingHorizontal: 20 },
+  list: { flex: 1, paddingHorizontal: 16 },
   sectionLabel: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#4B5563",
-    letterSpacing: 0.08,
-    textTransform: "uppercase",
-    marginBottom: 10,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#6B7280",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginTop: 4,
   },
   warningBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "rgba(245,158,11,0.08)",
+    backgroundColor: "rgba(245,158,11,0.1)",
     borderRadius: 10,
-    padding: 10,
+    padding: 12,
     marginBottom: 10,
     borderWidth: 0.5,
-    borderColor: "rgba(245,158,11,0.2)",
+    borderColor: "rgba(245,158,11,0.25)",
   },
-  warningText: { fontSize: 12, color: "#F59E0B", flex: 1, lineHeight: 16 },
+  warningText: { fontSize: 13, color: "#F59E0B", flex: 1 },
   rideCard: {
     backgroundColor: "#1E2A3A",
     borderRadius: 16,
-    padding: 14,
-    marginBottom: 10,
+    padding: 16,
+    marginBottom: 12,
     borderWidth: 0.5,
     borderColor: "rgba(255,255,255,0.08)",
   },
@@ -476,26 +476,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
   typeBadge: {
-    backgroundColor: "rgba(232,80,10,0.12)",
+    backgroundColor: "rgba(232,80,10,0.15)",
     borderRadius: 20,
     paddingVertical: 3,
     paddingHorizontal: 10,
     borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.25)",
+    borderColor: "rgba(232,80,10,0.3)",
   },
   typeBadgeScheduled: {
-    backgroundColor: "rgba(168,85,247,0.12)",
-    borderColor: "rgba(168,85,247,0.25)",
+    backgroundColor: "rgba(168,85,247,0.15)",
+    borderColor: "rgba(168,85,247,0.3)",
   },
   typeBadgeText: { fontSize: 11, fontWeight: "600", color: "#E8500A" },
   typeBadgeTextScheduled: { color: "#A855F7" },
   callBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: "#253D56",
     alignItems: "center",
     justifyContent: "center",
@@ -506,62 +506,54 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginBottom: 6,
-  },
-  scheduledText: { fontSize: 12, color: "#A855F7" },
-  passengerName: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#F1F5F9",
     marginBottom: 8,
   },
-  route: { marginBottom: 8 },
+  scheduledText: { fontSize: 12, color: "#A855F7", fontWeight: "500" },
+  countdownPill: {
+    borderRadius: 20,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderWidth: 0.5,
+    marginLeft: 4,
+  },
+  countdownText: { fontSize: 11, fontWeight: "700" },
+  passengerName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#F1F5F9",
+    marginBottom: 10,
+  },
+  route: { marginBottom: 10 },
   routeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   dot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  routeText: { fontSize: 12, color: "#9CA3AF", flex: 1 },
+  routeText: { fontSize: 13, color: "#CBD5E1", flex: 1 },
   routeLineWrap: { paddingLeft: 3, paddingVertical: 2 },
   routeLine: {
     width: 1.5,
-    height: 10,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 2,
+    height: 12,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    marginLeft: 3,
   },
-  fareText: { fontSize: 12, color: "#6B7280", marginBottom: 10 },
-  actions: { flexDirection: "row", gap: 8 },
+  fareText: { fontSize: 13, color: "#6B7280", marginBottom: 12 },
+  actions: { flexDirection: "row", gap: 10 },
   declineBtn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 13,
+    borderRadius: 12,
     backgroundColor: "rgba(248,113,113,0.1)",
     borderWidth: 0.5,
     borderColor: "rgba(248,113,113,0.25)",
-    alignItems: "center",
   },
-  declineBtnText: { color: "#F87171", fontSize: 13, fontWeight: "600" },
+  declineBtnText: { color: "#F87171", fontSize: 14, fontWeight: "600" },
   acceptBtn: {
     flex: 2,
-    paddingVertical: 10,
-    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 13,
+    borderRadius: 12,
     backgroundColor: "#1D9E75",
-    alignItems: "center",
   },
-  acceptBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-  confirmedBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(29,158,117,0.1)",
-    borderRadius: 8,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.25)",
-    marginTop: 8,
-  },
-  confirmedBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#1D9E75",
-  },
+  acceptBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 });

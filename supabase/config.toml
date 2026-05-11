@@ -415,3 +415,15 @@ entrypoint = "./functions/notify-drivers/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/notify-drivers/*.html" ]
+
+[functions.process-scheduled-rides]
+enabled = true
+verify_jwt = false
+import_map = "./functions/process-scheduled-rides/deno.json"
+entrypoint = "./functions/process-scheduled-rides/index.ts"
+
+[functions.send-sms]
+enabled = true
+verify_jwt = false
+import_map = "./functions/send-sms/deno.json"
+entrypoint = "./functions/send-sms/index.ts"
