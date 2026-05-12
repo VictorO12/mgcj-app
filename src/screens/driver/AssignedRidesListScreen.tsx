@@ -49,8 +49,6 @@ export default function AssignedRidesListScreen({
   async function fetchAssignedRides() {
     if (!profile) return;
 
-    // Grace window: keep scheduled rides visible up to 10 mins after their time
-    // (the Edge Function will have auto-started them by then anyway)
     const graceCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
     const { data } = await supabase
@@ -58,8 +56,7 @@ export default function AssignedRidesListScreen({
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ["assigned", "scheduled"])
-      .eq("confirmed_by_driver", false)
-      // Show immediate rides (no scheduled_at) OR future/recent scheduled rides
+      // ← removed .eq("confirmed_by_driver", false) so confirmed rides stay visible
       .or(`scheduled_at.is.null,scheduled_at.gte.${graceCutoff}`)
       .order("scheduled_at", { ascending: true, nullsFirst: false });
 
@@ -111,15 +108,16 @@ export default function AssignedRidesListScreen({
       return;
     }
 
-    setRides((prev) => prev.filter((r) => r.id !== ride.id));
-
     if (isImmediate) {
+      setRides((prev) => prev.filter((r) => r.id !== ride.id));
       onAccepted();
       onClose();
     } else {
+      // Refresh so card stays but now shows Confirmed badge
+      fetchAssignedRides();
       Alert.alert(
         "Confirmed!",
-        "Scheduled ride confirmed. You'll receive a notification when it's time to head to pickup.",
+        "Scheduled ride confirmed. You'll be notified when it's time to head to pickup.",
       );
     }
   }
@@ -148,7 +146,6 @@ export default function AssignedRidesListScreen({
     Linking.openURL(`tel:${phone}`);
   }
 
-  // Helper: how many minutes until the scheduled time
   function minutesUntil(scheduledAt: string): number {
     return Math.round((new Date(scheduledAt).getTime() - Date.now()) / 60000);
   }
@@ -273,32 +270,50 @@ function RideCard({
   const isAccepting = actionLoading === ride.id;
   const isDeclining = actionLoading === ride.id + "-decline";
 
-  // Urgency colour for the countdown pill
   function countdownColor(): string {
     if (!ride.scheduled_at) return "#A855F7";
     const mins = Math.round(
       (new Date(ride.scheduled_at).getTime() - Date.now()) / 60000,
     );
-    if (mins <= 15) return "#EF4444"; // red — imminent
-    if (mins <= 30) return "#F59E0B"; // amber — soon
-    return "#A855F7"; // purple — plenty of time
+    if (mins <= 15) return "#EF4444";
+    if (mins <= 30) return "#F59E0B";
+    return "#A855F7";
   }
 
   return (
-    <View style={styles.rideCard}>
-      {/* Top row */}
+    <View
+      style={[
+        styles.rideCard,
+        // Green border tint on confirmed cards so they stand out
+        ride.confirmed_by_driver && { borderColor: "rgba(29,158,117,0.3)" },
+      ]}
+    >
+      {/* Top row — type badge + confirmed badge + call button */}
       <View style={styles.rideCardTop}>
-        <View
-          style={[styles.typeBadge, !isImmediate && styles.typeBadgeScheduled]}
-        >
-          <Text
+        <View style={styles.rideCardTopLeft}>
+          <View
             style={[
-              styles.typeBadgeText,
-              !isImmediate && styles.typeBadgeTextScheduled,
+              styles.typeBadge,
+              !isImmediate && styles.typeBadgeScheduled,
             ]}
           >
-            {isImmediate ? "Immediate" : "Scheduled"}
-          </Text>
+            <Text
+              style={[
+                styles.typeBadgeText,
+                !isImmediate && styles.typeBadgeTextScheduled,
+              ]}
+            >
+              {isImmediate ? "Immediate" : "Scheduled"}
+            </Text>
+          </View>
+
+          {/* ← Confirmed badge — only shows after driver accepts */}
+          {ride.confirmed_by_driver && (
+            <View style={styles.confirmedBadge}>
+              <Ionicons name="checkmark-circle" size={12} color="#1D9E75" />
+              <Text style={styles.confirmedBadgeText}>Confirmed</Text>
+            </View>
+          )}
         </View>
 
         {ride.passenger_phone && (
@@ -376,32 +391,41 @@ function RideCard({
 
       {/* Actions */}
       <View style={styles.actions}>
-        <TouchableOpacity
-          style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
-          onPress={onDecline}
-          disabled={!!actionLoading}
-          activeOpacity={0.8}
-        >
-          {isDeclining ? (
-            <ActivityIndicator color="#F87171" size="small" />
-          ) : (
-            <Text style={styles.declineBtnText}>Decline</Text>
-          )}
-        </TouchableOpacity>
+        {/* Only show Decline on unconfirmed rides */}
+        {!ride.confirmed_by_driver && (
+          <TouchableOpacity
+            style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
+            onPress={onDecline}
+            disabled={!!actionLoading}
+            activeOpacity={0.8}
+          >
+            {isDeclining ? (
+              <ActivityIndicator color="#F87171" size="small" />
+            ) : (
+              <Text style={styles.declineBtnText}>Decline</Text>
+            )}
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={[
             styles.acceptBtn,
+            ride.confirmed_by_driver && styles.acceptBtnConfirmed,
             (blocked || isAccepting) && { opacity: 0.5 },
           ]}
           onPress={onAccept}
-          disabled={!!actionLoading || blocked}
+          disabled={!!actionLoading || blocked || ride.confirmed_by_driver}
           activeOpacity={0.85}
         >
           {isAccepting ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <Text style={styles.acceptBtnText}>
-              {blocked ? "Ride in progress" : "Accept"}
+              {blocked
+                ? "Ride in progress"
+                : ride.confirmed_by_driver
+                  ? "✓ Confirmed"
+                  : "Accept"}
             </Text>
           )}
         </TouchableOpacity>
@@ -478,6 +502,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
+  rideCardTopLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
   typeBadge: {
     backgroundColor: "rgba(232,80,10,0.15)",
     borderRadius: 20,
@@ -492,6 +522,18 @@ const styles = StyleSheet.create({
   },
   typeBadgeText: { fontSize: 11, fontWeight: "600", color: "#E8500A" },
   typeBadgeTextScheduled: { color: "#A855F7" },
+  confirmedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(29,158,117,0.12)",
+    borderRadius: 20,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderWidth: 0.5,
+    borderColor: "rgba(29,158,117,0.3)",
+  },
+  confirmedBadgeText: { fontSize: 11, fontWeight: "600", color: "#1D9E75" },
   callBtn: {
     width: 32,
     height: 32,
@@ -554,6 +596,11 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: 12,
     backgroundColor: "#1D9E75",
+  },
+  acceptBtnConfirmed: {
+    backgroundColor: "rgba(29,158,117,0.15)",
+    borderWidth: 0.5,
+    borderColor: "rgba(29,158,117,0.3)",
   },
   acceptBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 });

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import * as Notifications from "expo-notifications";
+import { Alert } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import DriverHomeScreen from "./DriverHomeScreen";
@@ -7,6 +8,7 @@ import DriverActiveRideScreen from "./DriverActiveRideScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
 import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
+
 interface ActiveRide {
   id: string;
   status: string;
@@ -63,13 +65,14 @@ export default function DriverApp() {
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
+
   useEffect(() => {
-    if (!profile) return;
+    if (!profile?.id) return;
     fetchDriverRecord();
     fetchActiveRide();
     fetchAssignedRide();
-    fetchConfirmedScheduledRides(); // ← was missing ()
-  }, [profile]);
+    fetchConfirmedScheduledRides();
+  }, [profile?.id]); // use profile.id not profile object — prevents double-fire
 
   // ── Realtime: watch for ride changes ────────────────────────
   useEffect(() => {
@@ -87,8 +90,13 @@ export default function DriverApp() {
             setActiveRide(null);
             setAssignedRide(null);
             fetchConfirmedScheduledRides();
+          } else if (ACTIVE_STATUSES.includes(row.status)) {
+            // Active ride status — already handled locally via handleRideStatusChange.
+            // Do NOT call fetchActiveRide() here — it would remount DriverActiveRideScreen
+            // and wipe routeCoords/steps state.
+            fetchAssignedRide();
+            fetchConfirmedScheduledRides();
           } else {
-            // Refresh everything on any other change
             fetchActiveRide();
             fetchAssignedRide();
             fetchConfirmedScheduledRides();
@@ -101,7 +109,7 @@ export default function DriverApp() {
     };
   }, [profile]);
 
-  // ── Handle notification tap — open assigned ride screen ─────
+  // ── Handle notification tap ──────────────────────────────────
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(
       async (response) => {
@@ -110,10 +118,25 @@ export default function DriverApp() {
         if (!rideId || !profile) return;
 
         if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) {
-          // Tapped the notification body — open assigned ride screen
           await fetchAssignedRide();
           setShowAssigned(true);
         } else if (action === "ACCEPT") {
+          const { data: rideCheck } = await supabase
+            .from("rides")
+            .select("id, status")
+            .eq("id", rideId)
+            .single();
+
+          if (!rideCheck) {
+            Alert.alert(
+              "Ride unavailable",
+              "This ride is no longer available.",
+            );
+            return;
+          }
+
+          if (rideCheck.status !== "pending") return;
+
           const { error } = await supabase
             .from("rides")
             .update({
@@ -123,7 +146,13 @@ export default function DriverApp() {
             })
             .eq("id", rideId)
             .eq("status", "pending");
-          if (!error) fetchActiveRide();
+
+          if (error) {
+            Alert.alert("Ride unavailable", "This ride was already taken.");
+            return;
+          }
+
+          await fetchActiveRide();
         } else if (action === "DECLINE") {
           console.log("Driver declined ride from notification:", rideId);
         }
@@ -150,7 +179,7 @@ export default function DriverApp() {
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ACTIVE_STATUSES)
-      .eq("confirmed_by_driver", true) // Only show confirmed active rides
+      .eq("confirmed_by_driver", true)
       .order("created_at", { ascending: false })
       .limit(1);
     if (!rides || rides.length === 0) {
@@ -216,7 +245,7 @@ export default function DriverApp() {
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ["assigned", "scheduled"])
-      .eq("confirmed_by_driver", false) // only unresponded ones for the badge
+      .eq("confirmed_by_driver", false)
       .order("scheduled_at", { ascending: true, nullsFirst: false })
       .limit(1);
     if (!rides || rides.length === 0) {
@@ -244,6 +273,13 @@ export default function DriverApp() {
     });
   }
 
+  // ── Called immediately when driver taps a status button ─────
+  // Updates local state instantly — no waiting for realtime round-trip.
+  function handleRideStatusChange(newStatus: string) {
+    if (!activeRide) return;
+    setActiveRide({ ...activeRide, status: newStatus });
+  }
+
   function handleRideComplete() {
     setActiveRide(null);
   }
@@ -266,12 +302,10 @@ export default function DriverApp() {
 
   if (loadingDriver) return null;
 
-  // Setup screen if vehicle details missing
   if (!driverRecord?.vehicle_make || !driverRecord?.plate_number) {
     return <DriverSetupScreen onComplete={handleSetupComplete} />;
   }
 
-  // Assigned ride confirmation screen
   if (showAssigned && assignedRide) {
     return (
       <AssignedRideScreen
@@ -283,15 +317,17 @@ export default function DriverApp() {
     );
   }
 
-  // Active ride navigation screen
   if (activeRide) {
     return (
       <DriverActiveRideScreen
+        key={activeRide.id}
         ride={activeRide}
         onRideComplete={handleRideComplete}
+        onStatusChange={handleRideStatusChange}
       />
     );
   }
+
   if (showAssignedList) {
     return (
       <AssignedRidesListScreen
@@ -304,12 +340,13 @@ export default function DriverApp() {
       />
     );
   }
-  // Home screen — pass assignedRide so badge shows
+
   return (
     <DriverHomeScreen
       assignedRide={assignedRide}
       onOpenAssigned={() => setShowAssignedList(true)}
       confirmedScheduledRides={confirmedScheduledRides}
+      onRideAccepted={fetchActiveRide}
     />
   );
 }

@@ -5,9 +5,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   Platform,
-  Linking,
   Alert,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -17,6 +17,87 @@ import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
+
+// ── Polyline decoder ────────────────────────────────────────────────────────
+function decodePolyline(
+  encoded: string,
+): { latitude: number; longitude: number }[] {
+  const points: { latitude: number; longitude: number }[] = [];
+  let index = 0,
+    lat = 0,
+    lng = 0;
+  while (index < encoded.length) {
+    let b,
+      shift = 0,
+      result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return points;
+}
+
+// ── Haversine distance (metres) ─────────────────────────────────────────────
+function getDistance(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+) {
+  const R = 6371000;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLon = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.latitude * Math.PI) / 180) *
+      Math.cos((b.latitude * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+function turnIcon(maneuver: string): string {
+  if (!maneuver) return "navigate-outline";
+  if (maneuver.includes("left")) return "arrow-back-outline";
+  if (maneuver.includes("right")) return "arrow-forward-outline";
+  if (maneuver.includes("uturn")) return "return-down-back-outline";
+  if (maneuver.includes("roundabout")) return "refresh-outline";
+  if (maneuver.includes("straight")) return "arrow-up-outline";
+  return "navigate-outline";
+}
+
+// ── Compute target directly from ride props — never stale ──────────────────
+function getTarget(ride: ActiveRide): { latitude: number; longitude: number } {
+  const isPickingUp =
+    ride.status === "assigned" || ride.status === "driver_arriving";
+  return isPickingUp
+    ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
+    : { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+}
+
+interface DirectionStep {
+  html_instructions: string;
+  distance: { text: string; value: number };
+  duration: { text: string; value: number };
+  maneuver?: string;
+  end_location: { lat: number; lng: number };
+}
 
 interface ActiveRide {
   id: string;
@@ -40,25 +121,33 @@ interface LatLng {
 interface Props {
   ride: ActiveRide;
   onRideComplete: () => void;
+  onStatusChange?: (newStatus: string) => void;
 }
 
 export default function DriverActiveRideScreen({
   ride,
   onRideComplete,
+  onStatusChange,
 }: Props) {
   const { profile } = useAuth();
   const mapRef = useRef<MapView>(null);
+
   const [location, setLocation] = useState<LatLng | null>(null);
   const [eta, setEta] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
+  const [steps, setSteps] = useState<DirectionStep[]>([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [navMode, setNavMode] = useState(false);
+
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const etaInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const locationRef = useRef<LatLng | null>(null);
 
+  // Derive target directly — no ref needed, always computed fresh from ride prop
   const isPickingUp =
     ride.status === "assigned" || ride.status === "driver_arriving";
-  const target = isPickingUp
-    ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
-    : { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+  const target = getTarget(ride);
 
   const statusLabel = () => {
     switch (ride.status) {
@@ -99,8 +188,13 @@ export default function DriverActiveRideScreen({
     }
   };
 
-  // ── Track location and update Supabase ──────────────────────
+  // ── Mount: get GPS, route to pickup, start location tracking ───────────────
   useEffect(() => {
+    const pickup: LatLng = {
+      latitude: ride.pickup_lat,
+      longitude: ride.pickup_lng,
+    };
+
     (async () => {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
@@ -109,8 +203,17 @@ export default function DriverActiveRideScreen({
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       };
+      locationRef.current = coords;
       setLocation(coords);
-      fitMap(coords);
+      // Always route to pickup on mount — screen opens when status = "assigned"
+      fetchRoute(coords, pickup);
+      fitMap(coords, pickup);
+      // Start 30s refresh interval pinned to pickup
+      if (etaInterval.current) clearInterval(etaInterval.current);
+      etaInterval.current = setInterval(() => {
+        const l = locationRef.current;
+        if (l) fetchRoute(l, pickup);
+      }, 30000);
     })();
 
     locationInterval.current = setInterval(async () => {
@@ -122,6 +225,7 @@ export default function DriverActiveRideScreen({
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       };
+      locationRef.current = coords;
       setLocation(coords);
       await supabase
         .from("drivers")
@@ -139,36 +243,87 @@ export default function DriverActiveRideScreen({
     };
   }, []);
 
-  // ── Recalculate ETA when location or target changes ─────────
-  useEffect(() => {
-    if (!location) return;
-    calculateEta(location);
+  // ── Route to a new target — called directly, never waits for prop change ──
+  function switchRouteTo(newTarget: LatLng) {
+    setCurrentStepIndex(0);
+    // Do NOT clear routeCoords here — keep old line visible until new one loads
     if (etaInterval.current) clearInterval(etaInterval.current);
+    const loc = locationRef.current;
+    if (loc) {
+      fetchRoute(loc, newTarget);
+      fitMap(loc, newTarget);
+    }
     etaInterval.current = setInterval(() => {
-      if (location) calculateEta(location);
+      const l = locationRef.current;
+      if (l) fetchRoute(l, newTarget);
     }, 30000);
-  }, [location?.latitude, location?.longitude, ride.status]);
+  }
 
-  function fitMap(driverCoords: LatLng) {
-    mapRef.current?.fitToCoordinates([driverCoords, target], {
-      edgePadding: { top: 80, right: 60, bottom: 320, left: 60 },
+  // ── Advance turn step when driver nears end of current step ─────────────
+  useEffect(() => {
+    if (!location || steps.length === 0) return;
+    for (let i = currentStepIndex; i < steps.length; i++) {
+      const stepEnd = steps[i].end_location;
+      const dist = getDistance(location, {
+        latitude: stepEnd.lat,
+        longitude: stepEnd.lng,
+      });
+      if (dist < 40) {
+        setCurrentStepIndex(Math.min(i + 1, steps.length - 1));
+        break;
+      }
+    }
+  }, [location]);
+
+  function fitMap(driverCoords: LatLng, toCoords: LatLng) {
+    mapRef.current?.fitToCoordinates([driverCoords, toCoords], {
+      edgePadding: {
+        top: navMode ? 160 : 80,
+        right: 60,
+        bottom: 320,
+        left: 60,
+      },
       animated: true,
     });
   }
 
-  async function calculateEta(from: LatLng) {
+  async function fetchRoute(from: LatLng, to: LatLng) {
     try {
-      const res = await fetch(
+      const url =
         `https://maps.googleapis.com/maps/api/directions/json` +
-          `?origin=${from.latitude},${from.longitude}` +
-          `&destination=${target.latitude},${target.longitude}` +
-          `&key=${MAPS_KEY}`,
-      );
+        `?origin=${from.latitude},${from.longitude}` +
+        `&destination=${to.latitude},${to.longitude}` +
+        `&key=${MAPS_KEY}` +
+        `&alternatives=false`;
+
+      const res = await fetch(url);
       const json = await res.json();
-      const seconds = json.routes?.[0]?.legs?.[0]?.duration?.value;
+
+      console.log("[DriverRoute] status:", json.status);
+      console.log("[DriverRoute] routes:", json.routes?.length);
+      if (json.status !== "OK") {
+        console.warn(
+          "[DriverRoute] API error:",
+          json.status,
+          json.error_message,
+        );
+        return;
+      }
+
+      const route = json.routes?.[0];
+      if (!route) return;
+
+      const leg = route.legs?.[0];
+      const seconds = leg?.duration?.value;
       setEta(seconds ? Math.ceil(seconds / 60) : null);
+
+      const encoded = route.overview_polyline?.points;
+      console.log("[DriverRoute] polyline length:", encoded?.length);
+      if (encoded) setRouteCoords(decodePolyline(encoded));
+
+      setSteps(leg?.steps ?? []);
     } catch (e) {
-      console.error("[DriverETA]", e);
+      console.error("[DriverRoute] exception:", e);
     }
   }
 
@@ -192,10 +347,7 @@ export default function DriverActiveRideScreen({
             onPress: async () => {
               await supabase
                 .from("rides")
-                .update({
-                  status: "completed",
-                  fare_final: ride.fare_estimate,
-                })
+                .update({ status: "completed", fare_final: ride.fare_estimate })
                 .eq("id", ride.id);
               setUpdating(false);
               onRideComplete();
@@ -207,19 +359,19 @@ export default function DriverActiveRideScreen({
     }
 
     await supabase.from("rides").update({ status: next }).eq("id", ride.id);
-    setUpdating(false);
-  }
 
-  function openNavigation() {
-    const url =
-      Platform.OS === "ios"
-        ? `maps://?daddr=${target.latitude},${target.longitude}`
-        : `google.navigation:q=${target.latitude},${target.longitude}`;
-    Linking.openURL(url).catch(() => {
-      Linking.openURL(
-        `https://www.google.com/maps/dir/?api=1&destination=${target.latitude},${target.longitude}`,
-      );
-    });
+    // Switch the route immediately — don't wait for parent re-render
+    if (next === "driver_arriving" || next === "in_progress") {
+      // Passenger not yet in car but driver at pickup, or ride started → dropoff
+      switchRouteTo({
+        latitude: ride.dropoff_lat,
+        longitude: ride.dropoff_lng,
+      });
+    }
+
+    // Notify parent to update its local state (drives status label etc.)
+    onStatusChange?.(next);
+    setUpdating(false);
   }
 
   function callPassenger() {
@@ -232,6 +384,9 @@ export default function DriverActiveRideScreen({
     Linking.openURL(`sms:${ride.passenger_phone}`);
   }
 
+  const currentStep = steps[currentStepIndex];
+  const nextStep = steps[currentStepIndex + 1];
+
   return (
     <View style={styles.container}>
       {/* ── MAP ── */}
@@ -242,6 +397,7 @@ export default function DriverActiveRideScreen({
         customMapStyle={darkMapStyle}
         showsUserLocation
         showsMyLocationButton={false}
+        showsTraffic={navMode}
       >
         {location && (
           <Marker coordinate={location} anchor={{ x: 0.5, y: 0.5 }}>
@@ -265,43 +421,92 @@ export default function DriverActiveRideScreen({
         />
         {location && (
           <Polyline
-            coordinates={[location, target]}
+            coordinates={
+              routeCoords.length > 1 ? routeCoords : [location, target]
+            }
             strokeColor={isPickingUp ? "#4a9eff" : "#E8500A"}
-            strokeWidth={2.5}
-            lineDashPattern={[6, 4]}
+            strokeWidth={routeCoords.length > 1 ? 4 : 2.5}
+            lineDashPattern={routeCoords.length > 1 ? undefined : [6, 4]}
           />
         )}
       </MapView>
 
-      {/* ── TOP STATUS BAR ── */}
-      <View style={styles.topBar}>
-        <View style={styles.statusBadge}>
-          <View
-            style={[
-              styles.statusDot,
-              {
-                backgroundColor: isPickingUp ? "#4a9eff" : "#E8500A",
-              },
-            ]}
-          />
-          <Text style={styles.statusLabel}>{statusLabel()}</Text>
-        </View>
-        {eta !== null && (
-          <View style={styles.etaBadge}>
-            <Text style={styles.etaText}>{eta} min</Text>
+      {/* ── NAV BANNER ── */}
+      {navMode && currentStep && (
+        <View style={styles.navBanner}>
+          <View style={styles.navMain}>
+            <View style={styles.navIconWrap}>
+              <Ionicons
+                name={turnIcon(currentStep.maneuver ?? "") as any}
+                size={26}
+                color="#fff"
+              />
+            </View>
+            <View style={styles.navTextWrap}>
+              <Text style={styles.navInstruction} numberOfLines={2}>
+                {stripHtml(currentStep.html_instructions)}
+              </Text>
+              <Text style={styles.navDistance}>
+                {currentStep.distance?.text}
+              </Text>
+            </View>
+            <View style={styles.etaPill}>
+              <Text style={styles.etaPillText}>
+                {eta !== null ? `${eta}m` : "--"}
+              </Text>
+            </View>
           </View>
-        )}
-      </View>
+          {nextStep && (
+            <View style={styles.navNext}>
+              <Text style={styles.navNextLabel}>Then: </Text>
+              <Text style={styles.navNextText} numberOfLines={1}>
+                {stripHtml(nextStep.html_instructions)}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
 
-      {/* ── NAVIGATE BUTTON ── */}
-      <TouchableOpacity style={styles.navBtn} onPress={openNavigation}>
-        <Ionicons name="navigate" size={20} color="#fff" />
-        <Text style={styles.navBtnText}>Navigate</Text>
+      {/* ── TOP STATUS BAR ── */}
+      {!navMode && (
+        <View style={styles.topBar}>
+          <View style={styles.statusBadge}>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: isPickingUp ? "#4a9eff" : "#E8500A" },
+              ]}
+            />
+            <Text style={styles.statusLabel}>{statusLabel()}</Text>
+          </View>
+          {eta !== null && (
+            <View style={styles.etaBadge}>
+              <Text style={styles.etaText}>{eta} min</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* ── NAV TOGGLE ── */}
+      <TouchableOpacity
+        style={[styles.navToggleBtn, navMode && styles.navToggleBtnActive]}
+        onPress={() => {
+          setNavMode((v) => !v);
+          if (!navMode && location) fitMap(location, target);
+        }}
+      >
+        <Ionicons
+          name={navMode ? "navigate" : "navigate-outline"}
+          size={18}
+          color="#fff"
+        />
+        <Text style={styles.navToggleText}>
+          {navMode ? "Exit nav" : "Navigate"}
+        </Text>
       </TouchableOpacity>
 
       {/* ── BOTTOM SHEET ── */}
       <View style={styles.sheet}>
-        {/* Destination */}
         <View style={styles.destinationCard}>
           <View style={styles.destIcon}>
             <Ionicons
@@ -321,7 +526,6 @@ export default function DriverActiveRideScreen({
           <Text style={styles.etaLarge}>{eta !== null ? `${eta}m` : "--"}</Text>
         </View>
 
-        {/* Passenger card */}
         <View style={styles.passengerCard}>
           <View style={styles.passengerAvatar}>
             <Text style={styles.passengerInitials}>
@@ -351,7 +555,6 @@ export default function DriverActiveRideScreen({
           </View>
         </View>
 
-        {/* Action button */}
         <TouchableOpacity
           style={[styles.actionBtn, updating && { opacity: 0.6 }]}
           onPress={advanceStatus}
@@ -379,6 +582,60 @@ export default function DriverActiveRideScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#111827" },
   map: { flex: 1 },
+
+  navBanner: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#0F1E30",
+    paddingTop: Platform.OS === "ios" ? 54 : 36,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.07)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  navMain: { flexDirection: "row", alignItems: "center", gap: 12 },
+  navIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#1D9E75",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navTextWrap: { flex: 1 },
+  navInstruction: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#F1F5F9",
+    lineHeight: 22,
+  },
+  navDistance: { fontSize: 13, color: "#6B7280", marginTop: 3 },
+  etaPill: {
+    backgroundColor: "#1E2A3A",
+    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  etaPillText: { fontSize: 14, fontWeight: "700", color: "#F1F5F9" },
+  navNext: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: "rgba(255,255,255,0.06)",
+  },
+  navNextLabel: { fontSize: 12, color: "#4B5563" },
+  navNextText: { fontSize: 12, color: "#9CA3AF", flex: 1 },
 
   topBar: {
     position: "absolute",
@@ -416,7 +673,7 @@ const styles = StyleSheet.create({
   },
   etaText: { fontSize: 13, fontWeight: "700", color: "#F1F5F9" },
 
-  navBtn: {
+  navToggleBtn: {
     position: "absolute",
     right: 16,
     bottom: 310,
@@ -430,7 +687,11 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(255,255,255,0.1)",
   },
-  navBtnText: { fontSize: 13, fontWeight: "500", color: "#fff" },
+  navToggleBtnActive: {
+    backgroundColor: "#1D9E75",
+    borderColor: "rgba(29,158,117,0.5)",
+  },
+  navToggleText: { fontSize: 13, fontWeight: "500", color: "#fff" },
 
   driverMarker: {
     backgroundColor: "#1E2A3A",
@@ -455,7 +716,6 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 44 : 24,
     gap: 12,
   },
-
   destinationCard: {
     flexDirection: "row",
     alignItems: "center",

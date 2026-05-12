@@ -67,6 +67,7 @@ interface Props {
   assignedRide: AssignedRide | null;
   onOpenAssigned: () => void;
   confirmedScheduledRides: ConfirmedScheduledRide[];
+  onRideAccepted: () => void;
 }
 
 const VALLEY_REGION = {
@@ -80,6 +81,7 @@ export default function DriverHomeScreen({
   assignedRide,
   onOpenAssigned,
   confirmedScheduledRides,
+  onRideAccepted,
 }: Props) {
   const { profile, signOut } = useAuth();
   useNotifications();
@@ -294,7 +296,8 @@ export default function DriverHomeScreen({
 
   async function acceptRide() {
     if (!pendingRide || !profile) return;
-    const { error } = await supabase
+
+    const { data, error } = await supabase
       .from("rides")
       .update({
         driver_id: profile.id,
@@ -302,13 +305,19 @@ export default function DriverHomeScreen({
         confirmed_by_driver: true,
       })
       .eq("id", pendingRide.id)
-      .eq("status", "pending");
-    if (error) {
+      .eq("status", "pending")
+      .select("id") // ← returns the updated row if it succeeded
+      .single();
+
+    if (error || !data) {
+      // Update matched 0 rows — ride was already taken
       Alert.alert("Ride unavailable", "This ride was already taken.");
       setPendingRide(null);
       return;
     }
+
     setPendingRide(null);
+    onRideAccepted();
   }
 
   async function declineRide() {
