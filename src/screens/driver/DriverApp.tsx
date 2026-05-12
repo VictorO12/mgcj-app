@@ -174,14 +174,18 @@ export default function DriverApp() {
 
   async function fetchActiveRide() {
     if (!profile) return;
+    const now = new Date().toISOString();
     const { data: rides } = await supabase
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
       .in("status", ACTIVE_STATUSES)
       .eq("confirmed_by_driver", true)
+      // Exclude future scheduled rides — only show rides happening now
+      .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
       .order("created_at", { ascending: false })
       .limit(1);
+
     if (!rides || rides.length === 0) {
       setActiveRide(null);
       return;

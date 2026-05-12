@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
-  StyleSheet as RNStyleSheet,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -20,6 +19,7 @@ import { supabase } from "../../lib/supabase";
 import RideTrackingSheet from "../../components/RideTrackingSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
+import ScheduledRidesScreen from "./ScheduledRidesScreen";
 import Constants from "expo-constants";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
@@ -79,6 +79,116 @@ export default function PassengerHomeScreen() {
   const [activeDrivers, setActiveDrivers] = useState<ActiveDriver[]>([]);
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const [scheduledVisible, setScheduledVisible] = useState(false);
+
+  // Scheduling state
+  const [isScheduled, setIsScheduled] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selectedCalDay, setSelectedCalDay] = useState<Date | null>(null); // just date portion
+  const [selectedTime, setSelectedTime] = useState<string | null>(null); // "HH:MM" 24h
+  const [scheduledDate, setScheduledDate] = useState<Date | null>(null);
+
+  // Derive final scheduled date whenever day+time both picked
+  useEffect(() => {
+    if (selectedCalDay && selectedTime) {
+      const [h, m] = selectedTime.split(":").map(Number);
+      const d = new Date(selectedCalDay);
+      d.setHours(h, m, 0, 0);
+      setScheduledDate(d);
+    } else {
+      setScheduledDate(null);
+    }
+  }, [selectedCalDay, selectedTime]);
+
+  // Calendar helpers
+  function calDaysInMonth(y: number, mo: number) {
+    return new Date(y, mo + 1, 0).getDate();
+  }
+  function calFirstWeekday(y: number, mo: number) {
+    return new Date(y, mo, 1).getDay();
+  } // 0=Sun
+
+  const CAL_MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const maxDate = new Date(today);
+  maxDate.setDate(today.getDate() + 60);
+
+  function buildCalGrid(): (Date | null)[] {
+    const y = calMonth.getFullYear(),
+      mo = calMonth.getMonth();
+    const totalDays = calDaysInMonth(y, mo);
+    const startWd = calFirstWeekday(y, mo);
+    const cells: (Date | null)[] = [];
+    for (let i = 0; i < startWd; i++) cells.push(null);
+    for (let d = 1; d <= totalDays; d++) cells.push(new Date(y, mo, d));
+    return cells;
+  }
+
+  function isDateSelectable(d: Date): boolean {
+    const dd = new Date(d);
+    dd.setHours(0, 0, 0, 0);
+    return dd >= today && dd <= maxDate;
+  }
+
+  function isSameDay(a: Date, b: Date) {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
+  }
+
+  // Time slots for selected day: every 30 min, skip past times if today
+  function buildTimeSlots(): string[] {
+    const slots: string[] = [];
+    const isToday = selectedCalDay ? isSameDay(selectedCalDay, today) : false;
+    const nowMins = isToday
+      ? new Date().getHours() * 60 + new Date().getMinutes() + 30
+      : 0;
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 30]) {
+        if (isToday && h * 60 + m < nowMins) continue;
+        slots.push(
+          `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
+        );
+      }
+    }
+    return slots;
+  }
+
+  function formatTimeSlot(t: string): string {
+    const [h, m] = t.split(":").map(Number);
+    const ampm = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  }
+
+  function formatScheduledDate(d: Date): string {
+    return d.toLocaleString("en-CA", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
 
   useEffect(() => {
     (async () => {
@@ -206,7 +316,18 @@ export default function PassengerHomeScreen() {
       Alert.alert("Missing info", "Please set both pickup and dropoff.");
       return;
     }
+    if (isScheduled && !scheduledDate) {
+      Alert.alert(
+        "Pick a time",
+        "Please select a date and time for your scheduled ride.",
+      );
+      return;
+    }
     setBookingLoading(true);
+
+    const scheduledAt =
+      isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
+
     const { error } = await supabase
       .from("rides")
       .insert({
@@ -220,14 +341,25 @@ export default function PassengerHomeScreen() {
         dropoff_lng: dropoffCoords.longitude,
         fare_estimate: fareEstimate,
         payment_method: "cash",
+        scheduled_at: scheduledAt,
       })
       .select()
       .single();
+
     setBookingLoading(false);
     if (error) {
       Alert.alert("Booking failed", error.message);
       return;
     }
+
+    if (isScheduled && scheduledDate) {
+      Alert.alert(
+        "Ride scheduled! 🗓",
+        `Your ride is booked for ${formatScheduledDate(scheduledDate)}. You can view or cancel it from the scheduled rides panel.`,
+        [{ text: "OK" }],
+      );
+    }
+
     resetBookingUI();
   }
 
@@ -246,6 +378,10 @@ export default function PassengerHomeScreen() {
     setSheet(null);
     setPredictions([]);
     setActiveField(null);
+    setIsScheduled(false);
+    setScheduledDate(null);
+    setSelectedCalDay(null);
+    setSelectedTime(null);
     if (userLocation)
       mapRef.current?.animateToRegion(
         { ...userLocation, latitudeDelta: 0.08, longitudeDelta: 0.08 },
@@ -297,6 +433,7 @@ export default function PassengerHomeScreen() {
         )}
       </MapView>
 
+      {/* Top bar */}
       <View style={styles.topBar}>
         <View style={{ flex: 1 }}>
           <Text style={styles.topName}>
@@ -310,12 +447,23 @@ export default function PassengerHomeScreen() {
               : "Where are you headed?"}
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.avatarBtn}
-          onPress={() => setMenuVisible(true)}
-        >
-          <Ionicons name="person-circle" size={36} color="#6B7280" />
-        </TouchableOpacity>
+        <View style={styles.topActions}>
+          {/* Scheduled rides button */}
+          {!hasActiveRide && (
+            <TouchableOpacity
+              style={styles.calendarBtn}
+              onPress={() => setScheduledVisible(true)}
+            >
+              <Ionicons name="calendar-outline" size={20} color="#A855F7" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.avatarBtn}
+            onPress={() => setMenuVisible(true)}
+          >
+            <Ionicons name="person-circle" size={36} color="#6B7280" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {activeDrivers.length > 0 && (
@@ -344,6 +492,7 @@ export default function PassengerHomeScreen() {
 
       {!hasActiveRide && (
         <View style={styles.sheet}>
+          {/* Pickup / Dropoff inputs */}
           <View style={styles.inputsCard}>
             <TouchableOpacity
               style={styles.inputRow}
@@ -385,6 +534,7 @@ export default function PassengerHomeScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Search box */}
           {sheet === "search" && (
             <View style={styles.searchBox}>
               <Ionicons
@@ -425,6 +575,7 @@ export default function PassengerHomeScreen() {
             </View>
           )}
 
+          {/* Predictions */}
           {predictions.length > 0 && (
             <ScrollView
               style={styles.predictionsList}
@@ -450,6 +601,7 @@ export default function PassengerHomeScreen() {
             </ScrollView>
           )}
 
+          {/* Quick destinations */}
           {sheet === null && predictions.length === 0 && (
             <>
               <Text style={styles.sectionLabel}>QUICK DESTINATIONS</Text>
@@ -472,9 +624,12 @@ export default function PassengerHomeScreen() {
             </>
           )}
 
+          {/* Confirm sheet */}
           {sheet === "confirm" && (
             <View>
               <Text style={styles.confirmTitle}>Confirm your ride</Text>
+
+              {/* Route card */}
               <View style={styles.routeCard}>
                 <View style={styles.routeRow}>
                   <View
@@ -497,6 +652,200 @@ export default function PassengerHomeScreen() {
                   </Text>
                 </View>
               </View>
+
+              {/* Schedule toggle */}
+              <TouchableOpacity
+                style={[
+                  styles.scheduleToggle,
+                  isScheduled && styles.scheduleToggleActive,
+                ]}
+                onPress={() => {
+                  const next = !isScheduled;
+                  setIsScheduled(next);
+                  if (!next) {
+                    setSelectedCalDay(null);
+                    setSelectedTime(null);
+                  }
+                }}
+                activeOpacity={0.8}
+              >
+                <View style={styles.scheduleToggleLeft}>
+                  <Ionicons
+                    name={isScheduled ? "calendar" : "calendar-outline"}
+                    size={16}
+                    color={isScheduled ? "#A855F7" : "#6B7280"}
+                  />
+                  <Text
+                    style={[
+                      styles.scheduleToggleText,
+                      isScheduled && styles.scheduleToggleTextActive,
+                    ]}
+                  >
+                    {isScheduled ? "Scheduled for later" : "Schedule for later"}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.togglePill,
+                    isScheduled && styles.togglePillActive,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.toggleThumb,
+                      isScheduled && styles.toggleThumbActive,
+                    ]}
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {/* Inline calendar + time picker */}
+              {isScheduled && (
+                <View style={styles.calendarWrap}>
+                  {/* Month nav */}
+                  <View style={styles.calHeader}>
+                    <TouchableOpacity
+                      style={styles.calNavBtn}
+                      onPress={() => {
+                        const prev = new Date(
+                          calMonth.getFullYear(),
+                          calMonth.getMonth() - 1,
+                          1,
+                        );
+                        const thisMonth = new Date(
+                          today.getFullYear(),
+                          today.getMonth(),
+                          1,
+                        );
+                        if (prev >= thisMonth) setCalMonth(prev);
+                      }}
+                    >
+                      <Ionicons name="chevron-back" size={18} color="#6B7280" />
+                    </TouchableOpacity>
+                    <Text style={styles.calMonthLabel}>
+                      {CAL_MONTHS[calMonth.getMonth()]} {calMonth.getFullYear()}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.calNavBtn}
+                      onPress={() =>
+                        setCalMonth(
+                          new Date(
+                            calMonth.getFullYear(),
+                            calMonth.getMonth() + 1,
+                            1,
+                          ),
+                        )
+                      }
+                    >
+                      <Ionicons
+                        name="chevron-forward"
+                        size={18}
+                        color="#6B7280"
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Weekday labels */}
+                  <View style={styles.calWeekRow}>
+                    {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((d) => (
+                      <Text key={d} style={styles.calWeekLabel}>
+                        {d}
+                      </Text>
+                    ))}
+                  </View>
+
+                  {/* Day grid */}
+                  <View style={styles.calGrid}>
+                    {buildCalGrid().map((day, idx) => {
+                      if (!day)
+                        return <View key={`e-${idx}`} style={styles.calCell} />;
+                      const selectable = isDateSelectable(day);
+                      const isSelected = selectedCalDay
+                        ? isSameDay(day, selectedCalDay)
+                        : false;
+                      const isToday2 = isSameDay(day, today);
+                      return (
+                        <TouchableOpacity
+                          key={day.toISOString()}
+                          style={[
+                            styles.calCell,
+                            isSelected && styles.calCellSelected,
+                            isToday2 && !isSelected && styles.calCellToday,
+                          ]}
+                          onPress={() => {
+                            if (!selectable) return;
+                            setSelectedCalDay(day);
+                            setSelectedTime(null); // reset time when date changes
+                          }}
+                          disabled={!selectable}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.calDayText,
+                              !selectable && styles.calDayDisabled,
+                              isSelected && styles.calDaySelected,
+                              isToday2 && !isSelected && styles.calDayToday,
+                            ]}
+                          >
+                            {day.getDate()}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Time scroll — appears after a day is picked */}
+                  {selectedCalDay && (
+                    <View style={styles.timeSection}>
+                      <Text style={styles.timeSectionLabel}>Pick a time</Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.timeScrollContent}
+                      >
+                        {buildTimeSlots().map((slot) => (
+                          <TouchableOpacity
+                            key={slot}
+                            style={[
+                              styles.timeChip,
+                              selectedTime === slot && styles.timeChipSelected,
+                            ]}
+                            onPress={() => setSelectedTime(slot)}
+                            activeOpacity={0.75}
+                          >
+                            <Text
+                              style={[
+                                styles.timeChipText,
+                                selectedTime === slot &&
+                                  styles.timeChipTextSelected,
+                              ]}
+                            >
+                              {formatTimeSlot(slot)}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  {/* Summary once both picked */}
+                  {scheduledDate && (
+                    <View style={styles.schedSummary}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={15}
+                        color="#A855F7"
+                      />
+                      <Text style={styles.schedSummaryText}>
+                        {formatScheduledDate(scheduledDate)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Fare row */}
               <View style={styles.fareRow}>
                 <View>
                   <Text style={styles.fareLabel}>Estimated fare</Text>
@@ -512,6 +861,8 @@ export default function PassengerHomeScreen() {
                   </Text>
                 )}
               </View>
+
+              {/* Action buttons */}
               <View style={styles.confirmBtns}>
                 <TouchableOpacity
                   style={styles.editBtn}
@@ -527,7 +878,9 @@ export default function PassengerHomeScreen() {
                   {bookingLoading ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.bookBtnText}>Book ride</Text>
+                    <Text style={styles.bookBtnText}>
+                      {isScheduled ? "Schedule ride" : "Book ride"}
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -549,6 +902,12 @@ export default function PassengerHomeScreen() {
       {historyVisible && (
         <View style={StyleSheet.absoluteFill}>
           <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
+        </View>
+      )}
+
+      {scheduledVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <ScheduledRidesScreen onClose={() => setScheduledVisible(false)} />
         </View>
       )}
 
@@ -580,6 +939,21 @@ const styles = StyleSheet.create({
   },
   topName: { fontSize: 20, fontWeight: "700", color: "#F1F5F9" },
   topSub: { fontSize: 13, color: "#6B7280", marginTop: 2 },
+  topActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  calendarBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(168,85,247,0.12)",
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   avatarBtn: { padding: 4 },
   driversPill: {
     position: "absolute",
@@ -713,7 +1087,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 0.5,
     borderColor: "rgba(255,255,255,0.08)",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   routeRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4 },
   routeDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
@@ -725,6 +1099,212 @@ const styles = StyleSheet.create({
     marginVertical: 2,
   },
   routeText: { fontSize: 14, color: "#CBD5E1", flex: 1 },
+
+  // Schedule toggle
+  scheduleToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1E2A3A",
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  scheduleToggleActive: {
+    borderColor: "rgba(168,85,247,0.4)",
+    backgroundColor: "rgba(168,85,247,0.08)",
+  },
+  scheduleToggleLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  scheduleToggleText: {
+    fontSize: 14,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  scheduleToggleTextActive: {
+    color: "#A855F7",
+  },
+  togglePill: {
+    width: 38,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#374151",
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  togglePillActive: {
+    backgroundColor: "#A855F7",
+  },
+  toggleThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#9CA3AF",
+    alignSelf: "flex-start",
+  },
+  toggleThumbActive: {
+    backgroundColor: "#fff",
+    alignSelf: "flex-end",
+  },
+
+  // Inline calendar
+  calendarWrap: {
+    backgroundColor: "#1E2A3A",
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.25)",
+    padding: 12,
+    marginBottom: 12,
+  },
+  calHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  calNavBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calMonthLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#F1F5F9",
+  },
+  calWeekRow: {
+    flexDirection: "row",
+    marginBottom: 4,
+  },
+  calWeekLabel: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#4B5563",
+    textTransform: "uppercase",
+  },
+  calGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  calCell: {
+    width: `${100 / 7}%` as any,
+    aspectRatio: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 100,
+  },
+  calCellSelected: {
+    backgroundColor: "#A855F7",
+  },
+  calCellToday: {
+    borderWidth: 1,
+    borderColor: "rgba(168,85,247,0.5)",
+  },
+  calDayText: {
+    fontSize: 13,
+    color: "#9CA3AF",
+    fontWeight: "500",
+  },
+  calDayDisabled: {
+    color: "#2D3748",
+  },
+  calDaySelected: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  calDayToday: {
+    color: "#A855F7",
+    fontWeight: "700",
+  },
+
+  // Time scroll
+  timeSection: {
+    marginTop: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: "rgba(255,255,255,0.06)",
+    paddingTop: 10,
+  },
+  timeSectionLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#4B5563",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  timeScrollContent: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  timeChip: {
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: "#111827",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  timeChipSelected: {
+    backgroundColor: "rgba(168,85,247,0.2)",
+    borderColor: "#A855F7",
+  },
+  timeChipText: {
+    fontSize: 13,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  timeChipTextSelected: {
+    color: "#E9D5FF",
+    fontWeight: "600",
+  },
+
+  // Schedule summary
+  schedSummary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: "rgba(255,255,255,0.06)",
+  },
+  schedSummaryText: {
+    fontSize: 13,
+    color: "#A855F7",
+    fontWeight: "600",
+  },
+
+  // Scheduled date display row (kept for reference, unused now)
+  scheduledDateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(168,85,247,0.08)",
+    borderRadius: 10,
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.3)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  scheduledDateText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#E9D5FF",
+    fontWeight: "500",
+  },
+
   fareRow: {
     flexDirection: "row",
     justifyContent: "space-between",

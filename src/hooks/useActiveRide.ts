@@ -27,8 +27,16 @@ export interface ActiveRide {
   driver: Driver | null
 }
 
+// Statuses that count as "active" for the passenger tracking view
 const ACTIVE_STATUSES = ['pending', 'assigned', 'driver_arriving', 'in_progress']
+
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey
+
+// A ride is only "now" if it has no scheduled_at OR scheduled_at is in the past
+function isRideNow(row: any): boolean {
+  if (!row.scheduled_at) return true
+  return new Date(row.scheduled_at) <= new Date()
+}
 
 export function useActiveRide(passengerId: string | undefined) {
   const [ride, setRide] = useState<ActiveRide | null>(null)
@@ -54,12 +62,13 @@ export function useActiveRide(passengerId: string | undefined) {
       }, (payload) => {
         const row = payload.new as any
         if (!row || row.passenger_id !== passengerId) return
-        console.log('[Realtime] ride update:', row.status)
+        console.log('[Realtime] ride update:', row.status, '| scheduled_at:', row.scheduled_at)
 
-        if (ACTIVE_STATUSES.includes(row.status)) {
+        if (ACTIVE_STATUSES.includes(row.status) && isRideNow(row)) {
+          // Active and happening now — fetch full ride with driver details
           fetchActiveRide(passengerId)
         } else {
-          // completed or cancelled — clear right away
+          // Completed, cancelled, or still in the future — clear tracking view
           setRide(null)
           setEta(null)
         }
@@ -120,12 +129,15 @@ export function useActiveRide(passengerId: string | undefined) {
 
   // ── Fetch active ride ───────────────────────────────────────
   async function fetchActiveRide(pid: string) {
-    // Only fetch genuinely active rides — never completed or cancelled
+    const now = new Date().toISOString()
+
     const { data: rides, error } = await supabase
       .from('rides')
       .select('*')
       .eq('passenger_id', pid)
       .in('status', ACTIVE_STATUSES)
+      // Exclude rides scheduled for the future — only now-rides
+      .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
       .order('created_at', { ascending: false })
       .limit(1)
 
@@ -180,25 +192,17 @@ export function useActiveRide(passengerId: string | undefined) {
       driver,
     }
 
-    console.log('[fetchActiveRide] assembled ride:', assembled.status, '| driver:', driver?.name, '| driver coords:', driver?.current_lat, driver?.current_lng)
+    console.log('[fetchActiveRide] assembled ride:', assembled.status, '| driver:', driver?.name)
     setRide(assembled)
   }
 
   // ── ETA calculation ─────────────────────────────────────────
   async function calculateEta(currentRide: ActiveRide) {
-    console.log('[ETA] driver coords:', currentRide.driver?.current_lat, currentRide.driver?.current_lng)
-
-    if (!currentRide.driver?.current_lat || !currentRide.driver?.current_lng) {
-      console.log('[ETA] skipping - no driver coords')
-      return
-    }
+    if (!currentRide.driver?.current_lat || !currentRide.driver?.current_lng) return
 
     const target = currentRide.status === 'in_progress'
       ? { lat: currentRide.dropoff_lat, lng: currentRide.dropoff_lng }
       : { lat: currentRide.pickup_lat, lng: currentRide.pickup_lng }
-
-    console.log('[ETA] target coords:', target)
-    console.log('[ETA] MAPS_KEY present:', !!MAPS_KEY)
 
     try {
       const url =
@@ -207,13 +211,8 @@ export function useActiveRide(passengerId: string | undefined) {
         `&destination=${target.lat},${target.lng}` +
         `&key=${MAPS_KEY}`
 
-      console.log('[ETA] fetching url:', url)
       const res = await fetch(url)
       const json = await res.json()
-      console.log('[ETA] response status:', json.status)
-      console.log('[ETA] routes count:', json.routes?.length)
-      console.log('[ETA] duration:', json.routes?.[0]?.legs?.[0]?.duration)
-
       const seconds = json.routes?.[0]?.legs?.[0]?.duration?.value
       setEta(seconds ? Math.ceil(seconds / 60) : null)
     } catch (e) {
