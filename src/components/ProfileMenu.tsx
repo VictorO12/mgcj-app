@@ -18,6 +18,7 @@ interface Props {
   onClose: () => void;
   onSignOut: () => void;
   onOpenHistory: () => void;
+  onOpenPaymentMethods?: () => void; // passenger only
   hasAssignedRide?: boolean;
   onOpenAssigned?: () => void;
 }
@@ -28,6 +29,7 @@ export default function ProfileMenu({
   onClose,
   onSignOut,
   onOpenHistory,
+  onOpenPaymentMethods,
   hasAssignedRide,
   onOpenAssigned,
 }: Props) {
@@ -114,16 +116,24 @@ export default function ProfileMenu({
           },
         ]
       : []),
+    // Payment methods — passengers only
+    ...(!isDriver
+      ? [
+          {
+            icon: "card-outline",
+            label: "Payment methods",
+            sublabel: "Manage cards & cash",
+            onPress: () => {
+              onClose();
+              onOpenPaymentMethods?.();
+            },
+          },
+        ]
+      : []),
     {
       icon: "notifications-outline",
       label: "Notifications",
       sublabel: "Ride updates, offers",
-      onPress: onClose,
-    },
-    {
-      icon: "card-outline",
-      label: "Payment methods",
-      sublabel: "Cash, card",
       onPress: onClose,
     },
     {

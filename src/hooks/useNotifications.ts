@@ -19,7 +19,7 @@ export function useNotifications() {
   const responseListener = useRef<any>()
 
   useEffect(() => {
-    if (!profile || profile.role !== 'driver') return
+    if (!profile) return
     registerForPushNotifications()
   }, [profile])
 
@@ -37,38 +37,48 @@ export function useNotifications() {
       return
     }
 
-    // Register notification categories for Accept/Decline buttons
-    await Notifications.setNotificationCategoryAsync('RIDE_REQUEST', [
-      {
-        identifier: 'ACCEPT',
-        buttonTitle: '✓ Accept',
-        options: { opensAppToForeground: true },
-      },
-      {
-        identifier: 'DECLINE',
-        buttonTitle: '✗ Decline',
-        options: { opensAppToForeground: false, isDestructive: true },
-      },
-    ])
+    // Drivers get Accept/Decline action buttons — passengers get standard notifications
+    if (profile?.role === 'driver') {
+      await Notifications.setNotificationCategoryAsync('RIDE_REQUEST', [
+        {
+          identifier: 'ACCEPT',
+          buttonTitle: '✓ Accept',
+          options: { opensAppToForeground: true },
+        },
+        {
+          identifier: 'DECLINE',
+          buttonTitle: '✗ Decline',
+          options: { opensAppToForeground: false, isDestructive: true },
+        },
+      ])
+    }
 
     // Get push token
     const token = await Notifications.getExpoPushTokenAsync({
-      projectId: '1df2c110-8290-4853-9574-2fe4b71799b0', // replace with yours
+      projectId: '1df2c110-8290-4853-9574-2fe4b71799b0',
     })
 
     console.log('Push token:', token.data)
 
-    // Save token to Supabase
+    // Save token — drivers → drivers table, passengers → profiles table
     if (profile?.id) {
+      if (profile.role === 'driver') {
+        await supabase
+          .from('drivers')
+          .update({ push_token: token.data })
+          .eq('id', profile.id)
+      }
+
+      // Everyone gets it on profiles (used by notify-passenger)
       await supabase
-        .from('drivers')
+        .from('profiles')
         .update({ push_token: token.data })
         .eq('id', profile.id)
     }
 
     if (Platform.OS === 'android') {
-      Notifications.setNotificationChannelAsync('rides', {
-        name: 'Ride requests',
+      await Notifications.setNotificationChannelAsync('rides', {
+        name: 'Ride updates',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         sound: 'default',

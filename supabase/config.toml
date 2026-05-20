@@ -427,3 +427,13 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/send-sms/deno.json"
 entrypoint = "./functions/send-sms/index.ts"
+
+[functions.notify-passenger]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/notify-passenger/index.ts"
+
+[functions.schedule-rides]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/schedule-rides/index.ts"

@@ -25,6 +25,7 @@ interface AssignedRide {
   scheduled_at: string | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  payment_method: string | null;
 }
 
 interface Props {
@@ -42,6 +43,8 @@ export default function AssignedRideScreen({
 }: Props) {
   const { profile } = useAuth();
   const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
+
+  const isScheduled = !!ride.scheduled_at;
 
   function estimateKm(lat1: number, lng1: number, lat2: number, lng2: number) {
     const R = 6371;
@@ -64,17 +67,43 @@ export default function AssignedRideScreen({
 
   async function handleAccept() {
     setLoading("accept");
+
+    // For scheduled rides: only confirm, do NOT change status.
+    // The ride stays pending/assigned until it's time — dispatch will activate it.
+    // For immediate rides: mark assigned so driver enters the active ride flow.
+    const update = isScheduled
+      ? { confirmed_by_driver: true }
+      : { confirmed_by_driver: true, status: "assigned" };
+
     const { error } = await supabase
       .from("rides")
-      .update({ confirmed_by_driver: true, status: "assigned" })
+      .update(update)
       .eq("id", ride.id)
       .eq("driver_id", profile?.id);
+
     setLoading(null);
+
     if (error) {
       Alert.alert("Error", error.message);
       return;
     }
-    onAccept();
+
+    if (isScheduled) {
+      const formatted = new Date(ride.scheduled_at!).toLocaleString("en-CA", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+      Alert.alert(
+        "Ride confirmed! 🗓",
+        `Scheduled for ${formatted}. It will appear in your active rides at that time.`,
+        [{ text: "OK", onPress: onAccept }],
+      );
+    } else {
+      onAccept();
+    }
   }
 
   async function handleDecline() {
@@ -110,8 +139,6 @@ export default function AssignedRideScreen({
     Linking.openURL(`tel:${ride.passenger_phone}`);
   }
 
-  const isScheduled = !!ride.scheduled_at;
-
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -135,7 +162,7 @@ export default function AssignedRideScreen({
         </View>
       </View>
 
-      {/* Scheduled time if applicable */}
+      {/* Scheduled time card */}
       {isScheduled && (
         <View style={styles.scheduledCard}>
           <Ionicons name="calendar-outline" size={20} color="#A855F7" />
@@ -222,8 +249,16 @@ export default function AssignedRideScreen({
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statBox}>
-          <Ionicons name="card-outline" size={16} color="#6B7280" />
-          <Text style={styles.statValue}>Cash</Text>
+          <Ionicons
+            name={
+              ride.payment_method === "card" ? "card-outline" : "cash-outline"
+            }
+            size={16}
+            color="#6B7280"
+          />
+          <Text style={styles.statValue}>
+            {ride.payment_method === "card" ? "Card" : "Cash"}
+          </Text>
           <Text style={styles.statLabel}>Payment</Text>
         </View>
       </View>
@@ -260,7 +295,9 @@ export default function AssignedRideScreen({
                 size={20}
                 color="#fff"
               />
-              <Text style={styles.acceptBtnText}>Accept ride</Text>
+              <Text style={styles.acceptBtnText}>
+                {isScheduled ? "Confirm ride" : "Accept ride"}
+              </Text>
             </>
           )}
         </TouchableOpacity>

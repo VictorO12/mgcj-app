@@ -226,7 +226,7 @@ export function useActiveRide(passengerId: string | undefined) {
     switch (status) {
       case 'pending':         return 'Finding your driver…'
       case 'assigned':        return `${name} is on the way`
-      case 'driver_arriving': return `${name} is almost there!`
+      case 'driver_arriving': return `${name} has arrived!`
       case 'in_progress':     return "You're on your way"
       case 'completed':       return 'You have arrived!'
       case 'cancelled':       return 'Ride cancelled'

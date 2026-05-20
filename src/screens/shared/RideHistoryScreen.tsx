@@ -321,9 +321,20 @@ export default function RideHistoryScreen({ onClose }: Props) {
                     </View>
                   )}
                   <View style={styles.fareRow}>
-                    <Ionicons name="cash-outline" size={13} color="#6B7280" />
+                    <Ionicons
+                      name={
+                        ride.payment_method === "card"
+                          ? "card-outline"
+                          : "cash-outline"
+                      }
+                      size={13}
+                      color="#6B7280"
+                    />
                     <Text style={styles.fareText}>
                       ${(ride.fare_final ?? ride.fare_estimate ?? 0).toFixed(2)}
+                    </Text>
+                    <Text style={styles.paymentBadge}>
+                      {ride.payment_method === "card" ? "Card" : "Cash"}
                     </Text>
                   </View>
                 </View>
@@ -467,4 +478,5 @@ const styles = StyleSheet.create({
   otherPartyText: { fontSize: 12, color: "#6B7280" },
   fareRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   fareText: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
+  paymentBadge: { fontSize: 11, color: "#4B5563", marginLeft: 4 },
 });

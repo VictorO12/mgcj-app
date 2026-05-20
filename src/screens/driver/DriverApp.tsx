@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import * as Notifications from "expo-notifications";
-import { Alert } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import DriverHomeScreen from "./DriverHomeScreen";
@@ -21,6 +20,7 @@ interface ActiveRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  payment_method: string | null;
 }
 
 interface AssignedRide {
@@ -35,6 +35,7 @@ interface AssignedRide {
   scheduled_at: string | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  payment_method: string | null;
 }
 
 interface DriverRecord {
@@ -54,6 +55,12 @@ interface ConfirmedScheduledRide {
 
 const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
+// A ride is "now" if it has no scheduled_at, or that time has already passed
+function isRideNow(row: any): boolean {
+  if (!row.scheduled_at) return true;
+  return new Date(row.scheduled_at) <= new Date();
+}
+
 export default function DriverApp() {
   const { profile } = useAuth();
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
@@ -67,12 +74,12 @@ export default function DriverApp() {
   >([]);
 
   useEffect(() => {
-    if (!profile?.id) return;
+    if (!profile) return;
     fetchDriverRecord();
     fetchActiveRide();
     fetchAssignedRide();
     fetchConfirmedScheduledRides();
-  }, [profile?.id]); // use profile.id not profile object — prevents double-fire
+  }, [profile]);
 
   // ── Realtime: watch for ride changes ────────────────────────
   useEffect(() => {
@@ -86,18 +93,17 @@ export default function DriverApp() {
           const row = payload.new as any;
           if (row.driver_id !== profile.id) return;
 
-          if (row.status === "completed" || row.status === "cancelled") {
+          const isFutureScheduled = !isRideNow(row);
+
+          if (ACTIVE_STATUSES.includes(row.status) && !isFutureScheduled) {
+            fetchActiveRide();
+            fetchAssignedRide();
+            fetchConfirmedScheduledRides();
+          } else if (row.status === "completed" || row.status === "cancelled") {
             setActiveRide(null);
             setAssignedRide(null);
             fetchConfirmedScheduledRides();
-          } else if (ACTIVE_STATUSES.includes(row.status)) {
-            // Active ride status — already handled locally via handleRideStatusChange.
-            // Do NOT call fetchActiveRide() here — it would remount DriverActiveRideScreen
-            // and wipe routeCoords/steps state.
-            fetchAssignedRide();
-            fetchConfirmedScheduledRides();
-          } else {
-            fetchActiveRide();
+          } else if (row.status === "assigned") {
             fetchAssignedRide();
             fetchConfirmedScheduledRides();
           }
@@ -127,15 +133,7 @@ export default function DriverApp() {
             .eq("id", rideId)
             .single();
 
-          if (!rideCheck) {
-            Alert.alert(
-              "Ride unavailable",
-              "This ride is no longer available.",
-            );
-            return;
-          }
-
-          if (rideCheck.status !== "pending") return;
+          if (!rideCheck || rideCheck.status !== "pending") return;
 
           const { error } = await supabase
             .from("rides")
@@ -147,12 +145,7 @@ export default function DriverApp() {
             .eq("id", rideId)
             .eq("status", "pending");
 
-          if (error) {
-            Alert.alert("Ride unavailable", "This ride was already taken.");
-            return;
-          }
-
-          await fetchActiveRide();
+          if (!error) fetchActiveRide();
         } else if (action === "DECLINE") {
           console.log("Driver declined ride from notification:", rideId);
         }
@@ -181,7 +174,6 @@ export default function DriverApp() {
       .eq("driver_id", profile.id)
       .in("status", ACTIVE_STATUSES)
       .eq("confirmed_by_driver", true)
-      // Exclude future scheduled rides — only show rides happening now
       .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
       .order("created_at", { ascending: false })
       .limit(1);
@@ -208,18 +200,21 @@ export default function DriverApp() {
       fare_estimate: ride.fare_estimate,
       passenger_name: passenger?.name ?? null,
       passenger_phone: passenger?.phone ?? null,
+      payment_method: ride.payment_method ?? null,
     });
   }
 
   async function fetchConfirmedScheduledRides() {
     if (!profile) return;
+    const now = new Date().toISOString();
     const { data } = await supabase
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
       .eq("confirmed_by_driver", true)
-      .in("status", ["assigned", "scheduled"])
+      .in("status", ["assigned", "scheduled", "pending"])
       .not("scheduled_at", "is", null)
+      .gt("scheduled_at", now)
       .order("scheduled_at", { ascending: true });
     if (!data) return;
     const enriched = await Promise.all(
@@ -248,7 +243,7 @@ export default function DriverApp() {
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
-      .in("status", ["assigned", "scheduled"])
+      .in("status", ["assigned", "scheduled", "pending"])
       .eq("confirmed_by_driver", false)
       .order("scheduled_at", { ascending: true, nullsFirst: false })
       .limit(1);
@@ -274,11 +269,10 @@ export default function DriverApp() {
       scheduled_at: ride.scheduled_at,
       passenger_name: passenger?.name ?? null,
       passenger_phone: passenger?.phone ?? null,
+      payment_method: ride.payment_method ?? null,
     });
   }
 
-  // ── Called immediately when driver taps a status button ─────
-  // Updates local state instantly — no waiting for realtime round-trip.
   function handleRideStatusChange(newStatus: string) {
     if (!activeRide) return;
     setActiveRide({ ...activeRide, status: newStatus });
@@ -286,6 +280,7 @@ export default function DriverApp() {
 
   function handleRideComplete() {
     setActiveRide(null);
+    fetchConfirmedScheduledRides();
   }
 
   function handleSetupComplete() {
@@ -293,10 +288,14 @@ export default function DriverApp() {
   }
 
   async function handleAcceptRide() {
+    const wasScheduled = !!assignedRide?.scheduled_at;
     setAssignedRide(null);
     setShowAssigned(false);
-    await fetchActiveRide();
-    fetchConfirmedScheduledRides();
+    if (wasScheduled) {
+      fetchConfirmedScheduledRides();
+    } else {
+      await fetchActiveRide();
+    }
   }
 
   function handleDeclineRide() {
@@ -340,6 +339,7 @@ export default function DriverApp() {
         onAccepted={() => {
           setShowAssignedList(false);
           fetchActiveRide();
+          fetchConfirmedScheduledRides();
         }}
       />
     );

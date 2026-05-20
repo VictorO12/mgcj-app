@@ -20,7 +20,9 @@ import RideTrackingSheet from "../../components/RideTrackingSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import ScheduledRidesScreen from "./ScheduledRidesScreen";
+import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import Constants from "expo-constants";
+import { useNotifications } from "../../hooks/useNotifications";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
 
@@ -33,6 +35,15 @@ const QUICK_DESTINATIONS = [
   { label: "🎓 Acadia", address: "Acadia University, Wolfville, NS" },
   { label: "💊 Pharmasave", address: "Pharmasave, Kentville, NS" },
 ];
+
+interface PaymentMethod {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  is_default: boolean;
+}
 
 interface PlacePrediction {
   place_id: string;
@@ -60,6 +71,7 @@ const VALLEY_REGION = {
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
   const { ride, eta, statusLabel } = useActiveRide(profile?.id);
+  useNotifications(); // registers push token for passenger notifications
   const mapRef = useRef<MapView>(null);
 
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
@@ -80,8 +92,58 @@ export default function PassengerHomeScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [scheduledVisible, setScheduledVisible] = useState(false);
+  const [paymentVisible, setPaymentVisible] = useState(false);
 
-  // Scheduling state
+  // Payment state
+  const [defaultCard, setDefaultCard] = useState<PaymentMethod | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<"card" | "cash">(
+    "cash",
+  );
+  const selectedPaymentRef = useRef<"card" | "cash">("cash");
+  const defaultCardRef = useRef<PaymentMethod | null>(null);
+  const [showCardNudge, setShowCardNudge] = useState(false);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    selectedPaymentRef.current = selectedPayment;
+  }, [selectedPayment]);
+  useEffect(() => {
+    defaultCardRef.current = defaultCard;
+  }, [defaultCard]);
+
+  // Fetch default card on mount and whenever profile changes
+  useEffect(() => {
+    if (profile) fetchDefaultCard();
+  }, [profile]);
+
+  // When confirm sheet opens, default to card if one exists
+  useEffect(() => {
+    if (sheet === "confirm") {
+      setSelectedPayment(defaultCard ? "card" : "cash");
+    }
+  }, [sheet, defaultCard]);
+
+  async function fetchDefaultCard() {
+    if (!profile) return;
+    const { data } = await supabase
+      .from("payment_methods")
+      .select("id, brand, last4, exp_month, exp_year, is_default")
+      .eq("passenger_id", profile.id)
+      .eq("is_default", true)
+      .single();
+
+    if (data) {
+      setDefaultCard(data);
+    } else {
+      setDefaultCard(null);
+      // Show nudge if no card saved at all
+      const { count } = await supabase
+        .from("payment_methods")
+        .select("id", { count: "exact", head: true })
+        .eq("passenger_id", profile.id);
+      setShowCardNudge((count ?? 0) === 0);
+    }
+  }
   const [isScheduled, setIsScheduled] = useState(false);
   const [calMonth, setCalMonth] = useState(() => {
     const d = new Date();
@@ -328,6 +390,18 @@ export default function PassengerHomeScreen() {
     const scheduledAt =
       isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
 
+    const paymentMethod = selectedPaymentRef.current;
+    const paymentCard = defaultCardRef.current;
+
+    console.log("[confirmBooking] selectedPayment state:", selectedPayment);
+    console.log(
+      "[confirmBooking] selectedPaymentRef:",
+      selectedPaymentRef.current,
+    );
+    console.log("[confirmBooking] defaultCard state:", defaultCard?.id);
+    console.log("[confirmBooking] defaultCardRef:", defaultCardRef.current?.id);
+    console.log("[confirmBooking] using paymentMethod:", paymentMethod);
+
     const { error } = await supabase
       .from("rides")
       .insert({
@@ -340,7 +414,9 @@ export default function PassengerHomeScreen() {
         dropoff_lat: dropoffCoords.latitude,
         dropoff_lng: dropoffCoords.longitude,
         fare_estimate: fareEstimate,
-        payment_method: "cash",
+        payment_method: paymentMethod,
+        payment_method_id:
+          paymentMethod === "card" && paymentCard ? paymentCard.id : null,
         scheduled_at: scheduledAt,
       })
       .select()
@@ -845,12 +921,106 @@ export default function PassengerHomeScreen() {
                 </View>
               )}
 
+              {/* Payment selector */}
+              <View style={styles.paymentSection}>
+                <Text style={styles.paymentLabel}>Payment</Text>
+                <View style={styles.paymentOptions}>
+                  {/* Card option — only shown if a card is saved */}
+                  {defaultCard ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentOption,
+                        selectedPayment === "card" &&
+                          styles.paymentOptionSelected,
+                      ]}
+                      onPress={() => setSelectedPayment("card")}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="card"
+                        size={16}
+                        color={
+                          selectedPayment === "card" ? "#E8500A" : "#6B7280"
+                        }
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.paymentOptionTitle,
+                            selectedPayment === "card" &&
+                              styles.paymentOptionTitleSelected,
+                          ]}
+                        >
+                          {defaultCard.brand} ••{defaultCard.last4}
+                        </Text>
+                      </View>
+                      {selectedPayment === "card" && (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={16}
+                          color="#E8500A"
+                        />
+                      )}
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.addCardPrompt}
+                      onPress={() => setPaymentVisible(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="add-circle-outline"
+                        size={16}
+                        color="#E8500A"
+                      />
+                      <Text style={styles.addCardPromptText}>
+                        Add a card for faster checkout
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Cash option */}
+                  <TouchableOpacity
+                    style={[
+                      styles.paymentOption,
+                      selectedPayment === "cash" &&
+                        styles.paymentOptionSelected,
+                    ]}
+                    onPress={() => setSelectedPayment("cash")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="cash-outline"
+                      size={16}
+                      color={selectedPayment === "cash" ? "#E8500A" : "#6B7280"}
+                    />
+                    <Text
+                      style={[
+                        styles.paymentOptionTitle,
+                        selectedPayment === "cash" &&
+                          styles.paymentOptionTitleSelected,
+                      ]}
+                    >
+                      Cash
+                    </Text>
+                    {selectedPayment === "cash" && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={16}
+                        color="#E8500A"
+                      />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+
               {/* Fare row */}
               <View style={styles.fareRow}>
                 <View>
                   <Text style={styles.fareLabel}>Estimated fare</Text>
                   <Text style={styles.fareNote}>
-                    Cash · Subject to final distance
+                    {selectedPayment === "card" ? "Card · " : "Cash · "}
+                    Subject to final distance
                   </Text>
                 </View>
                 {fareLoading ? (
@@ -886,6 +1056,30 @@ export default function PassengerHomeScreen() {
               </View>
             </View>
           )}
+
+          {/* Card nudge — shown on home sheet when no card saved */}
+          {sheet === null && showCardNudge && (
+            <TouchableOpacity
+              style={styles.cardNudge}
+              onPress={() => setPaymentVisible(true)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.cardNudgeIcon}>
+                <Ionicons name="card-outline" size={18} color="#E8500A" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardNudgeTitle}>
+                  Add a card for easier payment
+                </Text>
+                <Text style={styles.cardNudgeSub}>
+                  Pay rides without handling cash
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowCardNudge(false)}>
+                <Ionicons name="close" size={16} color="#4B5563" />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -911,11 +1105,23 @@ export default function PassengerHomeScreen() {
         </View>
       )}
 
+      {paymentVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <PaymentMethodsScreen
+            onClose={() => {
+              setPaymentVisible(false);
+              fetchDefaultCard(); // refresh in case they added/changed a card
+            }}
+          />
+        </View>
+      )}
+
       <ProfileMenu
         profile={profile}
         visible={menuVisible}
         onClose={() => setMenuVisible(false)}
         onSignOut={signOut}
+        onOpenPaymentMethods={() => setPaymentVisible(true)}
         onOpenHistory={() => setHistoryVisible(true)}
       />
     </View>
@@ -1303,6 +1509,95 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#E9D5FF",
     fontWeight: "500",
+  },
+
+  // Payment selector
+  paymentSection: {
+    marginBottom: 12,
+  },
+  paymentLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#4B5563",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  paymentOptions: {
+    gap: 8,
+  },
+  paymentOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#1E2A3A",
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  paymentOptionSelected: {
+    borderColor: "rgba(232,80,10,0.4)",
+    backgroundColor: "rgba(232,80,10,0.07)",
+  },
+  paymentOptionTitle: {
+    fontSize: 14,
+    color: "#6B7280",
+    fontWeight: "500",
+    flex: 1,
+  },
+  paymentOptionTitleSelected: {
+    color: "#F1F5F9",
+  },
+  addCardPrompt: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(232,80,10,0.06)",
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(232,80,10,0.25)",
+    borderStyle: "dashed",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  addCardPromptText: {
+    fontSize: 13,
+    color: "#E8500A",
+    fontWeight: "500",
+    flex: 1,
+  },
+
+  // Card nudge banner
+  cardNudge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "rgba(232,80,10,0.07)",
+    borderRadius: 14,
+    borderWidth: 0.5,
+    borderColor: "rgba(232,80,10,0.2)",
+    padding: 12,
+    marginTop: 10,
+  },
+  cardNudgeIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "rgba(232,80,10,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cardNudgeTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#F1F5F9",
+    marginBottom: 2,
+  },
+  cardNudgeSub: {
+    fontSize: 11,
+    color: "#6B7280",
   },
 
   fareRow: {
