@@ -23,6 +23,7 @@ import ScheduledRidesScreen from "./ScheduledRidesScreen";
 import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import Constants from "expo-constants";
 import { useNotifications } from "../../hooks/useNotifications";
+import RideReviewModal from "../../components/RideReviewModal";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
 
@@ -102,6 +103,12 @@ export default function PassengerHomeScreen() {
   const selectedPaymentRef = useRef<"card" | "cash">("cash");
   const defaultCardRef = useRef<PaymentMethod | null>(null);
   const [showCardNudge, setShowCardNudge] = useState(false);
+  const lastCompletedRideId = useRef<string | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<{
+    rideId: string;
+    driverId: string;
+    driverName: string | null;
+  } | null>(null);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -283,6 +290,23 @@ export default function PassengerHomeScreen() {
     const interval = setInterval(fetchActiveDrivers, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (
+      ride?.status === "completed" &&
+      ride.driver?.id &&
+      ride.id !== lastCompletedRideId.current
+    ) {
+      lastCompletedRideId.current = ride.id;
+      setTimeout(() => {
+        setReviewTarget({
+          rideId: ride.id,
+          driverId: ride.driver!.id,
+          driverName: ride.driver!.name ?? null,
+        });
+      }, 800);
+    }
+  }, [ride?.status, ride?.id]);
 
   async function fetchActiveDrivers() {
     const { data } = await supabase
@@ -1124,6 +1148,17 @@ export default function PassengerHomeScreen() {
         onOpenPaymentMethods={() => setPaymentVisible(true)}
         onOpenHistory={() => setHistoryVisible(true)}
       />
+
+      {/* ── Post-ride review popup ── */}
+      {reviewTarget && (
+        <RideReviewModal
+          visible={!!reviewTarget}
+          rideId={reviewTarget.rideId}
+          driverId={reviewTarget.driverId}
+          driverName={reviewTarget.driverName}
+          onDismiss={() => setReviewTarget(null)}
+        />
+      )}
     </View>
   );
 }

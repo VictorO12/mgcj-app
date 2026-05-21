@@ -21,6 +21,7 @@ import { useNotifications } from "../../hooks/useNotifications";
 import RideRequestSheet from "./RideRequestSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
+import { useDriverRating } from "../../hooks/useDriverRating";
 
 interface PendingRide {
   id: string;
@@ -84,6 +85,7 @@ export default function DriverHomeScreen({
   onRideAccepted,
 }: Props) {
   const { profile, signOut } = useAuth();
+  const { average, count } = useDriverRating(profile?.id);
   useNotifications();
   const mapRef = useRef<MapView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -365,6 +367,15 @@ export default function DriverHomeScreen({
               {isOnline ? "Online — accepting rides" : "Offline"}
             </Text>
           </View>
+
+          {/* ── Rating badge ── */}
+          {average != null && (
+            <View style={styles.ratingPill}>
+              <Ionicons name="star" size={12} color="#F59E0B" />
+              <Text style={styles.ratingText}>{average.toFixed(1)}/5</Text>
+              <Text style={styles.ratingCount}>({count})</Text>
+            </View>
+          )}
         </View>
 
         {/* Avatar with badge */}
@@ -590,6 +601,24 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 3,
   },
+
+  ratingPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  ratingText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#F59E0B",
+  },
+  ratingCount: {
+    fontSize: 12,
+    color: "#6B7280",
+  },
+
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, color: "#6B7280" },
   avatarWrap: { position: "relative", padding: 4 },

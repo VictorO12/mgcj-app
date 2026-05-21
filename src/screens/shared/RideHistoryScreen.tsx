@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import RideReviewModal from "../../components/RideReviewModal";
 
 interface RideRecord {
   id: string;
@@ -23,6 +24,9 @@ interface RideRecord {
   payment_method: string;
   created_at: string;
   other_party_name: string | null;
+  other_party_id: string | null;
+  review_rating: number | null;
+  received_rating: number | null;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -55,12 +59,52 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [filter, setFilter] = useState<"all" | "completed" | "cancelled">(
     "all",
   );
+  const [reviewTarget, setReviewTarget] = useState<{
+    rideId: string;
+    driverId: string;
+    driverName: string | null;
+  } | null>(null);
 
   const isDriver = profile?.role === "driver";
+  // Keep a stable ref to fetchRides so callbacks never go stale
+  const fetchRidesRef = useRef<() => Promise<void>>();
 
   useEffect(() => {
     fetchRides();
   }, [profile]);
+
+  // Realtime: watch for new reviews on this driver's rides
+  useEffect(() => {
+    if (!profile || !isDriver) return;
+
+    const channel = supabase
+      .channel("driver-reviews-" + profile.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "ride_reviews",
+          filter: `driver_id=eq.${profile.id}`,
+        },
+        (payload) => {
+          const review = payload.new as any;
+          // Optimistically update the matching ride card instantly
+          setRides((prev) =>
+            prev.map((r) =>
+              r.id === review.ride_id
+                ? { ...r, received_rating: review.rating }
+                : r,
+            ),
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile, isDriver]);
 
   async function fetchRides() {
     if (!profile) return;
@@ -69,7 +113,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
     const query = supabase
       .from("rides")
       .select("*")
-      .in("status", ["completed", "cancelled"])
       .order("created_at", { ascending: false })
       .limit(50);
 
@@ -80,17 +123,26 @@ export default function RideHistoryScreen({ onClose }: Props) {
     }
 
     const { data: rideRows, error } = await query;
-    if (error) {
-      console.error(error);
-      setLoading(false);
-      return;
-    }
-    if (!rideRows) {
+    if (error || !rideRows) {
       setLoading(false);
       return;
     }
 
-    // Fetch the other party's name for each ride
+    const completedIds = rideRows
+      .filter((r) => r.status === "completed")
+      .map((r) => r.id);
+
+    let reviewMap: Record<string, number> = {};
+    if (completedIds.length > 0) {
+      const { data: reviews } = await supabase
+        .from("ride_reviews")
+        .select("ride_id, rating")
+        .in("ride_id", completedIds);
+      reviews?.forEach((rv) => {
+        reviewMap[rv.ride_id] = rv.rating;
+      });
+    }
+
     const enriched = await Promise.all(
       rideRows.map(async (ride) => {
         const otherId = isDriver ? ride.passenger_id : ride.driver_id;
@@ -103,6 +155,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
             .single();
           otherName = p?.name ?? null;
         }
+        const hasReview = reviewMap[ride.id] != null;
         return {
           id: ride.id,
           status: ride.status,
@@ -113,6 +166,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
           payment_method: ride.payment_method,
           created_at: ride.created_at,
           other_party_name: otherName,
+          other_party_id: otherId ?? null,
+          review_rating: !isDriver && hasReview ? reviewMap[ride.id] : null,
+          received_rating: isDriver && hasReview ? reviewMap[ride.id] : null,
         };
       }),
     );
@@ -121,10 +177,30 @@ export default function RideHistoryScreen({ onClose }: Props) {
     setLoading(false);
   }
 
+  // Keep ref in sync so handleReviewDismiss always calls the latest fetchRides
+  fetchRidesRef.current = fetchRides;
+
   async function onRefresh() {
     setRefreshing(true);
     await fetchRides();
     setRefreshing(false);
+  }
+
+  function handleReviewDismiss(submitted: boolean, rating?: number) {
+    const targetId = reviewTarget?.rideId;
+    setReviewTarget(null);
+
+    if (submitted && targetId && rating != null) {
+      // Optimistic update — star appears instantly
+      setRides((prev) =>
+        prev.map((r) =>
+          r.id === targetId ? { ...r, review_rating: rating } : r,
+        ),
+      );
+    }
+
+    // Background sync regardless
+    fetchRidesRef.current?.();
   }
 
   function formatDate(iso: string) {
@@ -159,12 +235,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
     .filter((r) => r.status === "completed")
     .reduce((sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0), 0);
 
-  const completedCount = rides.filter((r) => r.status === "completed").length;
-  const cancelledCount = rides.filter((r) => r.status === "cancelled").length;
-
   return (
     <View style={styles.container}>
-      {/* ── HEADER ── */}
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
           <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
@@ -173,81 +246,71 @@ export default function RideHistoryScreen({ onClose }: Props) {
         <View style={{ width: 36 }} />
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="#E8500A"
-          />
-        }
-      >
-        {/* ── STATS ROW ── */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{completedCount}</Text>
-            <Text style={styles.statLabel}>Completed</Text>
+      {/* Driver summary strip */}
+      {isDriver && (
+        <View style={styles.summaryStrip}>
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryValue}>
+              {rides.filter((r) => r.status === "completed").length}
+            </Text>
+            <Text style={styles.summaryLabel}>Rides</Text>
           </View>
-          {isDriver && (
-            <View style={[styles.statCard, styles.statCardAccent]}>
-              <Text style={[styles.statValue, { color: "#1D9E75" }]}>
-                ${totalEarnings.toFixed(2)}
-              </Text>
-              <Text style={styles.statLabel}>Total earned</Text>
-            </View>
-          )}
-          <View style={styles.statCard}>
+          <View style={styles.summaryDivider} />
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryValue}>${totalEarnings.toFixed(2)}</Text>
+            <Text style={styles.summaryLabel}>Earned</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Filter tabs */}
+      <View style={styles.filterRow}>
+        {(["all", "completed", "cancelled"] as const).map((f) => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filterTab, filter === f && styles.filterTabActive]}
+            onPress={() => setFilter(f)}
+          >
             <Text
               style={[
-                styles.statValue,
-                cancelledCount > 0 && { color: "#E24B4A" },
+                styles.filterTabText,
+                filter === f && styles.filterTabTextActive,
               ]}
             >
-              {cancelledCount}
+              {f.charAt(0).toUpperCase() + f.slice(1)}
             </Text>
-            <Text style={styles.statLabel}>Cancelled</Text>
-          </View>
-        </View>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-        {/* ── FILTER TABS ── */}
-        <View style={styles.filterRow}>
-          {(["all", "completed", "cancelled"] as const).map((f) => (
-            <TouchableOpacity
-              key={f}
-              style={[styles.filterTab, filter === f && styles.filterTabActive]}
-              onPress={() => setFilter(f)}
-            >
-              <Text
-                style={[
-                  styles.filterTabText,
-                  filter === f && styles.filterTabTextActive,
-                ]}
-              >
-                {f.charAt(0).toUpperCase() + f.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      {loading ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color="#E8500A" size="large" />
         </View>
-
-        {/* ── RIDE LIST ── */}
-        {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator color="#E8500A" size="large" />
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Ionicons name="car-outline" size={48} color="#374151" />
-            <Text style={styles.emptyTitle}>No rides yet</Text>
-            <Text style={styles.emptySubtitle}>
-              {isDriver
-                ? "Your completed rides will appear here"
-                : "Your trip history will appear here"}
-            </Text>
-          </View>
-        ) : (
+      ) : filtered.length === 0 ? (
+        <View style={styles.emptyWrap}>
+          <Ionicons name="car-outline" size={48} color="#374151" />
+          <Text style={styles.emptyTitle}>No rides yet</Text>
+          <Text style={styles.emptySubtitle}>
+            {isDriver
+              ? "Your completed rides will appear here"
+              : "Your trip history will appear here"}
+          </Text>
+        </View>
+      ) : (
+        <ScrollView
+          style={styles.list}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#E8500A"
+            />
+          }
+        >
           <View style={styles.rideList}>
-            {filtered.map((ride, index) => (
+            {filtered.map((ride) => (
               <View key={ride.id} style={styles.rideCard}>
                 {/* Date + status */}
                 <View style={styles.rideCardTop}>
@@ -263,21 +326,31 @@ export default function RideHistoryScreen({ onClose }: Props) {
                     style={[
                       styles.statusBadge,
                       {
-                        backgroundColor: `${STATUS_COLORS[ride.status]}18`,
-                        borderColor: `${STATUS_COLORS[ride.status]}40`,
+                        backgroundColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}18`,
+                        borderColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}40`,
                       },
                     ]}
                   >
                     <Text
                       style={[
                         styles.statusText,
-                        { color: STATUS_COLORS[ride.status] },
+                        { color: STATUS_COLORS[ride.status] ?? "#6B7280" },
                       ]}
                     >
                       {STATUS_LABELS[ride.status] ?? ride.status}
                     </Text>
                   </View>
                 </View>
+
+                {/* Other party */}
+                {ride.other_party_name && (
+                  <Text style={styles.otherParty}>
+                    {isDriver ? "Passenger" : "Driver"}:{" "}
+                    <Text style={styles.otherPartyName}>
+                      {ride.other_party_name}
+                    </Text>
+                  </Text>
+                )}
 
                 {/* Route */}
                 <View style={styles.routeWrap}>
@@ -289,9 +362,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                       {ride.pickup_address}
                     </Text>
                   </View>
-                  <View style={styles.routeLineWrap}>
-                    <View style={styles.routeLine} />
-                  </View>
+                  <View style={styles.routeLine} />
                   <View style={styles.routeRow}>
                     <View
                       style={[
@@ -305,178 +376,246 @@ export default function RideHistoryScreen({ onClose }: Props) {
                   </View>
                 </View>
 
-                {/* Footer */}
-                <View style={styles.rideCardFooter}>
-                  {ride.other_party_name && (
-                    <View style={styles.otherPartyRow}>
-                      <Ionicons
-                        name={isDriver ? "person-outline" : "car-outline"}
-                        size={13}
-                        color="#6B7280"
-                      />
-                      <Text style={styles.otherPartyText}>
-                        {isDriver ? "Passenger" : "Driver"}:{" "}
-                        {ride.other_party_name}
-                      </Text>
-                    </View>
-                  )}
+                {/* Fare */}
+                {(ride.fare_final ?? ride.fare_estimate) != null && (
                   <View style={styles.fareRow}>
-                    <Ionicons
-                      name={
-                        ride.payment_method === "card"
-                          ? "card-outline"
-                          : "cash-outline"
-                      }
-                      size={13}
-                      color="#6B7280"
-                    />
-                    <Text style={styles.fareText}>
-                      ${(ride.fare_final ?? ride.fare_estimate ?? 0).toFixed(2)}
+                    <Text style={styles.fareLabel}>
+                      {ride.fare_final ? "Final fare" : "Est. fare"}
                     </Text>
-                    <Text style={styles.paymentBadge}>
-                      {ride.payment_method === "card" ? "Card" : "Cash"}
+                    <Text style={styles.fareAmount}>
+                      ${(ride.fare_final ?? ride.fare_estimate)!.toFixed(2)}
                     </Text>
                   </View>
-                </View>
+                )}
+
+                {/* ── PASSENGER: review section ── */}
+                {!isDriver && ride.status === "completed" && (
+                  <View style={styles.reviewSection}>
+                    {ride.review_rating != null ? (
+                      <View style={styles.reviewedRow}>
+                        <View style={styles.starsReadOnly}>
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Ionicons
+                              key={s}
+                              name={
+                                ride.review_rating! >= s
+                                  ? "star"
+                                  : "star-outline"
+                              }
+                              size={16}
+                              color={
+                                ride.review_rating! >= s ? "#F59E0B" : "#374151"
+                              }
+                            />
+                          ))}
+                        </View>
+                        <Text style={styles.reviewedLabel}>
+                          {ride.review_rating}/5 · Your rating
+                        </Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.rateBtn}
+                        onPress={() =>
+                          setReviewTarget({
+                            rideId: ride.id,
+                            driverId: ride.other_party_id!,
+                            driverName: ride.other_party_name,
+                          })
+                        }
+                      >
+                        <Ionicons
+                          name="star-outline"
+                          size={15}
+                          color="#F59E0B"
+                        />
+                        <Text style={styles.rateBtnText}>Rate this ride</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+
+                {/* ── DRIVER: received rating section ── */}
+                {isDriver && ride.status === "completed" && (
+                  <View style={styles.reviewSection}>
+                    {ride.received_rating != null ? (
+                      <View style={styles.reviewedRow}>
+                        <View style={styles.starsReadOnly}>
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Ionicons
+                              key={s}
+                              name={
+                                ride.received_rating! >= s
+                                  ? "star"
+                                  : "star-outline"
+                              }
+                              size={16}
+                              color={
+                                ride.received_rating! >= s
+                                  ? "#F59E0B"
+                                  : "#374151"
+                              }
+                            />
+                          ))}
+                        </View>
+                        <Text style={styles.reviewedLabel}>
+                          {ride.received_rating}/5 · Passenger rating
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.noRatingText}>No rating yet</Text>
+                    )}
+                  </View>
+                )}
               </View>
             ))}
           </View>
-        )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      )}
 
-        <View style={{ height: 40 }} />
-      </ScrollView>
+      {/* Review modal */}
+      {reviewTarget && (
+        <RideReviewModal
+          visible={!!reviewTarget}
+          rideId={reviewTarget.rideId}
+          driverId={reviewTarget.driverId}
+          driverName={reviewTarget.driverName}
+          onDismiss={handleReviewDismiss}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-
+  container: { flex: 1, backgroundColor: "#0D1117" },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "ios" ? 56 : 40,
     paddingBottom: 16,
+    paddingHorizontal: 16,
+    backgroundColor: "#111827",
+    borderBottomWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.06)",
   },
   backBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
     alignItems: "center",
     justifyContent: "center",
   },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-
-  statsRow: {
+  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
+  summaryStrip: {
     flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 20,
-    marginBottom: 16,
+    backgroundColor: "#111827",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderBottomWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.06)",
   },
-  statCard: {
-    flex: 1,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    alignItems: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  statCardAccent: {
-    borderColor: "rgba(29,158,117,0.25)",
-  },
-  statValue: { fontSize: 22, fontWeight: "700", color: "#F1F5F9" },
-  statLabel: { fontSize: 11, color: "#6B7280", marginTop: 3 },
-
+  summaryItem: { flex: 1, alignItems: "center" },
+  summaryDivider: { width: 0.5, backgroundColor: "rgba(255,255,255,0.08)" },
+  summaryValue: { fontSize: 22, fontWeight: "700", color: "#F1F5F9" },
+  summaryLabel: { fontSize: 12, color: "#6B7280", marginTop: 2 },
   filterRow: {
     flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     gap: 8,
-    paddingHorizontal: 20,
-    marginBottom: 16,
   },
   filterTab: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
     backgroundColor: "#1E2A3A",
-    alignItems: "center",
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.06)",
   },
-  filterTabActive: {
-    backgroundColor: "#E8500A",
-    borderColor: "#E8500A",
-  },
+  filterTabActive: { backgroundColor: "#E8500A", borderColor: "#E8500A" },
   filterTabText: { fontSize: 13, fontWeight: "500", color: "#6B7280" },
   filterTabTextActive: { color: "#fff" },
-
-  loadingWrap: { paddingTop: 60, alignItems: "center" },
-  emptyWrap: { paddingTop: 60, alignItems: "center", gap: 10 },
-  emptyTitle: { fontSize: 18, fontWeight: "600", color: "#4B5563" },
-  emptySubtitle: {
-    fontSize: 13,
-    color: "#374151",
-    textAlign: "center",
+  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
+  emptyWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
     paddingHorizontal: 40,
   },
-
-  rideList: { paddingHorizontal: 20, gap: 10 },
+  emptyTitle: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
+  emptySubtitle: { fontSize: 13, color: "#6B7280", textAlign: "center" },
+  list: { flex: 1 },
+  rideList: { paddingHorizontal: 16, paddingTop: 8, gap: 12 },
   rideCard: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: "#111827",
     borderRadius: 16,
     padding: 16,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.07)",
   },
-
   rideCardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  dateRow: { gap: 2 },
+  dateRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   rideDate: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  rideTime: { fontSize: 11, color: "#6B7280" },
+  rideTime: { fontSize: 12, color: "#6B7280" },
   statusBadge: {
-    borderRadius: 20,
-    paddingVertical: 3,
     paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
     borderWidth: 0.5,
   },
   statusText: { fontSize: 11, fontWeight: "600" },
-
+  otherParty: { fontSize: 12, color: "#6B7280", marginBottom: 10 },
+  otherPartyName: { color: "#94A3B8", fontWeight: "500" },
   routeWrap: { marginBottom: 12 },
   routeRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   routeDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  routeText: { fontSize: 13, color: "#CBD5E1", flex: 1 },
-  routeLineWrap: { paddingLeft: 3, paddingVertical: 2 },
+  routeText: { fontSize: 13, color: "#94A3B8", flex: 1 },
   routeLine: {
-    width: 1.5,
-    height: 12,
+    width: 1,
+    height: 10,
     backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 2,
+    marginLeft: 3.5,
+    marginVertical: 2,
   },
-
-  rideCardFooter: {
+  fareRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingTop: 10,
     borderTopWidth: 0.5,
-    borderTopColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.06)",
+    marginBottom: 10,
   },
-  otherPartyRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  otherPartyText: { fontSize: 12, color: "#6B7280" },
-  fareRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  fareText: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  paymentBadge: { fontSize: 11, color: "#4B5563", marginLeft: 4 },
+  fareLabel: { fontSize: 12, color: "#6B7280" },
+  fareAmount: { fontSize: 15, fontWeight: "700", color: "#F1F5F9" },
+  reviewSection: {
+    borderTopWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.06)",
+    paddingTop: 10,
+  },
+  reviewedRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  starsReadOnly: { flexDirection: "row", gap: 2 },
+  reviewedLabel: { fontSize: 12, color: "#6B7280" },
+  rateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: "rgba(245,158,11,0.1)",
+    borderWidth: 0.5,
+    borderColor: "rgba(245,158,11,0.3)",
+  },
+  rateBtnText: { fontSize: 13, fontWeight: "600", color: "#F59E0B" },
+  noRatingText: { fontSize: 12, color: "#374151", fontStyle: "italic" },
 });

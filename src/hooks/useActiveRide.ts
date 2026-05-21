@@ -67,11 +67,18 @@ export function useActiveRide(passengerId: string | undefined) {
         if (ACTIVE_STATUSES.includes(row.status) && isRideNow(row)) {
           // Active and happening now — fetch full ride with driver details
           fetchActiveRide(passengerId)
+        } else if (row.status === 'completed') {
+          // Briefly surface completed status so PassengerHomeScreen
+          // can trigger the review popup, then clear after 1.5s
+          setRide(prev => prev ? { ...prev, status: 'completed' } : null)
+          setEta(null)
+          setTimeout(() => setRide(null), 1500)
         } else {
-          // Completed, cancelled, or still in the future — clear tracking view
+          // cancelled — clear immediately
           setRide(null)
           setEta(null)
         }
+
       })
       .subscribe((status) => {
         console.log('[Realtime] rides channel:', status)
