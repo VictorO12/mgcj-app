@@ -442,3 +442,7 @@ entrypoint = "./functions/schedule-rides/index.ts"
 enabled = true
 verify_jwt = true
 import_map = "./functions/notify-review/deno.json"
+
+[functions.delete-account]
+enabled = true
+verify_jwt = true

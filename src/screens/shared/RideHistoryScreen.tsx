@@ -66,14 +66,12 @@ export default function RideHistoryScreen({ onClose }: Props) {
   } | null>(null);
 
   const isDriver = profile?.role === "driver";
-  // Keep a stable ref to fetchRides so callbacks never go stale
   const fetchRidesRef = useRef<() => Promise<void>>();
 
   useEffect(() => {
     fetchRides();
   }, [profile]);
 
-  // Realtime: watch for new reviews on this driver's rides
   useEffect(() => {
     if (!profile || !isDriver) return;
 
@@ -89,7 +87,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
         },
         (payload) => {
           const review = payload.new as any;
-          // Optimistically update the matching ride card instantly
           setRides((prev) =>
             prev.map((r) =>
               r.id === review.ride_id
@@ -177,7 +174,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
     setLoading(false);
   }
 
-  // Keep ref in sync so handleReviewDismiss always calls the latest fetchRides
   fetchRidesRef.current = fetchRides;
 
   async function onRefresh() {
@@ -191,7 +187,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
     setReviewTarget(null);
 
     if (submitted && targetId && rating != null) {
-      // Optimistic update — star appears instantly
       setRides((prev) =>
         prev.map((r) =>
           r.id === targetId ? { ...r, review_rating: rating } : r,
@@ -199,7 +194,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
       );
     }
 
-    // Background sync regardless
     fetchRidesRef.current?.();
   }
 
@@ -224,6 +218,24 @@ export default function RideHistoryScreen({ onClose }: Props) {
       hour: "numeric",
       minute: "2-digit",
     });
+  }
+
+  function getDayKey(iso: string) {
+    return new Date(iso).toLocaleDateString("en-CA"); // YYYY-MM-DD
+  }
+
+  function groupByDay(rideList: RideRecord[]) {
+    const groups: { label: string; key: string; rides: RideRecord[] }[] = [];
+    const seen: Record<string, number> = {};
+    for (const ride of rideList) {
+      const key = getDayKey(ride.created_at);
+      if (seen[key] === undefined) {
+        seen[key] = groups.length;
+        groups.push({ key, label: formatDate(ride.created_at), rides: [] });
+      }
+      groups[seen[key]].rides.push(ride);
+    }
+    return groups;
   }
 
   const filtered = rides.filter((r) => {
@@ -310,166 +322,193 @@ export default function RideHistoryScreen({ onClose }: Props) {
           }
         >
           <View style={styles.rideList}>
-            {filtered.map((ride) => (
-              <View key={ride.id} style={styles.rideCard}>
-                {/* Date + status */}
-                <View style={styles.rideCardTop}>
-                  <View style={styles.dateRow}>
-                    <Text style={styles.rideDate}>
-                      {formatDate(ride.created_at)}
-                    </Text>
-                    <Text style={styles.rideTime}>
-                      {formatTime(ride.created_at)}
-                    </Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      {
-                        backgroundColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}18`,
-                        borderColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}40`,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusText,
-                        { color: STATUS_COLORS[ride.status] ?? "#6B7280" },
-                      ]}
-                    >
-                      {STATUS_LABELS[ride.status] ?? ride.status}
-                    </Text>
-                  </View>
+            {groupByDay(filtered).map((group) => (
+              <View key={group.key}>
+                {/* ── Day separator ── */}
+                <View style={styles.daySeparator}>
+                  <View style={styles.daySeparatorLine} />
+                  <Text style={styles.daySeparatorLabel}>{group.label}</Text>
+                  <View style={styles.daySeparatorLine} />
                 </View>
 
-                {/* Other party */}
-                {ride.other_party_name && (
-                  <Text style={styles.otherParty}>
-                    {isDriver ? "Passenger" : "Driver"}:{" "}
-                    <Text style={styles.otherPartyName}>
-                      {ride.other_party_name}
-                    </Text>
-                  </Text>
-                )}
+                {/* ── Rides for this day ── */}
+                <View style={styles.dayGroup}>
+                  {group.rides.map((ride) => (
+                    <View key={ride.id} style={styles.rideCard}>
+                      {/* Time + status */}
+                      <View style={styles.rideCardTop}>
+                        <Text style={styles.rideTime}>
+                          {formatTime(ride.created_at)}
+                        </Text>
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            {
+                              backgroundColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}18`,
+                              borderColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}40`,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.statusText,
+                              {
+                                color: STATUS_COLORS[ride.status] ?? "#6B7280",
+                              },
+                            ]}
+                          >
+                            {STATUS_LABELS[ride.status] ?? ride.status}
+                          </Text>
+                        </View>
+                      </View>
 
-                {/* Route */}
-                <View style={styles.routeWrap}>
-                  <View style={styles.routeRow}>
-                    <View
-                      style={[styles.routeDot, { backgroundColor: "#4a9eff" }]}
-                    />
-                    <Text style={styles.routeText} numberOfLines={1}>
-                      {ride.pickup_address}
-                    </Text>
-                  </View>
-                  <View style={styles.routeLine} />
-                  <View style={styles.routeRow}>
-                    <View
-                      style={[
-                        styles.routeDot,
-                        { backgroundColor: "#E8500A", borderRadius: 3 },
-                      ]}
-                    />
-                    <Text style={styles.routeText} numberOfLines={1}>
-                      {ride.dropoff_address}
-                    </Text>
-                  </View>
+                      {/* Other party */}
+                      {ride.other_party_name && (
+                        <Text style={styles.otherParty}>
+                          {isDriver ? "Passenger" : "Driver"}:{" "}
+                          <Text style={styles.otherPartyName}>
+                            {ride.other_party_name}
+                          </Text>
+                        </Text>
+                      )}
+
+                      {/* Route */}
+                      <View style={styles.routeWrap}>
+                        <View style={styles.routeRow}>
+                          <View
+                            style={[
+                              styles.routeDot,
+                              { backgroundColor: "#4a9eff" },
+                            ]}
+                          />
+                          <Text style={styles.routeText} numberOfLines={1}>
+                            {ride.pickup_address}
+                          </Text>
+                        </View>
+                        <View style={styles.routeLine} />
+                        <View style={styles.routeRow}>
+                          <View
+                            style={[
+                              styles.routeDot,
+                              { backgroundColor: "#E8500A", borderRadius: 3 },
+                            ]}
+                          />
+                          <Text style={styles.routeText} numberOfLines={1}>
+                            {ride.dropoff_address}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Fare */}
+                      {(ride.fare_final ?? ride.fare_estimate) != null && (
+                        <View style={styles.fareRow}>
+                          <Text style={styles.fareLabel}>
+                            {ride.fare_final ? "Final fare" : "Est. fare"}
+                          </Text>
+                          <Text style={styles.fareAmount}>
+                            $
+                            {(ride.fare_final ?? ride.fare_estimate)!.toFixed(
+                              2,
+                            )}
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Passenger: review section */}
+                      {!isDriver && ride.status === "completed" && (
+                        <View style={styles.reviewSection}>
+                          {ride.review_rating != null ? (
+                            <View style={styles.reviewedRow}>
+                              <View style={styles.starsReadOnly}>
+                                {[1, 2, 3, 4, 5].map((s) => (
+                                  <Ionicons
+                                    key={s}
+                                    name={
+                                      ride.review_rating! >= s
+                                        ? "star"
+                                        : "star-outline"
+                                    }
+                                    size={16}
+                                    color={
+                                      ride.review_rating! >= s
+                                        ? "#F59E0B"
+                                        : "#374151"
+                                    }
+                                  />
+                                ))}
+                              </View>
+                              <Text style={styles.reviewedLabel}>
+                                {ride.review_rating}/5 · Your rating
+                              </Text>
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.rateBtn}
+                              onPress={() =>
+                                setReviewTarget({
+                                  rideId: ride.id,
+                                  driverId: ride.other_party_id!,
+                                  driverName: ride.other_party_name,
+                                })
+                              }
+                            >
+                              <Ionicons
+                                name="star-outline"
+                                size={15}
+                                color="#F59E0B"
+                              />
+                              <Text style={styles.rateBtnText}>
+                                Rate this ride
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+
+                      {/* Driver: received rating section */}
+                      {isDriver && ride.status === "completed" && (
+                        <View style={styles.reviewSection}>
+                          {ride.received_rating != null ? (
+                            <View style={styles.reviewedRow}>
+                              <View style={styles.starsReadOnly}>
+                                {[1, 2, 3, 4, 5].map((s) => (
+                                  <Ionicons
+                                    key={s}
+                                    name={
+                                      ride.received_rating! >= s
+                                        ? "star"
+                                        : "star-outline"
+                                    }
+                                    size={16}
+                                    color={
+                                      ride.received_rating! >= s
+                                        ? "#F59E0B"
+                                        : "#374151"
+                                    }
+                                  />
+                                ))}
+                              </View>
+                              <Text style={styles.reviewedLabel}>
+                                {ride.received_rating}/5 · Passenger rating
+                              </Text>
+                            </View>
+                          ) : (
+                            <Text style={styles.noRatingText}>
+                              No rating yet
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  ))}
                 </View>
-
-                {/* Fare */}
-                {(ride.fare_final ?? ride.fare_estimate) != null && (
-                  <View style={styles.fareRow}>
-                    <Text style={styles.fareLabel}>
-                      {ride.fare_final ? "Final fare" : "Est. fare"}
-                    </Text>
-                    <Text style={styles.fareAmount}>
-                      ${(ride.fare_final ?? ride.fare_estimate)!.toFixed(2)}
-                    </Text>
-                  </View>
-                )}
-
-                {/* ── PASSENGER: review section ── */}
-                {!isDriver && ride.status === "completed" && (
-                  <View style={styles.reviewSection}>
-                    {ride.review_rating != null ? (
-                      <View style={styles.reviewedRow}>
-                        <View style={styles.starsReadOnly}>
-                          {[1, 2, 3, 4, 5].map((s) => (
-                            <Ionicons
-                              key={s}
-                              name={
-                                ride.review_rating! >= s
-                                  ? "star"
-                                  : "star-outline"
-                              }
-                              size={16}
-                              color={
-                                ride.review_rating! >= s ? "#F59E0B" : "#374151"
-                              }
-                            />
-                          ))}
-                        </View>
-                        <Text style={styles.reviewedLabel}>
-                          {ride.review_rating}/5 · Your rating
-                        </Text>
-                      </View>
-                    ) : (
-                      <TouchableOpacity
-                        style={styles.rateBtn}
-                        onPress={() =>
-                          setReviewTarget({
-                            rideId: ride.id,
-                            driverId: ride.other_party_id!,
-                            driverName: ride.other_party_name,
-                          })
-                        }
-                      >
-                        <Ionicons
-                          name="star-outline"
-                          size={15}
-                          color="#F59E0B"
-                        />
-                        <Text style={styles.rateBtnText}>Rate this ride</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-
-                {/* ── DRIVER: received rating section ── */}
-                {isDriver && ride.status === "completed" && (
-                  <View style={styles.reviewSection}>
-                    {ride.received_rating != null ? (
-                      <View style={styles.reviewedRow}>
-                        <View style={styles.starsReadOnly}>
-                          {[1, 2, 3, 4, 5].map((s) => (
-                            <Ionicons
-                              key={s}
-                              name={
-                                ride.received_rating! >= s
-                                  ? "star"
-                                  : "star-outline"
-                              }
-                              size={16}
-                              color={
-                                ride.received_rating! >= s
-                                  ? "#F59E0B"
-                                  : "#374151"
-                              }
-                            />
-                          ))}
-                        </View>
-                        <Text style={styles.reviewedLabel}>
-                          {ride.received_rating}/5 · Passenger rating
-                        </Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.noRatingText}>No rating yet</Text>
-                    )}
-                  </View>
-                )}
+                {/* end dayGroup */}
               </View>
             ))}
+            {/* end groupByDay */}
           </View>
+          {/* end rideList */}
+
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
@@ -548,7 +587,27 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
   emptySubtitle: { fontSize: 13, color: "#6B7280", textAlign: "center" },
   list: { flex: 1 },
-  rideList: { paddingHorizontal: 16, paddingTop: 8, gap: 12 },
+  rideList: { paddingHorizontal: 16, paddingTop: 4 },
+  dayGroup: { gap: 10 },
+  daySeparator: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 20,
+    marginBottom: 12,
+    gap: 10,
+  },
+  daySeparatorLine: {
+    flex: 1,
+    height: 0.5,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  daySeparatorLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#6B7280",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
   rideCard: {
     backgroundColor: "#111827",
     borderRadius: 16,
@@ -562,9 +621,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  dateRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  rideDate: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  rideTime: { fontSize: 12, color: "#6B7280" },
+  rideTime: { fontSize: 13, fontWeight: "500", color: "#9CA3AF" },
   statusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,

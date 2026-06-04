@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  Image,
   Alert,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
@@ -24,6 +25,9 @@ import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import Constants from "expo-constants";
 import { useNotifications } from "../../hooks/useNotifications";
 import RideReviewModal from "../../components/RideReviewModal";
+import ProfileScreen from "./ProfileScreen";
+import NotificationsScreen from "./NotificationsScreen";
+import HelpSupportScreen from "./HelpSupportScreen";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
 
@@ -94,6 +98,9 @@ export default function PassengerHomeScreen() {
   const [historyVisible, setHistoryVisible] = useState(false);
   const [scheduledVisible, setScheduledVisible] = useState(false);
   const [paymentVisible, setPaymentVisible] = useState(false);
+  const [profileVisible, setProfileVisible] = useState(false);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [helpVisible, setHelpVisible] = useState(false);
 
   // Payment state
   const [defaultCard, setDefaultCard] = useState<PaymentMethod | null>(null);
@@ -561,7 +568,25 @@ export default function PassengerHomeScreen() {
             style={styles.avatarBtn}
             onPress={() => setMenuVisible(true)}
           >
-            <Ionicons name="person-circle" size={36} color="#6B7280" />
+            {profile?.avatar_url ? (
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={styles.topAvatar}
+              />
+            ) : (
+              <View style={styles.topAvatarFallback}>
+                <Text style={styles.topAvatarInitials}>
+                  {profile?.name
+                    ? profile.name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")
+                        .slice(0, 2)
+                        .toUpperCase()
+                    : "?"}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -1123,6 +1148,25 @@ export default function PassengerHomeScreen() {
         </View>
       )}
 
+      {profileVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <ProfileScreen
+            onClose={() => setProfileVisible(false)}
+            onDeleteAccount={signOut}
+          />
+        </View>
+      )}
+      {notificationsVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <NotificationsScreen onClose={() => setNotificationsVisible(false)} />
+        </View>
+      )}
+      {helpVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <HelpSupportScreen onClose={() => setHelpVisible(false)} />
+        </View>
+      )}
+
       {scheduledVisible && (
         <View style={StyleSheet.absoluteFill}>
           <ScheduledRidesScreen onClose={() => setScheduledVisible(false)} />
@@ -1147,6 +1191,9 @@ export default function PassengerHomeScreen() {
         onSignOut={signOut}
         onOpenPaymentMethods={() => setPaymentVisible(true)}
         onOpenHistory={() => setHistoryVisible(true)}
+        onOpenProfile={() => setProfileVisible(true)}
+        onOpenNotifications={() => setNotificationsVisible(true)}
+        onOpenHelp={() => setHelpVisible(true)}
       />
 
       {/* ── Post-ride review popup ── */}
@@ -1184,6 +1231,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  topAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
+  },
+  topAvatarFallback: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1E3A5F",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
+  },
+  topAvatarInitials: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#93C5FD",
   },
   calendarBtn: {
     width: 36,

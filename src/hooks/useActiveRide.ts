@@ -27,12 +27,9 @@ export interface ActiveRide {
   driver: Driver | null
 }
 
-// Statuses that count as "active" for the passenger tracking view
 const ACTIVE_STATUSES = ['pending', 'assigned', 'driver_arriving', 'in_progress']
-
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey
 
-// A ride is only "now" if it has no scheduled_at OR scheduled_at is in the past
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true
   return new Date(row.scheduled_at) <= new Date()
@@ -42,6 +39,12 @@ export function useActiveRide(passengerId: string | undefined) {
   const [ride, setRide] = useState<ActiveRide | null>(null)
   const [eta, setEta] = useState<number | null>(null)
   const etaInterval = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Holds the last known ride so we can surface it briefly on completion
+  const lastRideRef = useRef<ActiveRide | null>(null)
+
+  useEffect(() => {
+    if (ride) lastRideRef.current = ride
+  }, [ride])
 
   // ── Fetch on mount ──────────────────────────────────────────
   useEffect(() => {
@@ -65,20 +68,24 @@ export function useActiveRide(passengerId: string | undefined) {
         console.log('[Realtime] ride update:', row.status, '| scheduled_at:', row.scheduled_at)
 
         if (ACTIVE_STATUSES.includes(row.status) && isRideNow(row)) {
-          // Active and happening now — fetch full ride with driver details
           fetchActiveRide(passengerId)
         } else if (row.status === 'completed') {
-          // Briefly surface completed status so PassengerHomeScreen
-          // can trigger the review popup, then clear after 1.5s
-          setRide(prev => prev ? { ...prev, status: 'completed' } : null)
+          // Use lastRideRef to surface the completed state even if ride
+          // was already cleared — gives PassengerHomeScreen time to detect
+          // status === 'completed' and open the review modal
+          const completedRide = lastRideRef.current
+            ? { ...lastRideRef.current, status: 'completed' }
+            : null
+          setRide(completedRide)
           setEta(null)
-          setTimeout(() => setRide(null), 1500)
+          // Clear after 3s — plenty of time for the useEffect in
+          // PassengerHomeScreen to fire and set reviewTarget
+          setTimeout(() => setRide(null), 3000)
         } else {
-          // cancelled — clear immediately
+          // cancelled
           setRide(null)
           setEta(null)
         }
-
       })
       .subscribe((status) => {
         console.log('[Realtime] rides channel:', status)
@@ -143,7 +150,6 @@ export function useActiveRide(passengerId: string | undefined) {
       .select('*')
       .eq('passenger_id', pid)
       .in('status', ACTIVE_STATUSES)
-      // Exclude rides scheduled for the future — only now-rides
       .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
       .order('created_at', { ascending: false })
       .limit(1)

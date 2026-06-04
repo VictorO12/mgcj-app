@@ -68,11 +68,9 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
   async function verifyCode(code: string) {
     setLoading(true);
-
     console.log("[OTP] verifying code for phone:", phone);
     console.log("[OTP] isDriver:", isDriver, "inviteCode:", inviteCode);
 
-    // ── Verify OTP ──────────────────────────────────────────────
     const { data, error } = await supabase.auth.verifyOtp({
       phone,
       token: code,
@@ -87,8 +85,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       return;
     }
 
-    console.log("[OTP] auth verified, user id:", data.user?.id);
-
     if (!data.user) {
       setLoading(false);
       Alert.alert("Error", "Something went wrong. Please try again.");
@@ -96,17 +92,18 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     }
 
     const userId = data.user.id;
+    console.log("[OTP] auth verified, user id:", userId);
 
-    // ── Check if profile already exists ─────────────────────────
-    const { data: existing, error: existingError } = await supabase
+    // Check what we already have
+    const { data: existing } = await supabase
       .from("profiles")
       .select("id, name, role")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
-    console.log("[OTP] existing profile:", existing, "error:", existingError);
+    console.log("[OTP] existing profile:", existing);
     console.log(
-      "[OTP] isDriver check:",
+      "[OTP] isDriver:",
       isDriver,
       "| inviteCode:",
       inviteCode,
@@ -114,18 +111,15 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       !!existing,
     );
 
-    // ── DRIVER REGISTRATION PATH ─────────────────────────────────
-    if (isDriver && inviteCode && !existing) {
+    // ── DRIVER PATH ──────────────────────────────────────────────
+    if (isDriver && inviteCode) {
       console.log("[OTP] entering driver registration path");
 
-      // Validate invite code one final time
-      const { data: invite, error: inviteError } = await supabase
+      const { data: invite } = await supabase
         .from("driver_invites")
         .select("id, used")
         .eq("code", inviteCode)
         .single();
-
-      console.log("[OTP] invite lookup:", invite, "error:", inviteError);
 
       if (!invite || invite.used) {
         await supabase.auth.signOut();
@@ -138,55 +132,66 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         return;
       }
 
-      // Wait briefly for trigger, then check if profile was created
-      // Upsert profile directly — no waiting for trigger
-      console.log("[OTP] upserting driver profile");
-      const { error: upsertError } = await supabase.from("profiles").upsert(
-        {
-          id: userId,
-          phone,
-          name: name ?? null,
-          role: "driver",
-        },
-        { onConflict: "id" },
-      );
-      console.log("[OTP] profile upsert:", upsertError);
+      const { error: upsertError } = await supabase
+        .from("profiles")
+        .upsert(
+          { id: userId, phone, name: name ?? null, role: "driver" },
+          { onConflict: "id" },
+        );
+      console.log("[OTP] driver profile upsert:", upsertError);
 
-      // Create driver record
       const { error: driverError } = await supabase
         .from("drivers")
         .upsert({ id: userId, is_active: false }, { onConflict: "id" });
       console.log("[OTP] driver record upsert:", driverError);
 
-      // Mark invite as used
       await supabase
         .from("driver_invites")
         .update({ used: true })
         .eq("id", invite.id);
-      console.log("[OTP] invite marked used");
 
-      // Immediately update useAuth with the new driver profile
       await refetch();
       setLoading(false);
       return;
     }
 
-    // ── PASSENGER REGISTRATION PATH ──────────────────────────────
+    // ── PASSENGER PATH ───────────────────────────────────────────
     console.log("[OTP] passenger path");
 
-    if (!existing) {
-      // New user — trigger creates the row, wait then update name
-      await new Promise((r) => setTimeout(r, 800));
-      if (name) {
-        await supabase.from("profiles").update({ name }).eq("id", userId);
-      }
-    } else if (isNewUser && name && !existing.name) {
-      // Existing auth user but no name yet
-      await supabase.from("profiles").update({ name }).eq("id", userId);
+    if (!existing && !isNewUser) {
+      // Sign-in attempt but no profile exists — number not registered
+      console.log("[OTP] sign-in blocked: no profile for this number");
+      await supabase.auth.signOut();
+      setLoading(false);
+      Alert.alert(
+        "No account found",
+        "This number isn't registered. Would you like to sign up?",
+        [
+          { text: "Sign up", onPress: () => navigation.navigate("SignUp") },
+          {
+            text: "Cancel",
+            style: "cancel",
+            onPress: () => navigation.navigate("Welcome"),
+          },
+        ],
+      );
+      return;
     }
 
+    if (!existing && isNewUser) {
+      // New signup — upsert the full profile directly
+      const { error: upsertError } = await supabase
+        .from("profiles")
+        .upsert(
+          { id: userId, phone, name: name ?? null, role: "passenger" },
+          { onConflict: "id" },
+        );
+      console.log("[OTP] passenger profile upsert:", upsertError);
+    }
+
+    // Refetch so AuthContext gets the complete profile and routes to home
+    await refetch();
     setLoading(false);
-    // useAuth onAuthStateChange handles routing for passengers
   }
 
   async function handleResend() {
@@ -218,19 +223,16 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         >
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
-
         <Text style={styles.title}>Check your texts</Text>
         <Text style={styles.subtitle}>
           We sent a 6-digit code to{"\n"}
           <Text style={styles.phoneHighlight}>{displayPhone}</Text>
         </Text>
-
         {isDriver && (
           <View style={styles.driverBadge}>
             <Text style={styles.driverBadgeText}>🚗 Registering as driver</Text>
           </View>
         )}
-
         <View style={styles.codeRow}>
           {digits.map((digit, i) => (
             <TextInput
@@ -251,7 +253,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
             />
           ))}
         </View>
-
         {loading && (
           <View style={styles.verifyingRow}>
             <ActivityIndicator color="#E8500A" size="small" />
@@ -260,7 +261,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
             </Text>
           </View>
         )}
-
         <TouchableOpacity
           style={styles.resendBtn}
           onPress={handleResend}
@@ -288,60 +288,52 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
   },
-  backBtn: { marginBottom: 36 },
+  backBtn: { marginBottom: 28 },
   backText: { color: "#6B7280", fontSize: 15 },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    marginBottom: 10,
-  },
+  title: { fontSize: 28, fontWeight: "700", color: "#F1F5F9", marginBottom: 8 },
   subtitle: {
-    fontSize: 15,
+    fontSize: 14,
     color: "#6B7280",
-    lineHeight: 22,
-    marginBottom: 24,
+    lineHeight: 20,
+    marginBottom: 32,
   },
-  phoneHighlight: { color: "#E8500A", fontWeight: "600" },
+  phoneHighlight: { color: "#F1F5F9", fontWeight: "600" },
   driverBadge: {
-    backgroundColor: "rgba(29,158,117,0.1)",
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(29,158,117,0.12)",
     borderRadius: 20,
     paddingVertical: 6,
     paddingHorizontal: 14,
+    marginBottom: 24,
     borderWidth: 0.5,
     borderColor: "rgba(29,158,117,0.3)",
-    alignSelf: "flex-start",
-    marginBottom: 24,
   },
   driverBadgeText: { fontSize: 13, color: "#1D9E75", fontWeight: "500" },
-  codeRow: {
-    flexDirection: "row",
-    gap: 10,
-    justifyContent: "center",
-    marginBottom: 32,
-  },
+  codeRow: { flexDirection: "row", gap: 10, marginBottom: 32 },
   digitBox: {
-    width: 46,
-    height: 58,
+    flex: 1,
+    height: 56,
     borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.12)",
     backgroundColor: "#1E2A3A",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.1)",
     textAlign: "center",
-    fontSize: 24,
-    fontWeight: "600",
+    fontSize: 22,
+    fontWeight: "700",
     color: "#F1F5F9",
   },
-  digitBoxFilled: { borderColor: "#E8500A" },
+  digitBoxFilled: {
+    borderColor: "#E8500A",
+    backgroundColor: "rgba(232,80,10,0.08)",
+  },
   verifyingRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
+    gap: 10,
     marginBottom: 24,
   },
-  verifyingText: { color: "#E8500A", fontSize: 14 },
-  resendBtn: { alignItems: "center", marginTop: 8 },
+  verifyingText: { fontSize: 14, color: "#9CA3AF" },
+  resendBtn: { alignSelf: "center" },
   resendText: { fontSize: 14, color: "#E8500A", fontWeight: "500" },
-  resendDisabled: { color: "#374151" },
+  resendDisabled: { color: "#4B5563" },
 });

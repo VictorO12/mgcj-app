@@ -8,6 +8,7 @@ import {
   Platform,
   TouchableWithoutFeedback,
   Modal,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Profile } from "../types";
@@ -18,7 +19,10 @@ interface Props {
   onClose: () => void;
   onSignOut: () => void;
   onOpenHistory: () => void;
-  onOpenPaymentMethods?: () => void; // passenger only
+  onOpenProfile?: () => void;
+  onOpenNotifications?: () => void;
+  onOpenHelp?: () => void;
+  onOpenPaymentMethods?: () => void;
   hasAssignedRide?: boolean;
   onOpenAssigned?: () => void;
 }
@@ -29,6 +33,9 @@ export default function ProfileMenu({
   onClose,
   onSignOut,
   onOpenHistory,
+  onOpenProfile,
+  onOpenNotifications,
+  onOpenHelp,
   onOpenPaymentMethods,
   hasAssignedRide,
   onOpenAssigned,
@@ -76,6 +83,7 @@ export default function ProfileMenu({
         .toUpperCase()
     : "?";
 
+  const avatarUrl = profile?.avatar_url ?? null;
   const isDriver = profile?.role === "driver";
 
   const menuItems: {
@@ -87,9 +95,12 @@ export default function ProfileMenu({
   }[] = [
     {
       icon: "person-outline",
-      label: "Edit profile",
-      sublabel: "Name, phone number",
-      onPress: onClose,
+      label: "Profile",
+      sublabel: "Photo, name, account",
+      onPress: () => {
+        onClose();
+        onOpenProfile?.();
+      },
     },
     {
       icon: "time-outline",
@@ -116,31 +127,32 @@ export default function ProfileMenu({
           },
         ]
       : []),
-    // Payment methods — passengers only
-    ...(!isDriver
-      ? [
-          {
-            icon: "card-outline",
-            label: "Payment methods",
-            sublabel: "Manage cards & cash",
-            onPress: () => {
-              onClose();
-              onOpenPaymentMethods?.();
-            },
-          },
-        ]
-      : []),
     {
       icon: "notifications-outline",
       label: "Notifications",
       sublabel: "Ride updates, offers",
-      onPress: onClose,
+      onPress: () => {
+        onClose();
+        onOpenNotifications?.();
+      },
+    },
+    {
+      icon: "card-outline",
+      label: "Payment methods",
+      sublabel: "Cash, card",
+      onPress: () => {
+        onClose();
+        onOpenPaymentMethods?.();
+      },
     },
     {
       icon: "help-circle-outline",
       label: "Help & support",
       sublabel: "FAQ, contact us",
-      onPress: onClose,
+      onPress: () => {
+        onClose();
+        onOpenHelp?.();
+      },
     },
   ];
 
@@ -166,9 +178,21 @@ export default function ProfileMenu({
 
           {/* Profile header */}
           <View style={styles.profileHeader}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initials}</Text>
-            </View>
+            <TouchableOpacity
+              onPress={() => {
+                onClose();
+                onOpenProfile?.();
+              }}
+              activeOpacity={0.85}
+            >
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{initials}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{profile?.name ?? "User"}</Text>
               <Text style={styles.profilePhone}>{profile?.phone ?? ""}</Text>
@@ -178,7 +202,13 @@ export default function ProfileMenu({
                 <Text style={styles.headerBadgeText}>Ride pending</Text>
               </View>
             )}
-            <TouchableOpacity style={styles.editBtn} onPress={onClose}>
+            <TouchableOpacity
+              style={styles.editBtn}
+              onPress={() => {
+                onClose();
+                onOpenProfile?.();
+              }}
+            >
               <Ionicons name="pencil-outline" size={16} color="#6B7280" />
             </TouchableOpacity>
           </View>
@@ -273,6 +303,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     gap: 14,
+  },
+  avatarImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
   },
   avatar: {
     width: 52,

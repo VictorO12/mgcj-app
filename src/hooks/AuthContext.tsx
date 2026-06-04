@@ -24,41 +24,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const sessionRef = useRef<Session | null>(null);
-  // Track whether we've already started a profile fetch for a given user id
-  // so getSession + onAuthStateChange don't both trigger fetchProfile
   const fetchingForRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // First, subscribe to auth state changes
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      sessionRef.current = session;
+      if (session) fetchProfile(session.user.id);
+      else setLoading(false);
+    });
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       sessionRef.current = session;
       if (session) {
-        // Only fetch if we're not already fetching for this user
-        if (fetchingForRef.current !== session.user.id) {
-          fetchingForRef.current = session.user.id;
-          await fetchProfile(session.user.id);
-        }
+        // Avoid double-fetching if already fetching for this user
+        if (fetchingForRef.current === session.user.id) return;
+        await fetchProfile(session.user.id);
       } else {
-        fetchingForRef.current = null;
         setProfile(null);
-        setLoading(false);
-      }
-    });
-
-    // Then get the current session — if onAuthStateChange already handled it,
-    // fetchingForRef will block the duplicate fetch
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      sessionRef.current = session;
-      if (session) {
-        if (fetchingForRef.current !== session.user.id) {
-          fetchingForRef.current = session.user.id;
-          fetchProfile(session.user.id);
-        }
-      } else {
         setLoading(false);
       }
     });
@@ -66,41 +52,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  async function fetchProfile(userId: string, retries = 15) {
+  async function fetchProfile(userId: string, retries = 10) {
+    fetchingForRef.current = userId;
+
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
-    if ((error || !data) && retries > 0) {
-      await new Promise((r) => setTimeout(r, 500));
+    // No row yet — retry (trigger hasn't fired or upsert pending)
+    if (!data && retries > 0) {
+      await new Promise((r) => setTimeout(r, 600));
       return fetchProfile(userId, retries - 1);
     }
 
-    if ((!data?.role || data?.role === "passenger") && retries > 5) {
-      await new Promise((r) => setTimeout(r, 500));
+    // Row exists but no role yet — retry briefly (driver upsert may be in flight)
+    if (data && !data.role && retries > 0) {
+      await new Promise((r) => setTimeout(r, 600));
       return fetchProfile(userId, retries - 1);
     }
 
-    console.log("[Auth] profile settled:", data?.role);
+    fetchingForRef.current = null;
+    console.log("[Auth] profile settled:", data?.role ?? "none");
     setProfile(data ?? null);
     setLoading(false);
   }
 
   async function refetch() {
-    const currentSession = sessionRef.current;
-    if (!currentSession?.user?.id) {
-      console.log("[Auth] refetch called but no session");
-      return;
-    }
-    console.log("[Auth] refetching profile for:", currentSession.user.id);
-    const { data, error } = await supabase
+    const userId = sessionRef.current?.user?.id;
+    if (!userId) return;
+    const { data } = await supabase
       .from("profiles")
       .select("*")
-      .eq("id", currentSession.user.id)
-      .single();
-    console.log("[Auth] refetch result:", data?.role, error);
+      .eq("id", userId)
+      .maybeSingle();
     if (data) {
       setProfile(data);
       setLoading(false);
@@ -110,8 +96,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function signOut() {
     await supabase.auth.signOut();
     setProfile(null);
-    fetchingForRef.current = null;
     sessionRef.current = null;
+    fetchingForRef.current = null;
   }
 
   return (
