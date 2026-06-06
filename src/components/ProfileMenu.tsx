@@ -19,9 +19,10 @@ interface Props {
   onClose: () => void;
   onSignOut: () => void;
   onOpenHistory: () => void;
+  onOpenEditProfile?: () => void;
+  onOpenHelp?: () => void;
   onOpenProfile?: () => void;
   onOpenNotifications?: () => void;
-  onOpenHelp?: () => void;
   onOpenPaymentMethods?: () => void;
   hasAssignedRide?: boolean;
   onOpenAssigned?: () => void;
@@ -33,9 +34,10 @@ export default function ProfileMenu({
   onClose,
   onSignOut,
   onOpenHistory,
+  onOpenEditProfile,
+  onOpenHelp,
   onOpenProfile,
   onOpenNotifications,
-  onOpenHelp,
   onOpenPaymentMethods,
   hasAssignedRide,
   onOpenAssigned,
@@ -86,75 +88,109 @@ export default function ProfileMenu({
   const avatarUrl = profile?.avatar_url ?? null;
   const isDriver = profile?.role === "driver";
 
+  // Driver: Edit profile + Ride history + Assigned rides + Help
+  // Passenger: Profile + Ride history + Notifications + Payment methods + Help
   const menuItems: {
     icon: string;
     label: string;
     sublabel: string;
     badge?: boolean;
     onPress: () => void;
-  }[] = [
-    {
-      icon: "person-outline",
-      label: "Profile",
-      sublabel: "Photo, name, account",
-      onPress: () => {
-        onClose();
-        onOpenProfile?.();
-      },
-    },
-    {
-      icon: "time-outline",
-      label: "Ride history",
-      sublabel: "Past trips and receipts",
-      onPress: () => {
-        onClose();
-        onOpenHistory();
-      },
-    },
-    ...(isDriver
-      ? [
-          {
-            icon: "car-outline",
-            label: "Assigned rides",
-            sublabel: hasAssignedRide
-              ? "You have pending assignments"
-              : "No pending assignments",
-            badge: hasAssignedRide ?? false,
-            onPress: () => {
-              onClose();
-              onOpenAssigned?.();
-            },
+  }[] = isDriver
+    ? [
+        {
+          icon: "person-outline",
+          label: "Edit profile",
+          sublabel: "Photo, name, vehicle details",
+          onPress: () => {
+            onClose();
+            onOpenEditProfile?.();
           },
-        ]
-      : []),
-    {
-      icon: "notifications-outline",
-      label: "Notifications",
-      sublabel: "Ride updates, offers",
-      onPress: () => {
-        onClose();
-        onOpenNotifications?.();
-      },
-    },
-    {
-      icon: "card-outline",
-      label: "Payment methods",
-      sublabel: "Cash, card",
-      onPress: () => {
-        onClose();
-        onOpenPaymentMethods?.();
-      },
-    },
-    {
-      icon: "help-circle-outline",
-      label: "Help & support",
-      sublabel: "FAQ, contact us",
-      onPress: () => {
-        onClose();
-        onOpenHelp?.();
-      },
-    },
-  ];
+        },
+        {
+          icon: "time-outline",
+          label: "Ride history",
+          sublabel: "Past trips and receipts",
+          onPress: () => {
+            onClose();
+            onOpenHistory();
+          },
+        },
+        {
+          icon: "car-outline",
+          label: "Assigned rides",
+          sublabel: hasAssignedRide
+            ? "You have pending assignments"
+            : "No pending assignments",
+          badge: hasAssignedRide ?? false,
+          onPress: () => {
+            onClose();
+            onOpenAssigned?.();
+          },
+        },
+        {
+          icon: "help-circle-outline",
+          label: "Help & support",
+          sublabel: "FAQ, contact dispatch",
+          onPress: () => {
+            onClose();
+            onOpenHelp?.();
+          },
+        },
+      ]
+    : [
+        {
+          icon: "person-outline",
+          label: "Profile",
+          sublabel: "Photo, name, account",
+          onPress: () => {
+            onClose();
+            onOpenProfile?.();
+          },
+        },
+        {
+          icon: "time-outline",
+          label: "Ride history",
+          sublabel: "Past trips and receipts",
+          onPress: () => {
+            onClose();
+            onOpenHistory();
+          },
+        },
+        {
+          icon: "notifications-outline",
+          label: "Notifications",
+          sublabel: "Ride updates, offers",
+          onPress: () => {
+            onClose();
+            onOpenNotifications?.();
+          },
+        },
+        {
+          icon: "card-outline",
+          label: "Payment methods",
+          sublabel: "Cash, card",
+          onPress: () => {
+            onClose();
+            onOpenPaymentMethods?.();
+          },
+        },
+        {
+          icon: "help-circle-outline",
+          label: "Help & support",
+          sublabel: "FAQ, contact us",
+          onPress: () => {
+            onClose();
+            onOpenHelp?.();
+          },
+        },
+      ];
+
+  const handleEditPress = () => {
+    onClose();
+    if (isDriver) onOpenEditProfile?.();
+    else onOpenProfile?.();
+  };
 
   return (
     <Modal
@@ -178,13 +214,7 @@ export default function ProfileMenu({
 
           {/* Profile header */}
           <View style={styles.profileHeader}>
-            <TouchableOpacity
-              onPress={() => {
-                onClose();
-                onOpenProfile?.();
-              }}
-              activeOpacity={0.85}
-            >
+            <TouchableOpacity onPress={handleEditPress} activeOpacity={0.85}>
               {avatarUrl ? (
                 <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
               ) : (
@@ -202,13 +232,7 @@ export default function ProfileMenu({
                 <Text style={styles.headerBadgeText}>Ride pending</Text>
               </View>
             )}
-            <TouchableOpacity
-              style={styles.editBtn}
-              onPress={() => {
-                onClose();
-                onOpenProfile?.();
-              }}
-            >
+            <TouchableOpacity style={styles.editBtn} onPress={handleEditPress}>
               <Ionicons name="pencil-outline" size={16} color="#6B7280" />
             </TouchableOpacity>
           </View>

@@ -11,6 +11,7 @@ import {
   ScrollView,
   FlatList,
   Dimensions,
+  Image,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -22,6 +23,8 @@ import RideRequestSheet from "./RideRequestSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
+import DriverEditProfileScreen from "./DriverEditProfileScreen";
+import HelpSupportScreen from "../shared/HelpSupportScreen";
 
 interface PendingRide {
   id: string;
@@ -100,6 +103,8 @@ export default function DriverHomeScreen({
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const CARD_WIDTH = Dimensions.get("window").width - 32;
   const [activeCard, setActiveCard] = useState(0);
+  const [editProfileVisible, setEditProfileVisible] = useState(false);
+  const [helpVisible, setHelpVisible] = useState(false);
 
   // Pulse animation for online dot
   useEffect(() => {
@@ -308,11 +313,10 @@ export default function DriverHomeScreen({
       })
       .eq("id", pendingRide.id)
       .eq("status", "pending")
-      .select("id") // ← returns the updated row if it succeeded
+      .select("id")
       .single();
 
     if (error || !data) {
-      // Update matched 0 rows — ride was already taken
       Alert.alert("Ride unavailable", "This ride was already taken.");
       setPendingRide(null);
       return;
@@ -368,7 +372,7 @@ export default function DriverHomeScreen({
             </Text>
           </View>
 
-          {/* ── Rating badge ── */}
+          {/* Rating badge */}
           {average != null && (
             <View style={styles.ratingPill}>
               <Ionicons name="star" size={12} color="#F59E0B" />
@@ -383,7 +387,25 @@ export default function DriverHomeScreen({
           style={styles.avatarWrap}
           onPress={() => setMenuVisible(true)}
         >
-          <Ionicons name="person-circle" size={36} color="#6B7280" />
+          {profile?.avatar_url ? (
+            <Image
+              source={{ uri: profile.avatar_url }}
+              style={styles.topAvatar}
+            />
+          ) : (
+            <View style={styles.topAvatarFallback}>
+              <Text style={styles.topAvatarInitials}>
+                {profile?.name
+                  ? profile.name
+                      .split(" ")
+                      .map((n) => n[0])
+                      .join("")
+                      .slice(0, 2)
+                      .toUpperCase()
+                  : "?"}
+              </Text>
+            </View>
+          )}
           {hasAssignedRide && (
             <Animated.View
               style={[styles.badge, { transform: [{ scale: badgePulse }] }]}
@@ -431,7 +453,7 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
-      {/* Scheduled panel — sits above the bottom sheet */}
+      {/* Scheduled panel */}
       {confirmedScheduledRides.length > 0 && (
         <View style={styles.scheduledPanel}>
           <View style={styles.scheduledPanelHeader}>
@@ -487,7 +509,6 @@ export default function DriverHomeScreen({
             )}
           />
 
-          {/* Pagination dots */}
           {confirmedScheduledRides.length > 1 && (
             <View style={styles.dotsRow}>
               {confirmedScheduledRides.map((_, i) => (
@@ -562,12 +583,28 @@ export default function DriverHomeScreen({
         </View>
       )}
 
+      {editProfileVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <DriverEditProfileScreen
+            onClose={() => setEditProfileVisible(false)}
+          />
+        </View>
+      )}
+
+      {helpVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <HelpSupportScreen onClose={() => setHelpVisible(false)} />
+        </View>
+      )}
+
       <ProfileMenu
         profile={profile}
         visible={menuVisible}
         onClose={() => setMenuVisible(false)}
         onSignOut={signOut}
         onOpenHistory={() => setHistoryVisible(true)}
+        onOpenEditProfile={() => setEditProfileVisible(true)}
+        onOpenHelp={() => setHelpVisible(true)}
         hasAssignedRide={hasAssignedRide}
         onOpenAssigned={() => {
           setMenuVisible(false);
@@ -601,7 +638,6 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 3,
   },
-
   ratingPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -609,19 +645,29 @@ const styles = StyleSheet.create({
     marginTop: 4,
     alignSelf: "flex-start",
   },
-  ratingText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#F59E0B",
-  },
-  ratingCount: {
-    fontSize: 12,
-    color: "#6B7280",
-  },
-
+  ratingText: { fontSize: 13, fontWeight: "600", color: "#F59E0B" },
+  ratingCount: { fontSize: 12, color: "#6B7280" },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, color: "#6B7280" },
   avatarWrap: { position: "relative", padding: 4 },
+  topAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
+  },
+  topAvatarFallback: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1E3A5F",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
+  },
+  topAvatarInitials: { fontSize: 13, fontWeight: "700", color: "#93C5FD" },
   badge: {
     position: "absolute",
     top: 0,
@@ -757,9 +803,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 48,
     alignItems: "center",
   },
+  onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   scheduledPanel: {
     position: "absolute",
-    bottom: Platform.OS === "ios" ? 210 : 190, // sits just above the sheet
+    bottom: Platform.OS === "ios" ? 210 : 190,
     left: 16,
     right: 16,
     backgroundColor: "#1A1F2E",
@@ -767,7 +814,6 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(168,85,247,0.25)",
     overflow: "hidden",
-    // shadow so it visually lifts above the map
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -787,10 +833,7 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: "rgba(168,85,247,0.25)",
   },
-  dotActive: {
-    width: 14,
-    backgroundColor: "#A855F7",
-  },
+  dotActive: { width: 14, backgroundColor: "#A855F7" },
   scheduledPanelHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -816,11 +859,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 5,
   },
-  scheduledPanelBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#fff",
-  },
+  scheduledPanelBadgeText: { fontSize: 11, fontWeight: "700", color: "#fff" },
   scheduledRideRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -836,28 +875,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
-  scheduledRideTimeText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#C084FC",
-  },
+  scheduledRideTimeText: { fontSize: 11, fontWeight: "600", color: "#C084FC" },
   scheduledRideInfo: { flex: 1 },
-  scheduledRidePassenger: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#F1F5F9",
-  },
-  scheduledRideRoute: {
-    fontSize: 11,
-    color: "#6B7280",
-    marginTop: 1,
-  },
-  scheduledRideFare: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#1D9E75",
-  },
-  onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  scheduledRidePassenger: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
+  scheduledRideRoute: { fontSize: 11, color: "#6B7280", marginTop: 1 },
+  scheduledRideFare: { fontSize: 13, fontWeight: "600", color: "#1D9E75" },
 });
 
 const darkMapStyle = [
