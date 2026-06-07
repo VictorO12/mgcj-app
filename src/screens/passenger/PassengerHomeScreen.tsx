@@ -30,6 +30,8 @@ import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
+const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
+const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
 
 const QUICK_DESTINATIONS = [
   {
@@ -54,10 +56,12 @@ interface PlacePrediction {
   place_id: string;
   description: string;
 }
+
 interface LatLng {
   latitude: number;
   longitude: number;
 }
+
 interface ActiveDriver {
   id: string;
   current_lat: number;
@@ -76,9 +80,9 @@ const VALLEY_REGION = {
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
   const { ride, eta, statusLabel } = useActiveRide(profile?.id);
-  useNotifications(); // registers push token for passenger notifications
-  const mapRef = useRef<MapView>(null);
+  useNotifications();
 
+  const mapRef = useRef<MapView>(null);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
   const [pickupCoords, setPickupCoords] = useState<LatLng | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<LatLng | null>(null);
@@ -121,6 +125,7 @@ export default function PassengerHomeScreen() {
   useEffect(() => {
     selectedPaymentRef.current = selectedPayment;
   }, [selectedPayment]);
+
   useEffect(() => {
     defaultCardRef.current = defaultCard;
   }, [defaultCard]);
@@ -145,12 +150,10 @@ export default function PassengerHomeScreen() {
       .eq("passenger_id", profile.id)
       .eq("is_default", true)
       .single();
-
     if (data) {
       setDefaultCard(data);
     } else {
       setDefaultCard(null);
-      // Show nudge if no card saved at all
       const { count } = await supabase
         .from("payment_methods")
         .select("id", { count: "exact", head: true })
@@ -158,16 +161,16 @@ export default function PassengerHomeScreen() {
       setShowCardNudge((count ?? 0) === 0);
     }
   }
+
   const [isScheduled, setIsScheduled] = useState(false);
   const [calMonth, setCalMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
-  const [selectedCalDay, setSelectedCalDay] = useState<Date | null>(null); // just date portion
-  const [selectedTime, setSelectedTime] = useState<string | null>(null); // "HH:MM" 24h
+  const [selectedCalDay, setSelectedCalDay] = useState<Date | null>(null);
+  const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [scheduledDate, setScheduledDate] = useState<Date | null>(null);
 
-  // Derive final scheduled date whenever day+time both picked
   useEffect(() => {
     if (selectedCalDay && selectedTime) {
       const [h, m] = selectedTime.split(":").map(Number);
@@ -179,14 +182,12 @@ export default function PassengerHomeScreen() {
     }
   }, [selectedCalDay, selectedTime]);
 
-  // Calendar helpers
   function calDaysInMonth(y: number, mo: number) {
     return new Date(y, mo + 1, 0).getDate();
   }
   function calFirstWeekday(y: number, mo: number) {
     return new Date(y, mo, 1).getDay();
-  } // 0=Sun
-
+  }
   const CAL_MONTHS = [
     "January",
     "February",
@@ -231,7 +232,6 @@ export default function PassengerHomeScreen() {
     );
   }
 
-  // Time slots for selected day: every 30 min, skip past times if today
   function buildTimeSlots(): string[] {
     const slots: string[] = [];
     const isToday = selectedCalDay ? isSameDay(selectedCalDay, today) : false;
@@ -416,46 +416,120 @@ export default function PassengerHomeScreen() {
       );
       return;
     }
+
     setBookingLoading(true);
 
     const scheduledAt =
       isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
-
     const paymentMethod = selectedPaymentRef.current;
     const paymentCard = defaultCardRef.current;
 
-    console.log("[confirmBooking] selectedPayment state:", selectedPayment);
-    console.log(
-      "[confirmBooking] selectedPaymentRef:",
-      selectedPaymentRef.current,
-    );
-    console.log("[confirmBooking] defaultCard state:", defaultCard?.id);
-    console.log("[confirmBooking] defaultCardRef:", defaultCardRef.current?.id);
-    console.log("[confirmBooking] using paymentMethod:", paymentMethod);
+    // ── Card ride: charge first, then insert ride ───────────────
+    if (paymentMethod === "card") {
+      try {
+        if (!fareEstimate || fareEstimate <= 0) {
+          setBookingLoading(false);
+          Alert.alert(
+            "Missing fare",
+            "Could not calculate fare. Please try again.",
+          );
+          return;
+        }
 
-    const { error } = await supabase
-      .from("rides")
-      .insert({
-        passenger_id: profile.id,
-        status: "pending",
-        pickup_address: pickupText,
-        pickup_lat: pickupCoords.latitude,
-        pickup_lng: pickupCoords.longitude,
-        dropoff_address: dropoffText,
-        dropoff_lat: dropoffCoords.latitude,
-        dropoff_lng: dropoffCoords.longitude,
-        fare_estimate: fareEstimate,
-        payment_method: paymentMethod,
-        payment_method_id:
-          paymentMethod === "card" && paymentCard ? paymentCard.id : null,
-        scheduled_at: scheduledAt,
-      })
-      .select()
-      .single();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) throw new Error("No session");
+
+        // Step 1: Authorize card hold upfront
+        const res = await fetch(
+          `${SUPABASE_URL}/functions/v1/create-payment-intent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+              apikey: SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ fare_amount: fareEstimate }),
+          },
+        );
+
+        const intentData = await res.json();
+
+        if (!res.ok) {
+          setBookingLoading(false);
+          // Show the specific decline message from Stripe
+          Alert.alert(
+            "Payment failed",
+            intentData.message ??
+              "Could not process payment. Please try a different card or pay with cash.",
+          );
+          return;
+        }
+
+        // Step 2: Payment authorized — now insert the ride
+        const { error: rideError } = await supabase.from("rides").insert({
+          passenger_id: profile.id,
+          status: "pending",
+          pickup_address: pickupText,
+          pickup_lat: pickupCoords.latitude,
+          pickup_lng: pickupCoords.longitude,
+          dropoff_address: dropoffText,
+          dropoff_lat: dropoffCoords.latitude,
+          dropoff_lng: dropoffCoords.longitude,
+          fare_estimate: fareEstimate,
+          payment_method: "card",
+          payment_method_id: paymentCard?.id ?? null,
+          stripe_payment_intent_id: intentData.payment_intent_id,
+          payment_status: "pending",
+          scheduled_at: scheduledAt,
+        });
+
+        setBookingLoading(false);
+
+        if (rideError) {
+          Alert.alert("Booking failed", rideError.message);
+          return;
+        }
+
+        if (isScheduled && scheduledDate) {
+          Alert.alert(
+            "Ride scheduled! 🗓",
+            `Your ride is booked for ${formatScheduledDate(scheduledDate)}.`,
+            [{ text: "OK" }],
+          );
+        }
+
+        resetBookingUI();
+        return;
+      } catch (err) {
+        console.error("Card booking error:", err);
+        setBookingLoading(false);
+        Alert.alert("Error", "Something went wrong. Please try again.");
+        return;
+      }
+    }
+
+    // ── Cash ride: insert directly, no payment step ─────────────
+    const { error: rideError } = await supabase.from("rides").insert({
+      passenger_id: profile.id,
+      status: "pending",
+      pickup_address: pickupText,
+      pickup_lat: pickupCoords.latitude,
+      pickup_lng: pickupCoords.longitude,
+      dropoff_address: dropoffText,
+      dropoff_lat: dropoffCoords.latitude,
+      dropoff_lng: dropoffCoords.longitude,
+      fare_estimate: fareEstimate,
+      payment_method: "cash",
+      scheduled_at: scheduledAt,
+    });
 
     setBookingLoading(false);
-    if (error) {
-      Alert.alert("Booking failed", error.message);
+
+    if (rideError) {
+      Alert.alert("Booking failed", rideError.message);
       return;
     }
 
@@ -555,7 +629,6 @@ export default function PassengerHomeScreen() {
           </Text>
         </View>
         <View style={styles.topActions}>
-          {/* Scheduled rides button */}
           {!hasActiveRide && (
             <TouchableOpacity
               style={styles.calendarBtn}
@@ -900,7 +973,7 @@ export default function PassengerHomeScreen() {
                           onPress={() => {
                             if (!selectable) return;
                             setSelectedCalDay(day);
-                            setSelectedTime(null); // reset time when date changes
+                            setSelectedTime(null);
                           }}
                           disabled={!selectable}
                           activeOpacity={0.7}
@@ -920,7 +993,7 @@ export default function PassengerHomeScreen() {
                     })}
                   </View>
 
-                  {/* Time scroll — appears after a day is picked */}
+                  {/* Time scroll */}
                   {selectedCalDay && (
                     <View style={styles.timeSection}>
                       <Text style={styles.timeSectionLabel}>Pick a time</Text>
@@ -974,7 +1047,6 @@ export default function PassengerHomeScreen() {
               <View style={styles.paymentSection}>
                 <Text style={styles.paymentLabel}>Payment</Text>
                 <View style={styles.paymentOptions}>
-                  {/* Card option — only shown if a card is saved */}
                   {defaultCard ? (
                     <TouchableOpacity
                       style={[
@@ -1106,7 +1178,7 @@ export default function PassengerHomeScreen() {
             </View>
           )}
 
-          {/* Card nudge — shown on home sheet when no card saved */}
+          {/* Card nudge */}
           {sheet === null && showCardNudge && (
             <TouchableOpacity
               style={styles.cardNudge}
@@ -1147,7 +1219,6 @@ export default function PassengerHomeScreen() {
           <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
         </View>
       )}
-
       {profileVisible && (
         <View style={StyleSheet.absoluteFill}>
           <ProfileScreen
@@ -1166,19 +1237,17 @@ export default function PassengerHomeScreen() {
           <HelpSupportScreen onClose={() => setHelpVisible(false)} />
         </View>
       )}
-
       {scheduledVisible && (
         <View style={StyleSheet.absoluteFill}>
           <ScheduledRidesScreen onClose={() => setScheduledVisible(false)} />
         </View>
       )}
-
       {paymentVisible && (
         <View style={StyleSheet.absoluteFill}>
           <PaymentMethodsScreen
             onClose={() => {
               setPaymentVisible(false);
-              fetchDefaultCard(); // refresh in case they added/changed a card
+              fetchDefaultCard();
             }}
           />
         </View>
@@ -1196,7 +1265,6 @@ export default function PassengerHomeScreen() {
         onOpenHelp={() => setHelpVisible(true)}
       />
 
-      {/* ── Post-ride review popup ── */}
       {reviewTarget && (
         <RideReviewModal
           visible={!!reviewTarget}
@@ -1227,11 +1295,7 @@ const styles = StyleSheet.create({
   },
   topName: { fontSize: 20, fontWeight: "700", color: "#F1F5F9" },
   topSub: { fontSize: 13, color: "#6B7280", marginTop: 2 },
-  topActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
+  topActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   topAvatar: {
     width: 36,
     height: 36,
@@ -1249,11 +1313,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "#E8500A",
   },
-  topAvatarInitials: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#93C5FD",
-  },
+  topAvatarInitials: { fontSize: 13, fontWeight: "700", color: "#93C5FD" },
   calendarBtn: {
     width: 36,
     height: 36,
@@ -1409,8 +1469,6 @@ const styles = StyleSheet.create({
     marginVertical: 2,
   },
   routeText: { fontSize: 14, color: "#CBD5E1", flex: 1 },
-
-  // Schedule toggle
   scheduleToggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -1427,19 +1485,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(168,85,247,0.4)",
     backgroundColor: "rgba(168,85,247,0.08)",
   },
-  scheduleToggleLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  scheduleToggleText: {
-    fontSize: 14,
-    color: "#6B7280",
-    fontWeight: "500",
-  },
-  scheduleToggleTextActive: {
-    color: "#A855F7",
-  },
+  scheduleToggleLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+  scheduleToggleText: { fontSize: 14, color: "#6B7280", fontWeight: "500" },
+  scheduleToggleTextActive: { color: "#A855F7" },
   togglePill: {
     width: 38,
     height: 22,
@@ -1448,9 +1496,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 2,
   },
-  togglePillActive: {
-    backgroundColor: "#A855F7",
-  },
+  togglePillActive: { backgroundColor: "#A855F7" },
   toggleThumb: {
     width: 18,
     height: 18,
@@ -1458,12 +1504,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#9CA3AF",
     alignSelf: "flex-start",
   },
-  toggleThumbActive: {
-    backgroundColor: "#fff",
-    alignSelf: "flex-end",
-  },
-
-  // Inline calendar
+  toggleThumbActive: { backgroundColor: "#fff", alignSelf: "flex-end" },
   calendarWrap: {
     backgroundColor: "#1E2A3A",
     borderRadius: 16,
@@ -1486,15 +1527,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  calMonthLabel: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#F1F5F9",
-  },
-  calWeekRow: {
-    flexDirection: "row",
-    marginBottom: 4,
-  },
+  calMonthLabel: { fontSize: 14, fontWeight: "700", color: "#F1F5F9" },
+  calWeekRow: { flexDirection: "row", marginBottom: 4 },
   calWeekLabel: {
     flex: 1,
     textAlign: "center",
@@ -1503,10 +1537,7 @@ const styles = StyleSheet.create({
     color: "#4B5563",
     textTransform: "uppercase",
   },
-  calGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
+  calGrid: { flexDirection: "row", flexWrap: "wrap" },
   calCell: {
     width: `${100 / 7}%` as any,
     aspectRatio: 1,
@@ -1514,31 +1545,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: 100,
   },
-  calCellSelected: {
-    backgroundColor: "#A855F7",
-  },
-  calCellToday: {
-    borderWidth: 1,
-    borderColor: "rgba(168,85,247,0.5)",
-  },
-  calDayText: {
-    fontSize: 13,
-    color: "#9CA3AF",
-    fontWeight: "500",
-  },
-  calDayDisabled: {
-    color: "#2D3748",
-  },
-  calDaySelected: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  calDayToday: {
-    color: "#A855F7",
-    fontWeight: "700",
-  },
-
-  // Time scroll
+  calCellSelected: { backgroundColor: "#A855F7" },
+  calCellToday: { borderWidth: 1, borderColor: "rgba(168,85,247,0.5)" },
+  calDayText: { fontSize: 13, color: "#9CA3AF", fontWeight: "500" },
+  calDayDisabled: { color: "#2D3748" },
+  calDaySelected: { color: "#fff", fontWeight: "700" },
+  calDayToday: { color: "#A855F7", fontWeight: "700" },
   timeSection: {
     marginTop: 10,
     borderTopWidth: 0.5,
@@ -1553,10 +1565,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
-  timeScrollContent: {
-    gap: 8,
-    paddingRight: 4,
-  },
+  timeScrollContent: { gap: 8, paddingRight: 4 },
   timeChip: {
     paddingVertical: 7,
     paddingHorizontal: 14,
@@ -1569,17 +1578,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(168,85,247,0.2)",
     borderColor: "#A855F7",
   },
-  timeChipText: {
-    fontSize: 13,
-    color: "#6B7280",
-    fontWeight: "500",
-  },
-  timeChipTextSelected: {
-    color: "#E9D5FF",
-    fontWeight: "600",
-  },
-
-  // Schedule summary
+  timeChipText: { fontSize: 13, color: "#6B7280", fontWeight: "500" },
+  timeChipTextSelected: { color: "#E9D5FF", fontWeight: "600" },
   schedSummary: {
     flexDirection: "row",
     alignItems: "center",
@@ -1589,13 +1589,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: "rgba(255,255,255,0.06)",
   },
-  schedSummaryText: {
-    fontSize: 13,
-    color: "#A855F7",
-    fontWeight: "600",
-  },
-
-  // Scheduled date display row (kept for reference, unused now)
+  schedSummaryText: { fontSize: 13, color: "#A855F7", fontWeight: "600" },
   scheduledDateRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1614,11 +1608,7 @@ const styles = StyleSheet.create({
     color: "#E9D5FF",
     fontWeight: "500",
   },
-
-  // Payment selector
-  paymentSection: {
-    marginBottom: 12,
-  },
+  paymentSection: { marginBottom: 12 },
   paymentLabel: {
     fontSize: 11,
     fontWeight: "600",
@@ -1627,9 +1617,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
-  paymentOptions: {
-    gap: 8,
-  },
+  paymentOptions: { gap: 8 },
   paymentOption: {
     flexDirection: "row",
     alignItems: "center",
@@ -1651,9 +1639,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flex: 1,
   },
-  paymentOptionTitleSelected: {
-    color: "#F1F5F9",
-  },
+  paymentOptionTitleSelected: { color: "#F1F5F9" },
   addCardPrompt: {
     flexDirection: "row",
     alignItems: "center",
@@ -1672,8 +1658,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flex: 1,
   },
-
-  // Card nudge banner
   cardNudge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1699,11 +1683,7 @@ const styles = StyleSheet.create({
     color: "#F1F5F9",
     marginBottom: 2,
   },
-  cardNudgeSub: {
-    fontSize: 11,
-    color: "#6B7280",
-  },
-
+  cardNudgeSub: { fontSize: 11, color: "#6B7280" },
   fareRow: {
     flexDirection: "row",
     justifyContent: "space-between",

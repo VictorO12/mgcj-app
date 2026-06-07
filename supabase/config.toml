@@ -441,3 +441,19 @@ import_map = "./functions/notify-review/deno.json"
 [functions.delete-account]
 enabled = true
 verify_jwt = true
+
+[functions.create-payment-intent]
+enabled = true
+verify_jwt = true
+
+[functions.stripe-webhook]
+enabled = true
+verify_jwt = false
+
+[functions.capture-payment]
+enabled = true
+verify_jwt = true
+
+[functions.save-card]
+enabled = true
+verify_jwt = true

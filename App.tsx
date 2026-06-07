@@ -2,9 +2,10 @@ import React from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { StripeProvider } from "@stripe/stripe-react-native";
+import Constants from "expo-constants";
 import { AuthProvider, useAuth } from "./src/hooks/AuthContext";
 import { RootStackParamList } from "./src/types";
-
 import WelcomeScreen from "./src/screens/auth/WelcomeScreen";
 import PhoneEntryScreen from "./src/screens/auth/PhoneEntryScreen";
 import SignUpScreen from "./src/screens/auth/SignUpScreen";
@@ -15,6 +16,7 @@ import PassengerHomeScreen from "./src/screens/passenger/PassengerHomeScreen";
 import DriverApp from "./src/screens/driver/DriverApp";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const STRIPE_KEY = Constants.expoConfig?.extra?.stripePublishableKey ?? "";
 
 function RootNavigator() {
   const { session, profile, loading } = useAuth();
@@ -60,9 +62,11 @@ function RootNavigator() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <StripeProvider publishableKey={STRIPE_KEY}>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </StripeProvider>
   );
 }
 

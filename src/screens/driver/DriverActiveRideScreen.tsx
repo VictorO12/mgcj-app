@@ -19,6 +19,8 @@ import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
+const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
+const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
 
 // ── Polyline decoder ──────────────────────────────────────────────────────
 function decodePolyline(encoded: string): LatLng[] {
@@ -232,7 +234,6 @@ export default function DriverActiveRideScreen({
         };
         locationRef.current = coords;
         setLocation(coords);
-        // Capture heading if available
         if (loc.coords.heading !== null && loc.coords.heading >= 0) {
           headingRef.current = loc.coords.heading;
           setHeading(loc.coords.heading);
@@ -267,7 +268,7 @@ export default function DriverActiveRideScreen({
     };
   }, []);
 
-  // ── Re-fetch when status changes (target switches pickup→dropoff) ─────
+  // ── Re-fetch when status changes ─────────────────────────────────────
   useEffect(() => {
     setCurrentStepIndex(0);
     setRouteCoords([]);
@@ -302,15 +303,11 @@ export default function DriverActiveRideScreen({
 
   useEffect(() => {
     if (!location || routeCoords.length < 2 || isRerouting.current) return;
-
-    // Find the closest point on the current route to the driver
     let minDist = Infinity;
     for (const point of routeCoords) {
       const d = getDistance(location, point);
       if (d < minDist) minDist = d;
     }
-
-    // If driver is more than 50m from the route, reroute
     if (minDist > 50) {
       console.log(
         `[Reroute] Off route by ${Math.round(minDist)}m — recalculating`,
@@ -324,22 +321,18 @@ export default function DriverActiveRideScreen({
       });
     }
   }, [location]);
+
   const lastCameraUpdate = useRef<number>(0);
   const lastHeadingRef = useRef<number>(0);
 
   useEffect(() => {
     if (!navMode || !location) return;
-
     const now = Date.now();
     const timeSinceLast = now - lastCameraUpdate.current;
     const headingDelta = Math.abs(headingRef.current - lastHeadingRef.current);
-
-    // Only update camera if at least 4s have passed OR heading changed by 10°+
     if (timeSinceLast < 4000 && headingDelta < 10) return;
-
     lastCameraUpdate.current = now;
     lastHeadingRef.current = headingRef.current;
-
     mapRef.current?.animateCamera(
       {
         center: location,
@@ -363,24 +356,18 @@ export default function DriverActiveRideScreen({
         `&alternatives=false` +
         `&departure_time=now` +
         `&traffic_model=best_guess`;
-
       const res = await fetch(url);
       const json = await res.json();
       const route = json.routes?.[0];
       if (!route) return;
-
       const seconds =
         route.legs?.[0]?.duration_in_traffic?.value ??
         route.legs?.[0]?.duration?.value;
       setEta(seconds ? Math.ceil(seconds / 60) : null);
       setTotalDistanceM(route.legs?.[0]?.distance?.value ?? null);
-
       const encoded = route.overview_polyline?.points;
       if (encoded) setRouteCoords(decodePolyline(encoded));
-
       setSteps(route.legs?.[0]?.steps ?? []);
-
-      // Only fit map to route when NOT in nav mode
       if (!navModeRef.current && mapRef.current) {
         mapRef.current.fitToCoordinates([from, to], {
           edgePadding: { top: 120, right: 50, bottom: 300, left: 50 },
@@ -399,20 +386,61 @@ export default function DriverActiveRideScreen({
 
     if (next === "completed") {
       if (ride.payment_method === "card") {
+        // ── Card ride: capture the payment hold then complete ───
         setUpdating(true);
-        await supabase
-          .from("rides")
-          .update({ status: "completed", fare_final: ride.fare_estimate })
-          .eq("id", ride.id);
-        setUpdating(false);
-        onRideComplete();
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) throw new Error("No session");
+
+          const res = await fetch(
+            `${SUPABASE_URL}/functions/v1/capture-payment`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+                apikey: SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({ ride_id: ride.id }),
+            },
+          );
+
+          const result = await res.json();
+
+          if (!res.ok) {
+            setUpdating(false);
+            Alert.alert(
+              "Payment capture failed",
+              result.error ?? "Could not capture payment. Please try again.",
+            );
+            return;
+          }
+
+          // Payment captured — mark ride complete
+          await supabase
+            .from("rides")
+            .update({ status: "completed", fare_final: ride.fare_estimate })
+            .eq("id", ride.id);
+
+          setUpdating(false);
+          onRideComplete();
+        } catch (err) {
+          console.error("Capture error:", err);
+          setUpdating(false);
+          Alert.alert("Error", "Something went wrong. Please try again.");
+        }
         return;
       }
+
+      // ── Cash ride: show fare entry modal ───────────────────────
       setFareInput(ride.fare_estimate?.toFixed(2) ?? "");
       setShowFareModal(true);
       return;
     }
 
+    // ── Any other status transition ─────────────────────────────
     setUpdating(true);
     await supabase.from("rides").update({ status: next }).eq("id", ride.id);
     onStatusChange(next);
@@ -764,7 +792,6 @@ export default function DriverActiveRideScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#111827" },
   map: { flex: 1 },
-
   reroutingBanner: {
     position: "absolute",
     top: 0,
@@ -781,11 +808,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: "rgba(255,255,255,0.08)",
   },
-  reroutingText: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#F59E0B",
-  },
+  reroutingText: { fontSize: 17, fontWeight: "700", color: "#F59E0B" },
   navBanner: {
     position: "absolute",
     top: 0,
@@ -829,7 +852,6 @@ const styles = StyleSheet.create({
   },
   navEtaNum: { fontSize: 22, fontWeight: "700", color: "#F59E0B" },
   navEtaUnit: { fontSize: 10, color: "#6B7280" },
-
   topBar: {
     position: "absolute",
     top: Platform.OS === "ios" ? 56 : 40,
@@ -862,7 +884,6 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.1)",
   },
   etaText: { fontSize: 13, fontWeight: "700", color: "#F59E0B" },
-
   navBtn: {
     position: "absolute",
     right: 16,
@@ -877,7 +898,6 @@ const styles = StyleSheet.create({
   },
   navBtnActive: { backgroundColor: "#374151" },
   navBtnText: { fontSize: 14, fontWeight: "600", color: "#fff" },
-
   sheet: {
     position: "absolute",
     bottom: 0,
@@ -916,7 +936,6 @@ const styles = StyleSheet.create({
   destAddress: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
   destDistance: { fontSize: 11, color: "#4B5563", marginTop: 2 },
   etaLarge: { fontSize: 22, fontWeight: "700", color: "#F59E0B" },
-
   passengerCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -964,7 +983,6 @@ const styles = StyleSheet.create({
   },
   paymentBadgeText: { fontSize: 10, color: "#1D9E75", fontWeight: "600" },
   paymentBadgeTextCard: { color: "#4a9eff" },
-
   actionBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -975,7 +993,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   actionBtnText: { fontSize: 16, fontWeight: "600", color: "#fff" },
-
   pickupMarker: {
     backgroundColor: "rgba(74,158,255,0.15)",
     borderRadius: 20,
@@ -990,7 +1007,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(232,80,10,0.4)",
   },
-
   modalOverlay: {
     flex: 1,
     justifyContent: "flex-end",

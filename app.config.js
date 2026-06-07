@@ -30,11 +30,19 @@ export default {
         color: "#E8500A",
       },
     ],
+    [
+      "@stripe/stripe-react-native",
+      {
+        merchantIdentifier: "merchant.com.mgcj.app",
+        enableGooglePay: false,
+      },
+    ],
   ],
   extra: {
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
     googleMapsKey: process.env.GOOGLE_MAPS_KEY,
+    stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
     eas: {
       projectId: "1df2c110-8290-4853-9574-2fe4b71799b0",
     },
