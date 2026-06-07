@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   Image,
   Alert,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
@@ -28,6 +28,7 @@ import RideReviewModal from "../../components/RideReviewModal";
 import ProfileScreen from "./ProfileScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
+import DriverProfileSheet from "../../components/DriverProfileSheet";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
@@ -51,17 +52,14 @@ interface PaymentMethod {
   exp_year: number;
   is_default: boolean;
 }
-
 interface PlacePrediction {
   place_id: string;
   description: string;
 }
-
 interface LatLng {
   latitude: number;
   longitude: number;
 }
-
 interface ActiveDriver {
   id: string;
   current_lat: number;
@@ -76,6 +74,7 @@ const VALLEY_REGION = {
   latitudeDelta: 0.15,
   longitudeDelta: 0.15,
 };
+const BUSY_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
@@ -105,6 +104,13 @@ export default function PassengerHomeScreen() {
   const [profileVisible, setProfileVisible] = useState(false);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
+  const [driverProfileVisible, setDriverProfileVisible] = useState(false);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+
+  // ── Active ride map state ─────────────────────────────────
+  const [rideRouteCoords, setRideRouteCoords] = useState<LatLng[]>([]);
+  const lastRouteFetchStatus = useRef<string | null>(null);
+  const routeDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Payment state
   const [defaultCard, setDefaultCard] = useState<PaymentMethod | null>(null);
@@ -121,26 +127,97 @@ export default function PassengerHomeScreen() {
     driverName: string | null;
   } | null>(null);
 
-  // Keep refs in sync with state
   useEffect(() => {
     selectedPaymentRef.current = selectedPayment;
   }, [selectedPayment]);
-
   useEffect(() => {
     defaultCardRef.current = defaultCard;
   }, [defaultCard]);
-
-  // Fetch default card on mount and whenever profile changes
   useEffect(() => {
     if (profile) fetchDefaultCard();
   }, [profile]);
-
-  // When confirm sheet opens, default to card if one exists
   useEffect(() => {
-    if (sheet === "confirm") {
-      setSelectedPayment(defaultCard ? "card" : "cash");
-    }
+    if (sheet === "confirm") setSelectedPayment(defaultCard ? "card" : "cash");
   }, [sheet, defaultCard]);
+
+  // ── Fetch route for active ride ───────────────────────────
+  const fetchRideRoute = useCallback(
+    async (origin: LatLng, destination: LatLng) => {
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/directions/json` +
+            `?origin=${origin.latitude},${origin.longitude}` +
+            `&destination=${destination.latitude},${destination.longitude}` +
+            `&key=${MAPS_KEY}`,
+        );
+        const json = await res.json();
+        const points = json.routes?.[0]?.overview_polyline?.points;
+        if (points) {
+          setRideRouteCoords(decodePolyline(points));
+        }
+      } catch (e) {
+        console.error("[rideRoute]", e);
+      }
+    },
+    [],
+  );
+
+  // Re-fetch route when status changes (assigned → arriving → in_progress)
+  useEffect(() => {
+    if (!ride?.driver?.current_lat || !ride?.driver?.current_lng) {
+      setRideRouteCoords([]);
+      lastRouteFetchStatus.current = null;
+      return;
+    }
+
+    const statusChanged = ride.status !== lastRouteFetchStatus.current;
+
+    if (statusChanged) {
+      lastRouteFetchStatus.current = ride.status;
+      const origin = {
+        latitude: ride.driver.current_lat,
+        longitude: ride.driver.current_lng,
+      };
+      const destination =
+        ride.status === "in_progress"
+          ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
+          : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+      fetchRideRoute(origin, destination);
+
+      // Fit map to show driver + destination
+      mapRef.current?.fitToCoordinates([origin, destination], {
+        edgePadding: { top: 100, right: 60, bottom: 360, left: 60 },
+        animated: true,
+      });
+      return;
+    }
+
+    // Status unchanged but driver moved — debounce route refresh by 10s
+    if (routeDebounceTimer.current) clearTimeout(routeDebounceTimer.current);
+    routeDebounceTimer.current = setTimeout(() => {
+      const origin = {
+        latitude: ride.driver!.current_lat!,
+        longitude: ride.driver!.current_lng!,
+      };
+      const destination =
+        ride.status === "in_progress"
+          ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
+          : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+      fetchRideRoute(origin, destination);
+    }, 10000);
+
+    return () => {
+      if (routeDebounceTimer.current) clearTimeout(routeDebounceTimer.current);
+    };
+  }, [ride?.status, ride?.driver?.current_lat, ride?.driver?.current_lng]);
+
+  // Clear route when ride ends
+  useEffect(() => {
+    if (!ride) {
+      setRideRouteCoords([]);
+      lastRouteFetchStatus.current = null;
+    }
+  }, [ride]);
 
   async function fetchDefaultCard() {
     if (!profile) return;
@@ -210,20 +287,17 @@ export default function PassengerHomeScreen() {
   function buildCalGrid(): (Date | null)[] {
     const y = calMonth.getFullYear(),
       mo = calMonth.getMonth();
-    const totalDays = calDaysInMonth(y, mo);
-    const startWd = calFirstWeekday(y, mo);
     const cells: (Date | null)[] = [];
-    for (let i = 0; i < startWd; i++) cells.push(null);
-    for (let d = 1; d <= totalDays; d++) cells.push(new Date(y, mo, d));
+    for (let i = 0; i < calFirstWeekday(y, mo); i++) cells.push(null);
+    for (let d = 1; d <= calDaysInMonth(y, mo); d++)
+      cells.push(new Date(y, mo, d));
     return cells;
   }
-
-  function isDateSelectable(d: Date): boolean {
+  function isDateSelectable(d: Date) {
     const dd = new Date(d);
     dd.setHours(0, 0, 0, 0);
     return dd >= today && dd <= maxDate;
   }
-
   function isSameDay(a: Date, b: Date) {
     return (
       a.getFullYear() === b.getFullYear() &&
@@ -231,31 +305,27 @@ export default function PassengerHomeScreen() {
       a.getDate() === b.getDate()
     );
   }
-
   function buildTimeSlots(): string[] {
     const slots: string[] = [];
     const isToday = selectedCalDay ? isSameDay(selectedCalDay, today) : false;
     const nowMins = isToday
       ? new Date().getHours() * 60 + new Date().getMinutes() + 30
       : 0;
-    for (let h = 0; h < 24; h++) {
+    for (let h = 0; h < 24; h++)
       for (const m of [0, 30]) {
         if (isToday && h * 60 + m < nowMins) continue;
         slots.push(
           `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
         );
       }
-    }
     return slots;
   }
-
   function formatTimeSlot(t: string): string {
     const [h, m] = t.split(":").map(Number);
     const ampm = h >= 12 ? "PM" : "AM";
     const h12 = h % 12 === 0 ? 12 : h % 12;
     return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
   }
-
   function formatScheduledDate(d: Date): string {
     return d.toLocaleString("en-CA", {
       weekday: "short",
@@ -293,10 +363,14 @@ export default function PassengerHomeScreen() {
   }, []);
 
   useEffect(() => {
-    fetchActiveDrivers();
-    const interval = setInterval(fetchActiveDrivers, 15000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!ride) {
+      fetchActiveDrivers();
+      const interval = setInterval(fetchActiveDrivers, 15000);
+      return () => clearInterval(interval);
+    }
+    // Clear available drivers while on a ride
+    setActiveDrivers([]);
+  }, [!!ride]);
 
   useEffect(() => {
     if (
@@ -316,25 +390,41 @@ export default function PassengerHomeScreen() {
   }, [ride?.status, ride?.id]);
 
   async function fetchActiveDrivers() {
-    const { data } = await supabase
+    const { data: drivers } = await supabase
       .from("drivers")
       .select("id, current_lat, current_lng, vehicle_make")
       .eq("is_active", true)
       .not("current_lat", "is", null);
-    if (!data) return;
+    if (!drivers || drivers.length === 0) {
+      setActiveDrivers([]);
+      return;
+    }
+    const driverIds = drivers.map((d) => d.id);
+    const { data: busyRides } = await supabase
+      .from("rides")
+      .select("driver_id")
+      .in("status", BUSY_STATUSES)
+      .in("driver_id", driverIds);
+    const busyDriverIds = new Set((busyRides ?? []).map((r) => r.driver_id));
+    const availableDrivers = drivers.filter((d) => !busyDriverIds.has(d.id));
     const withNames = await Promise.all(
-      data.map(async (d) => {
+      availableDrivers.map(async (d) => {
         const { data: p } = await supabase
           .from("profiles")
           .select("name")
           .eq("id", d.id)
-          .single();
+          .maybeSingle();
         return { ...d, name: p?.name ?? null };
       }),
     );
     setActiveDrivers(
       withNames.filter((d) => d.current_lat && d.current_lng) as ActiveDriver[],
     );
+  }
+
+  function openDriverProfile(driverId: string) {
+    setSelectedDriverId(driverId);
+    setDriverProfileVisible(true);
   }
 
   async function searchPlaces(query: string) {
@@ -416,15 +506,12 @@ export default function PassengerHomeScreen() {
       );
       return;
     }
-
     setBookingLoading(true);
-
     const scheduledAt =
       isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
     const paymentMethod = selectedPaymentRef.current;
     const paymentCard = defaultCardRef.current;
 
-    // ── Card ride: charge first, then insert ride ───────────────
     if (paymentMethod === "card") {
       try {
         if (!fareEstimate || fareEstimate <= 0) {
@@ -435,13 +522,10 @@ export default function PassengerHomeScreen() {
           );
           return;
         }
-
         const {
           data: { session },
         } = await supabase.auth.getSession();
         if (!session) throw new Error("No session");
-
-        // Step 1: Authorize card hold upfront
         const res = await fetch(
           `${SUPABASE_URL}/functions/v1/create-payment-intent`,
           {
@@ -454,12 +538,9 @@ export default function PassengerHomeScreen() {
             body: JSON.stringify({ fare_amount: fareEstimate }),
           },
         );
-
         const intentData = await res.json();
-
         if (!res.ok) {
           setBookingLoading(false);
-          // Show the specific decline message from Stripe
           Alert.alert(
             "Payment failed",
             intentData.message ??
@@ -467,8 +548,6 @@ export default function PassengerHomeScreen() {
           );
           return;
         }
-
-        // Step 2: Payment authorized — now insert the ride
         const { error: rideError } = await supabase.from("rides").insert({
           passenger_id: profile.id,
           status: "pending",
@@ -485,22 +564,17 @@ export default function PassengerHomeScreen() {
           payment_status: "pending",
           scheduled_at: scheduledAt,
         });
-
         setBookingLoading(false);
-
         if (rideError) {
           Alert.alert("Booking failed", rideError.message);
           return;
         }
-
-        if (isScheduled && scheduledDate) {
+        if (isScheduled && scheduledDate)
           Alert.alert(
             "Ride scheduled! 🗓",
             `Your ride is booked for ${formatScheduledDate(scheduledDate)}.`,
             [{ text: "OK" }],
           );
-        }
-
         resetBookingUI();
         return;
       } catch (err) {
@@ -511,7 +585,6 @@ export default function PassengerHomeScreen() {
       }
     }
 
-    // ── Cash ride: insert directly, no payment step ─────────────
     const { error: rideError } = await supabase.from("rides").insert({
       passenger_id: profile.id,
       status: "pending",
@@ -525,22 +598,17 @@ export default function PassengerHomeScreen() {
       payment_method: "cash",
       scheduled_at: scheduledAt,
     });
-
     setBookingLoading(false);
-
     if (rideError) {
       Alert.alert("Booking failed", rideError.message);
       return;
     }
-
-    if (isScheduled && scheduledDate) {
+    if (isScheduled && scheduledDate)
       Alert.alert(
         "Ride scheduled! 🗓",
         `Your ride is booked for ${formatScheduledDate(scheduledDate)}. You can view or cancel it from the scheduled rides panel.`,
         [{ text: "OK" }],
       );
-    }
-
     resetBookingUI();
   }
 
@@ -571,7 +639,22 @@ export default function PassengerHomeScreen() {
   }
 
   const hasActiveRide = !!ride;
-  const myDriverId = ride?.driver?.id;
+  const hasDriver = !!ride?.driver?.current_lat && !!ride?.driver?.current_lng;
+
+  // Derived map coords for active ride
+  const driverCoords: LatLng | null = hasDriver
+    ? {
+        latitude: ride!.driver!.current_lat!,
+        longitude: ride!.driver!.current_lng!,
+      }
+    : null;
+  const pickupPin: LatLng | null = ride
+    ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
+    : null;
+  const dropoffPin: LatLng | null = ride
+    ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
+    : null;
+  const isInProgress = ride?.status === "in_progress";
 
   return (
     <View style={styles.container}>
@@ -584,24 +667,22 @@ export default function PassengerHomeScreen() {
         showsMyLocationButton={false}
         customMapStyle={darkMapStyle}
       >
-        {activeDrivers.map((d) => (
-          <Marker
-            key={d.id}
-            coordinate={{ latitude: d.current_lat, longitude: d.current_lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            title={d.name ?? "Driver"}
-            description={d.vehicle_make ?? ""}
-          >
-            <View
-              style={[
-                styles.driverMarker,
-                myDriverId === d.id && styles.driverMarkerMine,
-              ]}
+        {/* ── No active ride: available driver markers ── */}
+        {!hasActiveRide &&
+          activeDrivers.map((d) => (
+            <Marker
+              key={d.id}
+              coordinate={{ latitude: d.current_lat, longitude: d.current_lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => openDriverProfile(d.id)}
             >
-              <Text style={styles.driverMarkerText}>🚗</Text>
-            </View>
-          </Marker>
-        ))}
+              <View style={styles.driverMarker}>
+                <Text style={styles.driverMarkerText}>🚗</Text>
+              </View>
+            </Marker>
+          ))}
+
+        {/* ── No active ride: booking markers ── */}
         {!hasActiveRide && pickupCoords && pickupText !== "My location" && (
           <Marker coordinate={pickupCoords} pinColor="#4a9eff" title="Pickup" />
         )}
@@ -610,6 +691,48 @@ export default function PassengerHomeScreen() {
             coordinate={dropoffCoords}
             pinColor="#E8500A"
             title="Drop-off"
+          />
+        )}
+
+        {/* ── Active ride: driver marker ── */}
+        {hasActiveRide && driverCoords && (
+          <Marker coordinate={driverCoords} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.driverMarkerMine}>
+              <Text style={styles.driverMarkerText}>🚗</Text>
+            </View>
+          </Marker>
+        )}
+
+        {/* ── Active ride: pickup pin (driver en route to pickup) ── */}
+        {hasActiveRide && !isInProgress && pickupPin && (
+          <Marker coordinate={pickupPin} anchor={{ x: 0.5, y: 1 }}>
+            <View style={styles.pinWrap}>
+              <View style={[styles.pin, { backgroundColor: "#4a9eff" }]}>
+                <Ionicons name="person" size={12} color="#fff" />
+              </View>
+              <View style={[styles.pinTail, { borderTopColor: "#4a9eff" }]} />
+            </View>
+          </Marker>
+        )}
+
+        {/* ── Active ride: dropoff pin (ride in progress) ── */}
+        {hasActiveRide && isInProgress && dropoffPin && (
+          <Marker coordinate={dropoffPin} anchor={{ x: 0.5, y: 1 }}>
+            <View style={styles.pinWrap}>
+              <View style={[styles.pin, { backgroundColor: "#E8500A" }]}>
+                <Ionicons name="flag" size={12} color="#fff" />
+              </View>
+              <View style={[styles.pinTail, { borderTopColor: "#E8500A" }]} />
+            </View>
+          </Marker>
+        )}
+
+        {/* ── Active ride: route polyline ── */}
+        {hasActiveRide && rideRouteCoords.length > 0 && (
+          <Polyline
+            coordinates={rideRouteCoords}
+            strokeColor={isInProgress ? "#E8500A" : "#4a9eff"}
+            strokeWidth={3}
           />
         )}
       </MapView>
@@ -664,12 +787,12 @@ export default function PassengerHomeScreen() {
         </View>
       </View>
 
-      {activeDrivers.length > 0 && (
+      {!hasActiveRide && activeDrivers.length > 0 && (
         <View style={styles.driversPill}>
           <View style={styles.driversPillDot} />
           <Text style={styles.driversPillText}>
             {activeDrivers.length} driver{activeDrivers.length > 1 ? "s" : ""}{" "}
-            nearby
+            available
           </Text>
         </View>
       )}
@@ -690,7 +813,6 @@ export default function PassengerHomeScreen() {
 
       {!hasActiveRide && (
         <View style={styles.sheet}>
-          {/* Pickup / Dropoff inputs */}
           <View style={styles.inputsCard}>
             <TouchableOpacity
               style={styles.inputRow}
@@ -732,7 +854,6 @@ export default function PassengerHomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Search box */}
           {sheet === "search" && (
             <View style={styles.searchBox}>
               <Ionicons
@@ -773,7 +894,6 @@ export default function PassengerHomeScreen() {
             </View>
           )}
 
-          {/* Predictions */}
           {predictions.length > 0 && (
             <ScrollView
               style={styles.predictionsList}
@@ -799,7 +919,6 @@ export default function PassengerHomeScreen() {
             </ScrollView>
           )}
 
-          {/* Quick destinations */}
           {sheet === null && predictions.length === 0 && (
             <>
               <Text style={styles.sectionLabel}>QUICK DESTINATIONS</Text>
@@ -822,12 +941,9 @@ export default function PassengerHomeScreen() {
             </>
           )}
 
-          {/* Confirm sheet */}
           {sheet === "confirm" && (
             <View>
               <Text style={styles.confirmTitle}>Confirm your ride</Text>
-
-              {/* Route card */}
               <View style={styles.routeCard}>
                 <View style={styles.routeRow}>
                   <View
@@ -851,7 +967,6 @@ export default function PassengerHomeScreen() {
                 </View>
               </View>
 
-              {/* Schedule toggle */}
               <TouchableOpacity
                 style={[
                   styles.scheduleToggle,
@@ -897,10 +1012,8 @@ export default function PassengerHomeScreen() {
                 </View>
               </TouchableOpacity>
 
-              {/* Inline calendar + time picker */}
               {isScheduled && (
                 <View style={styles.calendarWrap}>
-                  {/* Month nav */}
                   <View style={styles.calHeader}>
                     <TouchableOpacity
                       style={styles.calNavBtn}
@@ -942,8 +1055,6 @@ export default function PassengerHomeScreen() {
                       />
                     </TouchableOpacity>
                   </View>
-
-                  {/* Weekday labels */}
                   <View style={styles.calWeekRow}>
                     {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((d) => (
                       <Text key={d} style={styles.calWeekLabel}>
@@ -951,8 +1062,6 @@ export default function PassengerHomeScreen() {
                       </Text>
                     ))}
                   </View>
-
-                  {/* Day grid */}
                   <View style={styles.calGrid}>
                     {buildCalGrid().map((day, idx) => {
                       if (!day)
@@ -992,8 +1101,6 @@ export default function PassengerHomeScreen() {
                       );
                     })}
                   </View>
-
-                  {/* Time scroll */}
                   {selectedCalDay && (
                     <View style={styles.timeSection}>
                       <Text style={styles.timeSectionLabel}>Pick a time</Text>
@@ -1026,8 +1133,6 @@ export default function PassengerHomeScreen() {
                       </ScrollView>
                     </View>
                   )}
-
-                  {/* Summary once both picked */}
                   {scheduledDate && (
                     <View style={styles.schedSummary}>
                       <Ionicons
@@ -1043,7 +1148,6 @@ export default function PassengerHomeScreen() {
                 </View>
               )}
 
-              {/* Payment selector */}
               <View style={styles.paymentSection}>
                 <Text style={styles.paymentLabel}>Payment</Text>
                 <View style={styles.paymentOptions}>
@@ -1099,8 +1203,6 @@ export default function PassengerHomeScreen() {
                       </Text>
                     </TouchableOpacity>
                   )}
-
-                  {/* Cash option */}
                   <TouchableOpacity
                     style={[
                       styles.paymentOption,
@@ -1135,13 +1237,12 @@ export default function PassengerHomeScreen() {
                 </View>
               </View>
 
-              {/* Fare row */}
               <View style={styles.fareRow}>
                 <View>
                   <Text style={styles.fareLabel}>Estimated fare</Text>
                   <Text style={styles.fareNote}>
-                    {selectedPayment === "card" ? "Card · " : "Cash · "}
-                    Subject to final distance
+                    {selectedPayment === "card" ? "Card · " : "Cash · "}Subject
+                    to final distance
                   </Text>
                 </View>
                 {fareLoading ? (
@@ -1153,7 +1254,6 @@ export default function PassengerHomeScreen() {
                 )}
               </View>
 
-              {/* Action buttons */}
               <View style={styles.confirmBtns}>
                 <TouchableOpacity
                   style={styles.editBtn}
@@ -1178,7 +1278,6 @@ export default function PassengerHomeScreen() {
             </View>
           )}
 
-          {/* Card nudge */}
           {sheet === null && showCardNudge && (
             <TouchableOpacity
               style={styles.cardNudge}
@@ -1274,8 +1373,46 @@ export default function PassengerHomeScreen() {
           onDismiss={() => setReviewTarget(null)}
         />
       )}
+
+      <DriverProfileSheet
+        visible={driverProfileVisible}
+        driverId={selectedDriverId}
+        onClose={() => {
+          setDriverProfileVisible(false);
+          setSelectedDriverId(null);
+        }}
+      />
     </View>
   );
+}
+
+// ── Google encoded polyline decoder ──────────────────────────
+function decodePolyline(encoded: string): LatLng[] {
+  const coords: LatLng[] = [];
+  let index = 0,
+    lat = 0,
+    lng = 0;
+  while (index < encoded.length) {
+    let b,
+      shift = 0,
+      result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    coords.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return coords;
 }
 
 const styles = StyleSheet.create({
@@ -1359,6 +1496,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+
+  // Driver markers
   driverMarker: {
     backgroundColor: "#1E2A3A",
     borderRadius: 20,
@@ -1366,8 +1505,36 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "rgba(255,255,255,0.15)",
   },
-  driverMarkerMine: { borderColor: "#E8500A", backgroundColor: "#2A1A0E" },
+  driverMarkerMine: {
+    backgroundColor: "#2A1A0E",
+    borderRadius: 20,
+    padding: 5,
+    borderWidth: 1.5,
+    borderColor: "#E8500A",
+  },
   driverMarkerText: { fontSize: 16 },
+
+  // Custom pins for active ride
+  pinWrap: { alignItems: "center" },
+  pin: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  pinTail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 7,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+  },
+
   sheet: {
     position: "absolute",
     bottom: 0,
@@ -1590,24 +1757,6 @@ const styles = StyleSheet.create({
     borderTopColor: "rgba(255,255,255,0.06)",
   },
   schedSummaryText: { fontSize: 13, color: "#A855F7", fontWeight: "600" },
-  scheduledDateRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(168,85,247,0.08)",
-    borderRadius: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(168,85,247,0.3)",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 10,
-  },
-  scheduledDateText: {
-    flex: 1,
-    fontSize: 13,
-    color: "#E9D5FF",
-    fontWeight: "500",
-  },
   paymentSection: { marginBottom: 12 },
   paymentLabel: {
     fontSize: 11,

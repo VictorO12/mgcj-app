@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import RideReviewModal from "../../components/RideReviewModal";
+import DriverProfileSheet from "../../components/DriverProfileSheet";
 
 interface RideRecord {
   id: string;
@@ -27,6 +28,7 @@ interface RideRecord {
   other_party_id: string | null;
   review_rating: number | null;
   received_rating: number | null;
+  driver_id: string | null;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -59,11 +61,16 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [filter, setFilter] = useState<"all" | "completed" | "cancelled">(
     "all",
   );
+
   const [reviewTarget, setReviewTarget] = useState<{
     rideId: string;
     driverId: string;
     driverName: string | null;
   } | null>(null);
+
+  // Driver profile sheet
+  const [profileSheetVisible, setProfileSheetVisible] = useState(false);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
   const isDriver = profile?.role === "driver";
   const fetchRidesRef = useRef<() => Promise<void>>();
@@ -72,9 +79,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
     fetchRides();
   }, [profile]);
 
+  // Realtime: driver sees new ratings come in live
   useEffect(() => {
     if (!profile || !isDriver) return;
-
     const channel = supabase
       .channel("driver-reviews-" + profile.id)
       .on(
@@ -97,7 +104,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
         },
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
@@ -149,7 +155,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
             .from("profiles")
             .select("name")
             .eq("id", otherId)
-            .single();
+            .maybeSingle();
           otherName = p?.name ?? null;
         }
         const hasReview = reviewMap[ride.id] != null;
@@ -166,6 +172,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
           other_party_id: otherId ?? null,
           review_rating: !isDriver && hasReview ? reviewMap[ride.id] : null,
           received_rating: isDriver && hasReview ? reviewMap[ride.id] : null,
+          driver_id: ride.driver_id ?? null,
         };
       }),
     );
@@ -185,7 +192,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
   function handleReviewDismiss(submitted: boolean, rating?: number) {
     const targetId = reviewTarget?.rideId;
     setReviewTarget(null);
-
     if (submitted && targetId && rating != null) {
       setRides((prev) =>
         prev.map((r) =>
@@ -193,8 +199,12 @@ export default function RideHistoryScreen({ onClose }: Props) {
         ),
       );
     }
-
     fetchRidesRef.current?.();
+  }
+
+  function openDriverProfile(driverId: string) {
+    setSelectedDriverId(driverId);
+    setProfileSheetVisible(true);
   }
 
   function formatDate(iso: string) {
@@ -221,7 +231,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
   }
 
   function getDayKey(iso: string) {
-    return new Date(iso).toLocaleDateString("en-CA"); // YYYY-MM-DD
+    return new Date(iso).toLocaleDateString("en-CA");
   }
 
   function groupByDay(rideList: RideRecord[]) {
@@ -324,14 +334,13 @@ export default function RideHistoryScreen({ onClose }: Props) {
           <View style={styles.rideList}>
             {groupByDay(filtered).map((group) => (
               <View key={group.key}>
-                {/* ── Day separator ── */}
+                {/* Day separator */}
                 <View style={styles.daySeparator}>
                   <View style={styles.daySeparatorLine} />
                   <Text style={styles.daySeparatorLabel}>{group.label}</Text>
                   <View style={styles.daySeparatorLine} />
                 </View>
 
-                {/* ── Rides for this day ── */}
                 <View style={styles.dayGroup}>
                   {group.rides.map((ride) => (
                     <View key={ride.id} style={styles.rideCard}>
@@ -364,12 +373,32 @@ export default function RideHistoryScreen({ onClose }: Props) {
 
                       {/* Other party */}
                       {ride.other_party_name && (
-                        <Text style={styles.otherParty}>
-                          {isDriver ? "Passenger" : "Driver"}:{" "}
-                          <Text style={styles.otherPartyName}>
-                            {ride.other_party_name}
+                        <View style={styles.otherPartyRow}>
+                          <Text style={styles.otherParty}>
+                            {isDriver ? "Passenger" : "Driver"}:{" "}
+                            <Text style={styles.otherPartyName}>
+                              {ride.other_party_name}
+                            </Text>
                           </Text>
-                        </Text>
+                          {!isDriver && ride.other_party_id && (
+                            <TouchableOpacity
+                              style={styles.viewProfileBtn}
+                              onPress={() =>
+                                openDriverProfile(ride.other_party_id!)
+                              }
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons
+                                name="person-outline"
+                                size={11}
+                                color="#93C5FD"
+                              />
+                              <Text style={styles.viewProfileBtnText}>
+                                View profile
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
                       )}
 
                       {/* Route */}
@@ -502,12 +531,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
                     </View>
                   ))}
                 </View>
-                {/* end dayGroup */}
               </View>
             ))}
-            {/* end groupByDay */}
           </View>
-          {/* end rideList */}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -523,6 +549,16 @@ export default function RideHistoryScreen({ onClose }: Props) {
           onDismiss={handleReviewDismiss}
         />
       )}
+
+      {/* Driver profile sheet */}
+      <DriverProfileSheet
+        visible={profileSheetVisible}
+        driverId={selectedDriverId}
+        onClose={() => {
+          setProfileSheetVisible(false);
+          setSelectedDriverId(null);
+        }}
+      />
     </View>
   );
 }
@@ -629,8 +665,26 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
   },
   statusText: { fontSize: 11, fontWeight: "600" },
-  otherParty: { fontSize: 12, color: "#6B7280", marginBottom: 10 },
+  otherPartyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  otherParty: { fontSize: 12, color: "#6B7280" },
   otherPartyName: { color: "#94A3B8", fontWeight: "500" },
+  viewProfileBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    backgroundColor: "rgba(147,197,253,0.08)",
+    borderWidth: 0.5,
+    borderColor: "rgba(147,197,253,0.2)",
+  },
+  viewProfileBtnText: { fontSize: 11, fontWeight: "600", color: "#93C5FD" },
   routeWrap: { marginBottom: 12 },
   routeRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   routeDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
