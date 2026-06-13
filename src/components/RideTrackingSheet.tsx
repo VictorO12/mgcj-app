@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { ActiveRide } from "../hooks/useActiveRide";
+import { supabase } from "../lib/supabase";
+import { useAuth } from "../hooks/AuthContext";
 import DriverProfileSheet from "./DriverProfileSheet";
+import ReportDriverModal from "./ReportDriverModal";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -31,8 +34,11 @@ export default function RideTrackingSheet({
   statusLabel,
   onCancel,
 }: Props) {
+  const { profile } = useAuth();
   const [expanded, setExpanded] = useState(false);
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
+  const [reportVisible, setReportVisible] = useState(false);
+  const [alreadyReported, setAlreadyReported] = useState(false);
   const sheetY = useRef(new Animated.Value(0)).current;
 
   const panResponder = useRef(
@@ -44,6 +50,28 @@ export default function RideTrackingSheet({
       },
     }),
   ).current;
+
+  useEffect(() => {
+    if (ride?.id && profile) {
+      checkExistingReport(ride.id, profile.id);
+    }
+  }, [ride?.id, profile]);
+
+  async function checkExistingReport(rideId: string, passengerId: string) {
+    const { data } = await supabase
+      .from("driver_reports")
+      .select("id")
+      .eq("ride_id", rideId)
+      .eq("passenger_id", passengerId)
+      .maybeSingle();
+
+    setAlreadyReported(!!data);
+  }
+
+  function handleReportDismiss(submitted: boolean) {
+    setReportVisible(false);
+    if (submitted) setAlreadyReported(true);
+  }
 
   function expand() {
     setExpanded(true);
@@ -258,13 +286,48 @@ export default function RideTrackingSheet({
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Report driver — prominent, full width */}
+        {hasDriver && (
+          <TouchableOpacity
+            style={[styles.reportRow, alreadyReported && styles.reportRowDone]}
+            onPress={() => !alreadyReported && setReportVisible(true)}
+            disabled={alreadyReported}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={alreadyReported ? "checkmark-circle" : "flag-outline"}
+              size={18}
+              color={alreadyReported ? "#6B7280" : "#F87171"}
+            />
+            <Text
+              style={[
+                styles.reportRowText,
+                alreadyReported && styles.reportRowTextDone,
+              ]}
+            >
+              {alreadyReported ? "Reported" : "Report driver"}
+            </Text>
+          </TouchableOpacity>
+        )}
       </Animated.View>
 
       <DriverProfileSheet
         visible={driverProfileVisible}
         driverId={ride.driver?.id ?? null}
+        rideId={ride.id}
         onClose={() => setDriverProfileVisible(false)}
       />
+
+      {ride.driver && (
+        <ReportDriverModal
+          visible={reportVisible}
+          rideId={ride.id}
+          driverId={ride.driver.id}
+          driverName={ride.driver.name ?? null}
+          onDismiss={handleReportDismiss}
+        />
+      )}
     </>
   );
 }
@@ -390,6 +453,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+
+  reportRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: "rgba(248,113,113,0.1)",
+    borderWidth: 0.5,
+    borderColor: "rgba(248,113,113,0.25)",
+  },
+  reportRowDone: {
+    backgroundColor: "rgba(107,114,128,0.08)",
+    borderColor: "rgba(107,114,128,0.2)",
+  },
+  reportRowText: { fontSize: 14, fontWeight: "600", color: "#F87171" },
+  reportRowTextDone: { color: "#6B7280" },
 
   bottomRow: {
     flexDirection: "row",

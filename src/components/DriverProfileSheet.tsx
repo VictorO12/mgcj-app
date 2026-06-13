@@ -13,6 +13,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../hooks/AuthContext";
+import ReportDriverModal from "./ReportDriverModal";
 
 interface Review {
   id: string;
@@ -36,6 +38,7 @@ interface DriverProfile {
 interface Props {
   visible: boolean;
   driverId: string | null;
+  rideId?: string | null;
   onClose: () => void;
 }
 
@@ -69,12 +72,16 @@ function formatDate(iso: string) {
 export default function DriverProfileSheet({
   visible,
   driverId,
+  rideId = null,
   onClose,
 }: Props) {
+  const { profile } = useAuth();
   const slideY = useRef(new Animated.Value(700)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const [driver, setDriver] = useState<DriverProfile | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reportVisible, setReportVisible] = useState(false);
+  const [alreadyReported, setAlreadyReported] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -110,6 +117,25 @@ export default function DriverProfileSheet({
   useEffect(() => {
     if (visible && driverId) fetchDriverProfile(driverId);
   }, [visible, driverId]);
+
+  useEffect(() => {
+    if (visible && rideId && profile) {
+      checkExistingReport(rideId, profile.id);
+    } else {
+      setAlreadyReported(false);
+    }
+  }, [visible, rideId, profile]);
+
+  async function checkExistingReport(rideId: string, passengerId: string) {
+    const { data } = await supabase
+      .from("driver_reports")
+      .select("id")
+      .eq("ride_id", rideId)
+      .eq("passenger_id", passengerId)
+      .maybeSingle();
+
+    setAlreadyReported(!!data);
+  }
 
   async function fetchDriverProfile(id: string) {
     setLoading(true);
@@ -183,6 +209,11 @@ export default function DriverProfileSheet({
     return (count / driver.review_count) * 100;
   }
 
+  function handleReportDismiss(submitted: boolean) {
+    setReportVisible(false);
+    if (submitted) setAlreadyReported(true);
+  }
+
   const initials = driver?.name
     ? driver.name
         .split(" ")
@@ -214,9 +245,35 @@ export default function DriverProfileSheet({
 
           <View style={styles.headerRow}>
             <Text style={styles.headerTitle}>Driver profile</Text>
-            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-              <Ionicons name="close" size={18} color="#6B7280" />
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              {driverId && rideId && (
+                <TouchableOpacity
+                  style={[
+                    styles.reportBtn,
+                    alreadyReported && styles.reportBtnDone,
+                  ]}
+                  onPress={() => !alreadyReported && setReportVisible(true)}
+                  disabled={alreadyReported}
+                >
+                  <Ionicons
+                    name={alreadyReported ? "checkmark-circle" : "flag-outline"}
+                    size={14}
+                    color={alreadyReported ? "#6B7280" : "#F87171"}
+                  />
+                  <Text
+                    style={[
+                      styles.reportBtnText,
+                      alreadyReported && styles.reportBtnTextDone,
+                    ]}
+                  >
+                    {alreadyReported ? "Reported" : "Report"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+                <Ionicons name="close" size={18} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {loading ? (
@@ -346,6 +403,16 @@ export default function DriverProfileSheet({
           )}
         </Animated.View>
       </View>
+
+      {driverId && rideId && (
+        <ReportDriverModal
+          visible={reportVisible}
+          rideId={rideId}
+          driverId={driverId}
+          driverName={driver?.name ?? null}
+          onDismiss={handleReportDismiss}
+        />
+      )}
     </Modal>
   );
 }
@@ -379,6 +446,24 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  reportBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(248,113,113,0.1)",
+    borderWidth: 0.5,
+    borderColor: "rgba(248,113,113,0.25)",
+  },
+  reportBtnDone: {
+    backgroundColor: "rgba(107,114,128,0.1)",
+    borderColor: "rgba(107,114,128,0.25)",
+  },
+  reportBtnText: { fontSize: 12, fontWeight: "600", color: "#F87171" },
+  reportBtnTextDone: { color: "#6B7280" },
   closeBtn: {
     width: 30,
     height: 30,

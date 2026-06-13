@@ -71,7 +71,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
   // Driver profile sheet
   const [profileSheetVisible, setProfileSheetVisible] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
-
+  const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
   const isDriver = profile?.role === "driver";
   const fetchRidesRef = useRef<() => Promise<void>>();
 
@@ -202,8 +202,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
     fetchRidesRef.current?.();
   }
 
-  function openDriverProfile(driverId: string) {
+  function openDriverProfile(driverId: string, rideId: string) {
     setSelectedDriverId(driverId);
+    setSelectedRideId(rideId);
     setProfileSheetVisible(true);
   }
 
@@ -384,7 +385,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                             <TouchableOpacity
                               style={styles.viewProfileBtn}
                               onPress={() =>
-                                openDriverProfile(ride.other_party_id!)
+                                openDriverProfile(ride.other_party_id!, ride.id)
                               }
                               activeOpacity={0.7}
                             >
@@ -554,9 +555,11 @@ export default function RideHistoryScreen({ onClose }: Props) {
       <DriverProfileSheet
         visible={profileSheetVisible}
         driverId={selectedDriverId}
+        rideId={selectedRideId}
         onClose={() => {
           setProfileSheetVisible(false);
           setSelectedDriverId(null);
+          setSelectedRideId(null);
         }}
       />
     </View>

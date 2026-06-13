@@ -887,7 +887,7 @@ const styles = StyleSheet.create({
   navBtn: {
     position: "absolute",
     right: 16,
-    bottom: 280,
+    bottom: 340,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
