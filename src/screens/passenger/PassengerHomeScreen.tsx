@@ -78,7 +78,8 @@ const BUSY_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
-  const { ride, eta, statusLabel } = useActiveRide(profile?.id);
+  const { ride, eta, statusLabel, cancelledReason, clearCancelledReason } =
+    useActiveRide(profile?.id);
   useNotifications();
 
   const mapRef = useRef<MapView>(null);
@@ -361,6 +362,16 @@ export default function PassengerHomeScreen() {
         );
     })();
   }, []);
+
+  useEffect(() => {
+    if (cancelledReason === "timeout") {
+      Alert.alert(
+        "No drivers available",
+        "We couldn't find a driver nearby. Please try again in a few minutes.",
+        [{ text: "OK", onPress: clearCancelledReason }],
+      );
+    }
+  }, [cancelledReason]);
 
   useEffect(() => {
     if (!ride) {

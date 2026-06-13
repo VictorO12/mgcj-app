@@ -457,3 +457,9 @@ verify_jwt = true
 [functions.save-card]
 enabled = true
 verify_jwt = true
+
+[functions.expire-pending-rides]
+verify_jwt = false
+
+[functions.scheduled-ride-reminders]
+verify_jwt = false

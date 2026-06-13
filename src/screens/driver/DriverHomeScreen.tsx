@@ -7,8 +7,6 @@ import {
   Platform,
   Alert,
   Animated,
-  StyleSheet as RNStyleSheet,
-  ScrollView,
   FlatList,
   Dimensions,
   Image,
@@ -105,8 +103,8 @@ export default function DriverHomeScreen({
   const [activeCard, setActiveCard] = useState(0);
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
+  const lastDeclinedRideId = useRef<string | null>(null);
 
-  // Pulse animation for online dot
   useEffect(() => {
     if (!isOnline) return;
     Animated.loop(
@@ -126,7 +124,6 @@ export default function DriverHomeScreen({
     return () => pulseAnim.stopAnimation();
   }, [isOnline]);
 
-  // Pulse animation for assigned ride badge
   useEffect(() => {
     if (!assignedRide) return;
     Animated.loop(
@@ -222,6 +219,7 @@ export default function DriverHomeScreen({
             setPendingRide((prev) => (prev?.id === row.id ? null : prev));
             return;
           }
+          if (row.id === lastDeclinedRideId.current) return;
           await fetchPendingRide(row.id);
         },
       )
@@ -233,16 +231,25 @@ export default function DriverHomeScreen({
   }, [isOnline, profile]);
 
   async function checkExistingPendingRides() {
+    if (!profile) return;
     const { data } = await supabase
       .from("rides")
-      .select("id")
+      .select("id, declined_by")
       .eq("status", "pending")
       .order("created_at", { ascending: true })
-      .limit(1);
-    if (data && data.length > 0) await fetchPendingRide(data[0].id);
+      .limit(10);
+
+    if (!data) return;
+    const next = data.find(
+      (r) =>
+        r.id !== lastDeclinedRideId.current &&
+        (!r.declined_by || !r.declined_by.includes(profile.id)),
+    );
+    if (next) await fetchPendingRide(next.id);
   }
 
   async function fetchPendingRide(rideId: string) {
+    if (!profile) return;
     const { data: ride } = await supabase
       .from("rides")
       .select("*")
@@ -250,11 +257,14 @@ export default function DriverHomeScreen({
       .eq("status", "pending")
       .single();
     if (!ride) return;
+    if (ride.declined_by && ride.declined_by.includes(profile.id)) return;
+
     const { data: passenger } = await supabase
       .from("profiles")
       .select("name, phone")
       .eq("id", ride.passenger_id)
-      .single();
+      .maybeSingle();
+
     setPendingRide({
       id: ride.id,
       pickup_address: ride.pickup_address,
@@ -303,7 +313,6 @@ export default function DriverHomeScreen({
 
   async function acceptRide() {
     if (!pendingRide || !profile) return;
-
     const { data, error } = await supabase
       .from("rides")
       .update({
@@ -315,20 +324,43 @@ export default function DriverHomeScreen({
       .eq("status", "pending")
       .select("id")
       .single();
-
     if (error || !data) {
       Alert.alert("Ride unavailable", "This ride was already taken.");
       setPendingRide(null);
       return;
     }
-
     setPendingRide(null);
     onRideAccepted();
   }
 
-  async function declineRide() {
+  // timedOut=true: driver ignored the request (30s elapsed), re-show after 30s pause
+  // timedOut=false: driver manually declined, write to declined_by, re-show after 1s
+  async function declineRide(timedOut: boolean) {
+    if (pendingRide && profile?.id) {
+      lastDeclinedRideId.current = pendingRide.id;
+
+      if (!timedOut) {
+        const { error } = await supabase.rpc("append_declined_by", {
+          p_ride_id: pendingRide.id,
+          p_driver_id: profile.id,
+        });
+        if (error) console.error("[declineRide] rpc error:", error);
+      }
+    }
+
     setPendingRide(null);
-    setTimeout(checkExistingPendingRides, 1000);
+
+    if (timedOut) {
+      setTimeout(() => {
+        lastDeclinedRideId.current = null;
+        checkExistingPendingRides();
+      }, 30000);
+    } else {
+      setTimeout(() => {
+        lastDeclinedRideId.current = null;
+        checkExistingPendingRides();
+      }, 1000);
+    }
   }
 
   const hasAssignedRide = !!assignedRide;
@@ -371,8 +403,6 @@ export default function DriverHomeScreen({
               {isOnline ? "Online — accepting rides" : "Offline"}
             </Text>
           </View>
-
-          {/* Rating badge */}
           {average != null && (
             <View style={styles.ratingPill}>
               <Ionicons name="star" size={12} color="#F59E0B" />
@@ -381,8 +411,6 @@ export default function DriverHomeScreen({
             </View>
           )}
         </View>
-
-        {/* Avatar with badge */}
         <TouchableOpacity
           style={styles.avatarWrap}
           onPress={() => setMenuVisible(true)}
@@ -465,7 +493,6 @@ export default function DriverHomeScreen({
               </Text>
             </View>
           </View>
-
           <FlatList
             data={confirmedScheduledRides}
             keyExtractor={(r) => r.id}
@@ -508,7 +535,6 @@ export default function DriverHomeScreen({
               </View>
             )}
           />
-
           {confirmedScheduledRides.length > 1 && (
             <View style={styles.dotsRow}>
               {confirmedScheduledRides.map((_, i) => (
@@ -582,7 +608,6 @@ export default function DriverHomeScreen({
           <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
         </View>
       )}
-
       {editProfileVisible && (
         <View style={StyleSheet.absoluteFill}>
           <DriverEditProfileScreen
@@ -590,7 +615,6 @@ export default function DriverHomeScreen({
           />
         </View>
       )}
-
       {helpVisible && (
         <View style={StyleSheet.absoluteFill}>
           <HelpSupportScreen onClose={() => setHelpVisible(false)} />

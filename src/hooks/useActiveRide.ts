@@ -41,6 +41,7 @@ export function useActiveRide(passengerId: string | undefined) {
   const etaInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   // Holds the last known ride so we can surface it briefly on completion
   const lastRideRef = useRef<ActiveRide | null>(null)
+  const [cancelledReason, setCancelledReason] = useState<string | null>(null)
 
   useEffect(() => {
     if (ride) lastRideRef.current = ride
@@ -85,6 +86,9 @@ export function useActiveRide(passengerId: string | undefined) {
           // cancelled
           setRide(null)
           setEta(null)
+          if (row.cancelled_reason === 'timeout') {
+            setCancelledReason('timeout')
+          }
         }
       })
       .subscribe((status) => {
@@ -247,5 +251,5 @@ export function useActiveRide(passengerId: string | undefined) {
     }
   }
 
-  return { ride, eta, statusLabel }
+  return { ride, eta, statusLabel, cancelledReason, clearCancelledReason: () => setCancelledReason(null) }
 }

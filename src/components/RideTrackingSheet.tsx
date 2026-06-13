@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -73,7 +73,15 @@ export default function RideTrackingSheet({
   }
 
   function handleCancel() {
-    Alert.alert("Cancel ride?", "Are you sure you want to cancel this ride?", [
+    const isEnRoute =
+      ride.status === "assigned" || ride.status === "driver_arriving";
+
+    const title = isEnRoute ? "Cancel ride?" : "Cancel ride?";
+    const message = isEnRoute
+      ? "Your driver is already on the way. Are you sure you want to cancel?"
+      : "Are you sure you want to cancel this ride?";
+
+    Alert.alert(title, message, [
       { text: "No", style: "cancel" },
       { text: "Yes, cancel", style: "destructive", onPress: onCancel },
     ]);
@@ -82,6 +90,7 @@ export default function RideTrackingSheet({
   const isCompleted = ride.status === "completed";
   const isCancelled = ride.status === "cancelled";
   const isPending = ride.status === "pending";
+  const isInProgress = ride.status === "in_progress";
   const hasDriver = !!ride.driver;
 
   const statusColor = isCompleted
@@ -159,9 +168,7 @@ export default function RideTrackingSheet({
               {eta !== null ? `${eta} min` : "—"}
             </Text>
             <Text style={styles.etaLabel}>
-              {ride.status === "in_progress"
-                ? "to destination"
-                : "until pickup"}
+              {isInProgress ? "to destination" : "until pickup"}
             </Text>
           </View>
           <View style={styles.routeSummary}>
@@ -182,12 +189,9 @@ export default function RideTrackingSheet({
             onPress={() => setDriverProfileVisible(true)}
             activeOpacity={0.8}
           >
-            {/* Avatar */}
             <View style={styles.driverAvatar}>
               <Text style={styles.driverInitials}>{driverInitials}</Text>
             </View>
-
-            {/* Info */}
             <View style={styles.driverInfo}>
               <Text style={styles.driverName}>
                 {ride.driver!.name ?? "Your driver"}
@@ -201,8 +205,6 @@ export default function RideTrackingSheet({
                 <Ionicons name="chevron-forward" size={12} color="#6B7280" />
               </View>
             </View>
-
-            {/* Call / SMS */}
             <View style={styles.driverActions}>
               <TouchableOpacity
                 style={styles.actionBtn}
@@ -237,21 +239,27 @@ export default function RideTrackingSheet({
                 "--"}
             </Text>
           </View>
-          {!isCompleted && !isCancelled && (
+
+          {/* Cancel button logic:
+              - in_progress: hidden entirely
+              - assigned / driver_arriving: visible with stronger warning
+              - pending: visible with standard warning
+              - completed / cancelled: show completed badge or nothing */}
+          {isInProgress || isCompleted || isCancelled ? (
+            isCompleted ? (
+              <View style={styles.completedBadge}>
+                <Ionicons name="checkmark-circle" size={16} color="#1D9E75" />
+                <Text style={styles.completedText}>Trip complete</Text>
+              </View>
+            ) : null
+          ) : (
             <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
               <Text style={styles.cancelText}>Cancel ride</Text>
             </TouchableOpacity>
           )}
-          {isCompleted && (
-            <View style={styles.completedBadge}>
-              <Ionicons name="checkmark-circle" size={16} color="#1D9E75" />
-              <Text style={styles.completedText}>Trip complete</Text>
-            </View>
-          )}
         </View>
       </Animated.View>
 
-      {/* Driver profile sheet */}
       <DriverProfileSheet
         visible={driverProfileVisible}
         driverId={ride.driver?.id ?? null}
