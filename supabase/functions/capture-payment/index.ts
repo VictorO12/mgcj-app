@@ -144,13 +144,22 @@ Deno.serve(async (req) => {
     const transferCents = totalCents - feeCents
 
     // ── Capture the payment intent ──────────────────────────────
-    // Stripe will charge the card for exactly this amount
+    // Stripe will charge the card for exactly this amount.
+    // Only include transfer_data if this company has been onboarded
+    // to Stripe Connect (stripe_account_id set) — otherwise the
+    // original PaymentIntent has no transfer_data.destination and
+    // Stripe will reject transfer_data[amount].
+    const captureBody: Record<string, string> = {
+      amount_to_capture: totalCents.toString(),
+    }
+
+    if (company?.stripe_account_id) {
+      captureBody['transfer_data[amount]'] = transferCents.toString()
+    }
+
     const captured = await stripeRequest(
       `/payment_intents/${ride.stripe_payment_intent_id}/capture`,
-      {
-        amount_to_capture:               totalCents.toString(),
-        'transfer_data[amount]':         transferCents.toString(),
-      }
+      captureBody
     )
 
     if (captured.error) {

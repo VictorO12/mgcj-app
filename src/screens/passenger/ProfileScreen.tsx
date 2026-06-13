@@ -22,9 +22,12 @@ interface Props {
   onDeleteAccount: () => void;
 }
 
+const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
 export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
   const { profile, refetch, signOut } = useAuth();
   const [name, setName] = useState(profile?.name ?? "");
+  const [email, setEmail] = useState(profile?.email ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
     profile?.avatar_url ?? null,
   );
@@ -114,10 +117,23 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
       Alert.alert("Name required", "Please enter your name.");
       return;
     }
+
+    const trimmedEmail = email.trim();
+    if (trimmedEmail && !EMAIL_REGEX.test(trimmedEmail)) {
+      Alert.alert(
+        "Invalid email",
+        "Please enter a valid email address, or leave it blank.",
+      );
+      return;
+    }
+
     setSaving(true);
     const { error } = await supabase
       .from("profiles")
-      .update({ name: name.trim() })
+      .update({
+        name: name.trim(),
+        email: trimmedEmail || null,
+      })
       .eq("id", profile.id);
     setSaving(false);
     if (error) {
@@ -143,7 +159,6 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
     if (!profile) return;
     setDeleting(true);
     try {
-      // Get the current session token to pass to the edge function
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -155,7 +170,6 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
 
       if (response.error) throw new Error(response.error.message);
 
-      // Sign out locally — auth user is already gone on the server
       await signOut();
       onDeleteAccount();
     } catch (err: any) {
@@ -239,6 +253,29 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
             <Text style={styles.fieldLabel}>Phone number</Text>
             <Text style={styles.fieldValue}>{profile?.phone ?? "—"}</Text>
             <Text style={styles.fieldNote}>Contact support to change</Text>
+          </View>
+        </View>
+
+        {/* Email / Receipts */}
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>RECEIPTS</Text>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Email address</Text>
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              placeholderTextColor="#4B5563"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+            />
+            <Text style={styles.fieldNote}>
+              Get an emailed receipt after each completed ride. Optional — leave
+              blank to skip.
+            </Text>
           </View>
         </View>
 
@@ -360,7 +397,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 12, color: "#6B7280", fontWeight: "500" },
   input: { fontSize: 15, color: "#F1F5F9", paddingVertical: 8 },
   fieldValue: { fontSize: 15, color: "#CBD5E1", paddingVertical: 8 },
-  fieldNote: { fontSize: 12, color: "#4B5563" },
+  fieldNote: { fontSize: 12, color: "#4B5563", marginTop: 2 },
   fieldDivider: {
     height: 0.5,
     backgroundColor: "rgba(255,255,255,0.07)",
