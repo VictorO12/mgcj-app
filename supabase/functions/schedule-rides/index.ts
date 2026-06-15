@@ -1,5 +1,4 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -7,8 +6,9 @@ const supabase = createClient(
 )
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+const ASSIGN_RIDE_URL = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
 
-serve(async (_req) => {
+Deno.serve(async (_req) => {
   try {
     const now = new Date()
     const nowIso = now.toISOString()
@@ -16,7 +16,6 @@ serve(async (_req) => {
     console.log(`[schedule-rides] Running at ${nowIso}`)
 
     // ── 1. ACTIVATE rides whose scheduled_at has arrived ─────────
-    // Find confirmed scheduled rides where the time has come
     const { data: toActivate, error: activateError } = await supabase
       .from('rides')
       .select('*, profiles!rides_passenger_id_fkey(name, push_token)')
@@ -39,8 +38,8 @@ serve(async (_req) => {
 
         console.log(`[schedule-rides] Activated ride ${ride.id}`)
 
-        // Notify the driver if assigned
         if (ride.driver_id) {
+          // Driver already assigned — notify them it's time to go
           const { data: driverProfile } = await supabase
             .from('profiles')
             .select('name, push_token')
@@ -57,22 +56,21 @@ serve(async (_req) => {
             await sendPush(driverProfile.push_token, {
               title: '🕐 Scheduled ride starting now',
               body: `Time to pick up ${passengerProfile?.name?.split(' ')[0] ?? 'passenger'} at ${ride.pickup_address}`,
-              data: {
-                rideId: ride.id,
-                type: 'scheduled_start',
-                screen: 'active_ride',
-              },
+              data: { rideId: ride.id, type: 'scheduled_start', screen: 'active_ride' },
               priority: 'high',
             })
           }
         } else {
-          // No driver yet — notify all online drivers like a fresh ride
-          await supabase.functions.invoke('notify-drivers', {
-            body: {
-              type: 'INSERT',
-              table: 'rides',
-              record: { ...ride, status: 'pending' },
+          // No driver yet — use assign-ride to find the closest available driver
+          // instead of broadcasting to everyone
+          console.log(`[schedule-rides] No driver for ride ${ride.id} — triggering assign-ride`)
+          await fetch(ASSIGN_RIDE_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
             },
+            body: JSON.stringify({ ride_id: ride.id }),
           })
         }
       }
@@ -110,7 +108,6 @@ serve(async (_req) => {
           })
         }
 
-        // Also remind the driver if assigned
         if (ride.driver_id) {
           const { data: driverProfile } = await supabase
             .from('profiles')
@@ -232,10 +229,7 @@ async function sendPush(token: string, payload: {
   try {
     const res = await fetch(EXPO_PUSH_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         to: token,
         title: payload.title,

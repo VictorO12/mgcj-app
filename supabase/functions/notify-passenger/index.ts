@@ -1,5 +1,4 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -8,11 +7,10 @@ const supabase = createClient(
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   try {
     const body = await req.json()
 
-    // Only handle UPDATE events on rides table
     if (body.type !== 'UPDATE' || body.table !== 'rides') {
       return new Response('Not a ride update', { status: 200 })
     }
@@ -20,18 +18,21 @@ serve(async (req) => {
     const ride = body.record
     const oldRide = body.old_record
 
-    // Only fire when status actually changed
-    if (ride.status === oldRide?.status) {
-      return new Response('Status unchanged', { status: 200 })
+    const statusChanged = ride.status !== oldRide?.status
+    const justConfirmed =
+      ride.confirmed_by_driver === true &&
+      oldRide?.confirmed_by_driver === false
+
+    if (!statusChanged && !justConfirmed) {
+      return new Response('No relevant change', { status: 200 })
     }
 
-    // Skip statuses we don't notify on
     const NOTIFY_STATUSES = ['assigned', 'driver_arriving', 'in_progress', 'completed', 'cancelled']
     if (!NOTIFY_STATUSES.includes(ride.status)) {
       return new Response('Status not notifiable', { status: 200 })
     }
 
-    console.log(`Ride ${ride.id} status: ${oldRide?.status} → ${ride.status}`)
+    console.log(`Ride ${ride.id} | ${oldRide?.status} → ${ride.status} | confirmed: ${oldRide?.confirmed_by_driver} → ${ride.confirmed_by_driver}`)
 
     // Get passenger push token
     const { data: passengerProfile } = await supabase
@@ -41,11 +42,11 @@ serve(async (req) => {
       .single()
 
     if (!passengerProfile?.push_token) {
-      console.log('No passenger push token found')
+      console.log('No passenger push token')
       return new Response('No passenger push token', { status: 200 })
     }
 
-    // Get driver name if there is one
+    // Get driver name
     let driverFirstName = 'Your driver'
     if (ride.driver_id) {
       const { data: driverProfile } = await supabase
@@ -58,16 +59,41 @@ serve(async (req) => {
       }
     }
 
-    // Build notification content based on new status
+    function formatScheduledTime(iso: string): string {
+      return new Date(iso).toLocaleString('en-CA', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    }
+
+    const isScheduled = !!ride.scheduled_at
+
     let title = ''
     let body_text = ''
     let data: Record<string, any> = { rideId: ride.id, screen: 'ride' }
 
     switch (ride.status) {
-      case 'assigned':
-        title = '🚗 Driver on the way!'
-        body_text = `${driverFirstName} has accepted your ride and is heading to pick you up`
+      case 'assigned': {
+        // ── KEY FIX: don't notify passenger until driver has confirmed ──
+        // assign-ride sets status=assigned with confirmed_by_driver=false.
+        // We only want to notify the passenger once the driver taps Accept.
+        if (!ride.confirmed_by_driver) {
+          return new Response('Driver not yet confirmed — skipping notification', { status: 200 })
+        }
+
+        if (isScheduled) {
+          const when = formatScheduledTime(ride.scheduled_at)
+          title = '🗓️ Scheduled ride confirmed!'
+          body_text = `${driverFirstName} has confirmed your ride for ${when}`
+        } else {
+          title = '🚗 Driver on the way!'
+          body_text = `${driverFirstName} has accepted your ride and is heading to pick you up`
+        }
         break
+      }
 
       case 'driver_arriving':
         title = '📍 Driver has arrived!'
@@ -80,18 +106,17 @@ serve(async (req) => {
         body_text = `You're on your way to ${ride.dropoff_address}`
         break
 
-      case 'completed':
+      case 'completed': {
         const fare = ride.fare_final
           ? `$${Number(ride.fare_final).toFixed(2)}`
           : ride.fare_estimate
           ? `$${Number(ride.fare_estimate).toFixed(2)}`
           : ''
         title = '✅ Ride completed!'
-        body_text = fare
-          ? `Thanks for riding! Your fare was ${fare}`
-          : 'Thanks for riding!'
+        body_text = fare ? `Thanks for riding! Your fare was ${fare}` : 'Thanks for riding!'
         data.screen = 'history'
         break
+      }
 
       case 'cancelled':
         title = '❌ Ride cancelled'
@@ -113,10 +138,7 @@ serve(async (req) => {
 
     const response = await fetch(EXPO_PUSH_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(notification),
     })
 
@@ -124,7 +146,7 @@ serve(async (req) => {
     console.log('Push result:', JSON.stringify(result))
 
     return new Response(
-      JSON.stringify({ success: true, status: ride.status }),
+      JSON.stringify({ success: true, status: ride.status, scheduled: isScheduled }),
       { headers: { 'Content-Type': 'application/json' }, status: 200 }
     )
 

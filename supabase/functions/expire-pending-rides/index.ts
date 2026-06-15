@@ -5,6 +5,7 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+const ASSIGN_RIDE_URL = `${Deno.env.get("SUPABASE_URL")}/functions/v1/assign-ride`;
 const TIMEOUT_MINUTES = 5;
 const REBROADCAST_MINUTES = 2;
 
@@ -25,7 +26,6 @@ Deno.serve(async () => {
     console.error("[expire-pending-rides] fetch expired error:", expiredError);
   } else if (expiredRides && expiredRides.length > 0) {
     const expiredIds = expiredRides.map((r) => r.id);
-
     await supabase
       .from("rides")
       .update({ status: "cancelled", cancelled_reason: "timeout" })
@@ -38,38 +38,51 @@ Deno.serve(async () => {
         data: { type: "ride_timeout" },
       });
     }
-
     console.log(`[expire-pending-rides] cancelled ${expiredIds.length} rides`);
   }
 
-  // ── 2. Re-broadcast rides pending > 2 minutes ────────────────
-  // Clear declined_by so all drivers get another chance
+  // ── 2. Retry assignment for rides pending > 2 minutes ────────
+  // These are rides that have been declined by all available drivers
+  // or where assign-ride couldn't find anyone. Clear declined_by and
+  // call assign-ride again to give all drivers another chance.
   const { data: staleRides, error: staleError } = await supabase
     .from("rides")
     .select("id, declined_by")
     .eq("status", "pending")
     .is("scheduled_at", null)
     .lt("created_at", rebroadcastCutoff)
-    .gte("created_at", timeoutCutoff) // not already in expired bucket
-    .not("declined_by", "eq", "{}"); // only ones that have been declined
+    .gte("created_at", timeoutCutoff); // not already in the expired bucket
 
   if (staleError) {
     console.error("[expire-pending-rides] fetch stale error:", staleError);
   } else if (staleRides && staleRides.length > 0) {
-    const staleIds = staleRides.map((r) => r.id);
+    console.log(`[expire-pending-rides] retrying assignment for ${staleRides.length} stale rides`);
 
-    await supabase
-      .from("rides")
-      .update({ declined_by: [] })
-      .in("id", staleIds);
+    for (const ride of staleRides) {
+      // Clear declined_by so all drivers get another chance
+      await supabase
+        .from("rides")
+        .update({ declined_by: [] })
+        .eq("id", ride.id);
 
-    console.log(`[expire-pending-rides] re-broadcast ${staleIds.length} rides`);
+      // Actively call assign-ride rather than passively waiting
+      await fetch(ASSIGN_RIDE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+        },
+        body: JSON.stringify({ ride_id: ride.id }),
+      });
+
+      console.log(`[expire-pending-rides] re-triggered assign-ride for ${ride.id}`);
+    }
   }
 
   return new Response(
     JSON.stringify({
       expired: expiredRides?.length ?? 0,
-      rebroadcast: staleRides?.length ?? 0,
+      retried: staleRides?.length ?? 0,
     }),
     { status: 200 }
   );
@@ -81,11 +94,11 @@ async function sendPush(
 ) {
   const { data: profile } = await supabase
     .from("profiles")
-    .select("expo_push_token")
+    .select("push_token")
     .eq("id", userId)
     .maybeSingle();
 
-  const token = profile?.expo_push_token;
+  const token = profile?.push_token;
   if (!token) return;
 
   try {

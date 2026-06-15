@@ -24,13 +24,12 @@ interface PendingRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  scheduled_at: string | null;
 }
 
 interface Props {
   ride: PendingRide;
   onAccept: () => void;
-  // timedOut=true means the 30s timer expired (no action taken)
-  // timedOut=false means the driver manually tapped Decline
   onDecline: (timedOut: boolean) => void;
 }
 
@@ -39,6 +38,15 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
   const timerProgress = useRef(new Animated.Value(1)).current;
   const [secondsLeft, setSecondsLeft] = useState(TIMEOUT_SECONDS);
   const timerInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Always call the latest version of onDecline — avoids stale closure
+  // when the timer fires 30s after mount
+  const onDeclineRef = useRef(onDecline);
+  useEffect(() => {
+    onDeclineRef.current = onDecline;
+  }, [onDecline]);
+
+  const isScheduled = !!ride.scheduled_at;
 
   useEffect(() => {
     Animated.spring(slideY, {
@@ -65,7 +73,9 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
         if (s <= 1) {
           clearInterval(timerInterval.current!);
           timerInterval.current = null;
-          setTimeout(() => onDecline(true), 0); // defer to avoid setState-during-render
+          // Use ref so we always call the latest onDecline, not the one
+          // captured at mount time which may have a stale closure
+          setTimeout(() => onDeclineRef.current(true), 0);
           return 0;
         }
         return s - 1;
@@ -102,14 +112,23 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
     ride.dropoff_lng,
   ).toFixed(1);
 
-  // Manual decline — clear timer so it can't fire again
   function handleDecline() {
     if (timerInterval.current) {
       clearInterval(timerInterval.current);
       timerInterval.current = null;
     }
     Vibration.cancel();
-    onDecline(false); // manual decline
+    onDeclineRef.current(false);
+  }
+
+  function formatScheduledTime(iso: string) {
+    return new Date(iso).toLocaleString("en-CA", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   }
 
   return (
@@ -126,7 +145,7 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
                 inputRange: [0, 1],
                 outputRange: ["0%", "100%"],
               }),
-              backgroundColor: timerColor,
+              backgroundColor: isScheduled ? "#A855F7" : timerColor,
             },
           ]}
         />
@@ -134,8 +153,28 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
 
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.newRideBadge}>
-          <Text style={styles.newRideText}>New ride request</Text>
+        <View
+          style={[
+            styles.newRideBadge,
+            isScheduled && styles.newRideBadgeScheduled,
+          ]}
+        >
+          {isScheduled && (
+            <Ionicons
+              name="calendar"
+              size={12}
+              color="#A855F7"
+              style={{ marginRight: 4 }}
+            />
+          )}
+          <Text
+            style={[
+              styles.newRideText,
+              isScheduled && styles.newRideTextScheduled,
+            ]}
+          >
+            {isScheduled ? "Scheduled ride" : "New ride request"}
+          </Text>
         </View>
         <View style={styles.timerPill}>
           <Ionicons name="time-outline" size={13} color="#F59E0B" />
@@ -143,9 +182,32 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
         </View>
       </View>
 
+      {/* Scheduled time card */}
+      {isScheduled && (
+        <View style={styles.scheduledCard}>
+          <View style={styles.scheduledCardLeft}>
+            <Ionicons name="calendar-outline" size={18} color="#A855F7" />
+            <View>
+              <Text style={styles.scheduledCardLabel}>Scheduled for</Text>
+              <Text style={styles.scheduledCardTime}>
+                {formatScheduledTime(ride.scheduled_at!)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.scheduledCardBadge}>
+            <Text style={styles.scheduledCardBadgeText}>Advance booking</Text>
+          </View>
+        </View>
+      )}
+
       {/* Passenger */}
       <View style={styles.passengerRow}>
-        <View style={styles.passengerAvatar}>
+        <View
+          style={[
+            styles.passengerAvatar,
+            isScheduled && styles.passengerAvatarScheduled,
+          ]}
+        >
           <Text style={styles.passengerInitials}>
             {ride.passenger_name
               ?.split(" ")
@@ -159,7 +221,9 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
           <Text style={styles.passengerName}>
             {ride.passenger_name ?? "Passenger"}
           </Text>
-          <Text style={styles.passengerSub}>Requesting a ride</Text>
+          <Text style={styles.passengerSub}>
+            {isScheduled ? "Scheduled pickup" : "Requesting a ride"}
+          </Text>
         </View>
       </View>
 
@@ -215,12 +279,14 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
           <Text style={styles.declineBtnText}>Decline</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={styles.acceptBtn}
+          style={[styles.acceptBtn, isScheduled && styles.acceptBtnScheduled]}
           onPress={onAccept}
           activeOpacity={0.85}
         >
           <Ionicons name="checkmark" size={22} color="#fff" />
-          <Text style={styles.acceptBtnText}>Accept</Text>
+          <Text style={styles.acceptBtnText}>
+            {isScheduled ? "Confirm booking" : "Accept"}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -253,6 +319,8 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   newRideBadge: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "rgba(232,80,10,0.15)",
     borderRadius: 20,
     paddingVertical: 4,
@@ -260,7 +328,12 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(232,80,10,0.3)",
   },
+  newRideBadgeScheduled: {
+    backgroundColor: "rgba(168,85,247,0.15)",
+    borderColor: "rgba(168,85,247,0.3)",
+  },
   newRideText: { fontSize: 12, fontWeight: "600", color: "#E8500A" },
+  newRideTextScheduled: { color: "#A855F7" },
   timerPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -273,6 +346,37 @@ const styles = StyleSheet.create({
     borderColor: "rgba(245,158,11,0.25)",
   },
   timerText: { fontSize: 12, fontWeight: "600", color: "#F59E0B" },
+  scheduledCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: 20,
+    marginBottom: 14,
+    backgroundColor: "rgba(168,85,247,0.08)",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.25)",
+  },
+  scheduledCardLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  scheduledCardLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#9CA3AF",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  scheduledCardTime: { fontSize: 14, fontWeight: "700", color: "#E9D5FF" },
+  scheduledCardBadge: {
+    backgroundColor: "rgba(168,85,247,0.2)",
+    borderRadius: 8,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderWidth: 0.5,
+    borderColor: "rgba(168,85,247,0.35)",
+  },
+  scheduledCardBadgeText: { fontSize: 10, fontWeight: "600", color: "#C084FC" },
   passengerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -289,6 +393,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1.5,
     borderColor: "rgba(74,158,255,0.3)",
+  },
+  passengerAvatarScheduled: {
+    backgroundColor: "#2D1B4E",
+    borderColor: "rgba(168,85,247,0.35)",
   },
   passengerInitials: { fontSize: 16, fontWeight: "700", color: "#93C5FD" },
   passengerName: { fontSize: 16, fontWeight: "600", color: "#F1F5F9" },
@@ -355,5 +463,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: "#1D9E75",
   },
+  acceptBtnScheduled: { backgroundColor: "#7C3AED" },
   acceptBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
 });

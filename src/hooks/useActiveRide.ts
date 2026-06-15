@@ -69,6 +69,8 @@ export function useActiveRide(passengerId: string | undefined) {
         console.log('[Realtime] ride update:', row.status, '| scheduled_at:', row.scheduled_at)
 
         if (ACTIVE_STATUSES.includes(row.status) && isRideNow(row)) {
+          // Don't fetch for assigned rides that haven't been confirmed yet
+          if (row.status === 'assigned' && !row.confirmed_by_driver) return
           fetchActiveRide(passengerId)
         } else if (row.status === 'completed') {
           // Use lastRideRef to surface the completed state even if ride
@@ -155,9 +157,13 @@ export function useActiveRide(passengerId: string | undefined) {
       .eq('passenger_id', pid)
       .in('status', ACTIVE_STATUSES)
       .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
+      // Don't surface the ride to the passenger until the driver has confirmed.
+      // 'pending' rides have no driver yet so confirmed_by_driver is false by
+      // definition — we still want to show those (passenger sees "Finding driver").
+      // Only filter out 'assigned' rides that haven't been confirmed yet.
+      .or('status.eq.pending,confirmed_by_driver.eq.true')
       .order('created_at', { ascending: false })
-      .limit(1)
-
+      .limit(1);
     if (error) { console.error('[fetchActiveRide] error:', error); return }
     if (!rides || rides.length === 0) { setRide(null); return }
 

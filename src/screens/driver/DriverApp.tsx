@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
@@ -7,6 +7,8 @@ import DriverActiveRideScreen from "./DriverActiveRideScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
 import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
+import RideRequestSheet from "./RideRequestSheet";
+import Constants from "expo-constants";
 
 interface ActiveRide {
   id: string;
@@ -38,6 +40,20 @@ interface AssignedRide {
   payment_method: string | null;
 }
 
+interface PendingRide {
+  id: string;
+  pickup_address: string;
+  dropoff_address: string;
+  pickup_lat: number;
+  pickup_lng: number;
+  dropoff_lat: number;
+  dropoff_lng: number;
+  fare_estimate: number | null;
+  passenger_name: string | null;
+  passenger_phone: string | null;
+  scheduled_at: string | null;
+}
+
 interface DriverRecord {
   vehicle_make: string | null;
   vehicle_model: string | null;
@@ -55,7 +71,6 @@ interface ConfirmedScheduledRide {
 
 const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
-// A ride is "now" if it has no scheduled_at, or that time has already passed
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true;
   return new Date(row.scheduled_at) <= new Date();
@@ -65,6 +80,7 @@ export default function DriverApp() {
   const { profile } = useAuth();
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
+  const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
   const [driverRecord, setDriverRecord] = useState<DriverRecord | null>(null);
   const [loadingDriver, setLoadingDriver] = useState(true);
   const [showAssigned, setShowAssigned] = useState(false);
@@ -72,6 +88,17 @@ export default function DriverApp() {
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
+
+  // Ref so handleDeclinePendingRide always reads the latest pendingRide
+  // even when called from a stale closure (e.g. timer timeout after 30s)
+  const pendingRideRef = useRef<PendingRide | null>(null);
+  useEffect(() => {
+    pendingRideRef.current = pendingRide;
+  }, [pendingRide]);
+
+  // Track rides we're currently processing a decline/timeout for so the
+  // realtime callback doesn't re-show the popup while the server is resetting
+  const decliningRideIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!profile) return;
@@ -81,7 +108,7 @@ export default function DriverApp() {
     fetchConfirmedScheduledRides();
   }, [profile]);
 
-  // ── Realtime: watch for ride changes ────────────────────────
+  // ── Realtime: watch for ride changes on this driver ──────────
   useEffect(() => {
     if (!profile) return;
     const channel = supabase
@@ -89,22 +116,32 @@ export default function DriverApp() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "rides" },
-        (payload) => {
+        async (payload) => {
           const row = payload.new as any;
           if (row.driver_id !== profile.id) return;
 
           const isFutureScheduled = !isRideNow(row);
 
-          if (ACTIVE_STATUSES.includes(row.status) && !isFutureScheduled) {
+          if (row.status === "assigned" && !row.confirmed_by_driver) {
+            if (decliningRideIds.current.has(row.id)) return;
+            setPendingRide((prev) => {
+              if (prev?.id === row.id) return prev;
+              showRideRequestPopup(row);
+              return prev;
+            });
+          } else if (row.status === "assigned" && row.confirmed_by_driver) {
             fetchActiveRide();
-            fetchAssignedRide();
+            fetchConfirmedScheduledRides();
+          } else if (
+            ACTIVE_STATUSES.includes(row.status) &&
+            row.confirmed_by_driver &&
+            !isFutureScheduled
+          ) {
+            fetchActiveRide();
             fetchConfirmedScheduledRides();
           } else if (row.status === "completed" || row.status === "cancelled") {
             setActiveRide(null);
             setAssignedRide(null);
-            fetchConfirmedScheduledRides();
-          } else if (row.status === "assigned") {
-            fetchAssignedRide();
             fetchConfirmedScheduledRides();
           }
         },
@@ -115,7 +152,7 @@ export default function DriverApp() {
     };
   }, [profile]);
 
-  // ── Handle notification tap ──────────────────────────────────
+  // ── Handle notification tap ───────────────────────────────────
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(
       async (response) => {
@@ -124,35 +161,127 @@ export default function DriverApp() {
         if (!rideId || !profile) return;
 
         if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) {
-          await fetchAssignedRide();
-          setShowAssigned(true);
+          const { data: rideRow } = await supabase
+            .from("rides")
+            .select("*")
+            .eq("id", rideId)
+            .eq("driver_id", profile.id)
+            .maybeSingle();
+
+          if (rideRow && !rideRow.confirmed_by_driver) {
+            await showRideRequestPopup(rideRow);
+          } else if (rideRow?.confirmed_by_driver) {
+            fetchAssignedRide();
+            setShowAssigned(true);
+          }
         } else if (action === "ACCEPT") {
-          const { data: rideCheck } = await supabase
-            .from("rides")
-            .select("id, status")
-            .eq("id", rideId)
-            .single();
-
-          if (!rideCheck || rideCheck.status !== "pending") return;
-
-          const { error } = await supabase
-            .from("rides")
-            .update({
-              driver_id: profile.id,
-              status: "assigned",
-              confirmed_by_driver: true,
-            })
-            .eq("id", rideId)
-            .eq("status", "pending");
-
-          if (!error) fetchActiveRide();
+          await confirmRide(rideId);
         } else if (action === "DECLINE") {
-          console.log("Driver declined ride from notification:", rideId);
+          await declineAndReassign(rideId);
         }
       },
     );
     return () => sub.remove();
   }, [profile]);
+
+  // ── Fetch a ride row and show the RideRequestSheet popup ─────
+  async function showRideRequestPopup(rideRow: any) {
+    const { data: passenger } = await supabase
+      .from("profiles")
+      .select("name, phone")
+      .eq("id", rideRow.passenger_id)
+      .maybeSingle();
+
+    setPendingRide({
+      id: rideRow.id,
+      pickup_address: rideRow.pickup_address,
+      dropoff_address: rideRow.dropoff_address,
+      pickup_lat: rideRow.pickup_lat,
+      pickup_lng: rideRow.pickup_lng,
+      dropoff_lat: rideRow.dropoff_lat,
+      dropoff_lng: rideRow.dropoff_lng,
+      fare_estimate: rideRow.fare_estimate,
+      passenger_name: passenger?.name ?? null,
+      passenger_phone: passenger?.phone ?? null,
+      scheduled_at: rideRow.scheduled_at ?? null,
+    });
+  }
+
+  // ── Confirm ride (accept from popup or notification) ─────────
+  async function confirmRide(rideId: string) {
+    if (!profile) return;
+    const { error } = await supabase
+      .from("rides")
+      .update({ confirmed_by_driver: true })
+      .eq("id", rideId)
+      .eq("driver_id", profile.id)
+      .eq("status", "assigned");
+
+    if (!error) {
+      setPendingRide(null);
+    }
+  }
+
+  // ── Decline and immediately trigger reassignment server-side ──
+  async function declineAndReassign(rideId: string) {
+    if (!profile) return;
+
+    const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+    const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey;
+
+    decliningRideIds.current.add(rideId);
+    setPendingRide(null);
+
+    try {
+      const res = await fetch(`${supabaseUrl}/functions/v1/assign-ride`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${supabaseAnonKey}`,
+        },
+        body: JSON.stringify({
+          ride_id: rideId,
+          declined_by_driver_id: profile.id,
+        }),
+      });
+      const json = await res.json();
+      console.log("[declineAndReassign] response:", JSON.stringify(json));
+    } catch (e) {
+      console.error("[declineAndReassign] fetch error:", e);
+    } finally {
+      setTimeout(() => {
+        decliningRideIds.current.delete(rideId);
+      }, 3000);
+    }
+  }
+
+  // ── Accept from popup sheet ───────────────────────────────────
+  async function handleAcceptPendingRide() {
+    if (!pendingRideRef.current) return;
+    await confirmRide(pendingRideRef.current.id);
+    if (pendingRideRef.current?.scheduled_at) {
+      fetchConfirmedScheduledRides();
+    }
+  }
+
+  // ── Decline from popup sheet (manual or timeout) ─────────────
+  // Uses pendingRideRef so the timer callback (fired 30s after mount)
+  // always reads the current ride, not a stale closure value
+  async function handleDeclinePendingRide(_timedOut: boolean) {
+    console.log("[decline] timedOut:", _timedOut);
+    console.log(
+      "[decline] pendingRideRef.current:",
+      pendingRideRef.current?.id,
+    );
+    console.log("[decline] pendingRide state:", pendingRide?.id);
+    const ride = pendingRideRef.current;
+    if (!ride) {
+      console.log("[decline] no ride found — aborting");
+      return;
+    }
+    console.log("[decline] calling declineAndReassign for", ride.id);
+    await declineAndReassign(ride.id);
+  }
 
   async function fetchDriverRecord() {
     if (!profile) return;
@@ -346,11 +475,20 @@ export default function DriverApp() {
   }
 
   return (
-    <DriverHomeScreen
-      assignedRide={assignedRide}
-      onOpenAssigned={() => setShowAssignedList(true)}
-      confirmedScheduledRides={confirmedScheduledRides}
-      onRideAccepted={fetchActiveRide}
-    />
+    <>
+      <DriverHomeScreen
+        assignedRide={assignedRide}
+        onOpenAssigned={() => setShowAssignedList(true)}
+        confirmedScheduledRides={confirmedScheduledRides}
+        onRideAccepted={fetchActiveRide}
+      />
+      {pendingRide && (
+        <RideRequestSheet
+          ride={pendingRide}
+          onAccept={handleAcceptPendingRide}
+          onDecline={handleDeclinePendingRide}
+        />
+      )}
+    </>
   );
 }

@@ -94,22 +94,14 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     const userId = data.user.id;
     console.log("[OTP] auth verified, user id:", userId);
 
-    // Check what we already have
+    // Check for profile by auth user id (normal path)
     const { data: existing } = await supabase
       .from("profiles")
       .select("id, name, role")
       .eq("id", userId)
       .maybeSingle();
 
-    console.log("[OTP] existing profile:", existing);
-    console.log(
-      "[OTP] isDriver:",
-      isDriver,
-      "| inviteCode:",
-      inviteCode,
-      "| existing:",
-      !!existing,
-    );
+    console.log("[OTP] existing profile by id:", existing);
 
     // ── DRIVER PATH ──────────────────────────────────────────────
     if (isDriver && inviteCode) {
@@ -158,6 +150,51 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     // ── PASSENGER PATH ───────────────────────────────────────────
     console.log("[OTP] passenger path");
 
+    // Check if a guest profile exists for this phone number
+    // (created by dispatch when booking a ride for an unregistered passenger)
+    if (!existing) {
+      const { data: guestProfile } = await supabase
+        .from("profiles")
+        .select("id, name, role")
+        .eq("phone", phone)
+        .eq("role", "passenger")
+        .maybeSingle();
+
+      console.log("[OTP] guest profile by phone:", guestProfile);
+
+      if (guestProfile && guestProfile.id !== userId) {
+        // Guest profile exists from a dispatch booking — merge it
+        // Update the profile's id to the new real auth user's id
+        console.log(
+          "[OTP] merging guest profile:",
+          guestProfile.id,
+          "→",
+          userId,
+        );
+        const { error: mergeError } = await supabase
+          .from("profiles")
+          .update({ id: userId, name: name ?? guestProfile.name })
+          .eq("id", guestProfile.id);
+
+        if (mergeError) {
+          console.log("[OTP] merge error:", mergeError);
+          // Merge failed (likely FK constraint) — fall through to normal upsert
+        } else {
+          // Also update rides that reference the old guest profile id
+          await supabase
+            .from("rides")
+            .update({ passenger_id: userId })
+            .eq("passenger_id", guestProfile.id);
+
+          console.log("[OTP] guest merge complete");
+          await refetch();
+          setLoading(false);
+          return;
+        }
+      }
+    }
+
+    // No guest profile found — handle normal sign-in / sign-up
     if (!existing && !isNewUser) {
       // Sign-in attempt but no profile exists — number not registered
       console.log("[OTP] sign-in blocked: no profile for this number");
@@ -179,7 +216,7 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     }
 
     if (!existing && isNewUser) {
-      // New signup — upsert the full profile directly
+      // New signup — upsert the full profile
       const { error: upsertError } = await supabase
         .from("profiles")
         .upsert(
@@ -189,7 +226,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       console.log("[OTP] passenger profile upsert:", upsertError);
     }
 
-    // Refetch so AuthContext gets the complete profile and routes to home
     await refetch();
     setLoading(false);
   }

@@ -17,25 +17,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useNotifications } from "../../hooks/useNotifications";
-import RideRequestSheet from "./RideRequestSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
 import DriverEditProfileScreen from "./DriverEditProfileScreen";
 import HelpSupportScreen from "../shared/HelpSupportScreen";
-
-interface PendingRide {
-  id: string;
-  pickup_address: string;
-  dropoff_address: string;
-  pickup_lat: number;
-  pickup_lng: number;
-  dropoff_lat: number;
-  dropoff_lng: number;
-  fare_estimate: number | null;
-  passenger_name: string | null;
-  passenger_phone: string | null;
-}
 
 interface AssignedRide {
   id: string;
@@ -94,7 +80,6 @@ export default function DriverHomeScreen({
 
   const [isOnline, setIsOnline] = useState(false);
   const [location, setLocation] = useState<LatLng | null>(null);
-  const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
@@ -103,7 +88,6 @@ export default function DriverHomeScreen({
   const [activeCard, setActiveCard] = useState(0);
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
-  const lastDeclinedRideId = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isOnline) return;
@@ -206,79 +190,6 @@ export default function DriverHomeScreen({
     };
   }, [isOnline, profile]);
 
-  useEffect(() => {
-    if (!isOnline || !profile) return;
-    const channel = supabase
-      .channel("pending-rides-" + profile.id)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "rides" },
-        async (payload) => {
-          const row = payload.new as any;
-          if (row.status !== "pending") {
-            setPendingRide((prev) => (prev?.id === row.id ? null : prev));
-            return;
-          }
-          if (row.id === lastDeclinedRideId.current) return;
-          await fetchPendingRide(row.id);
-        },
-      )
-      .subscribe();
-    checkExistingPendingRides();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [isOnline, profile]);
-
-  async function checkExistingPendingRides() {
-    if (!profile) return;
-    const { data } = await supabase
-      .from("rides")
-      .select("id, declined_by")
-      .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(10);
-
-    if (!data) return;
-    const next = data.find(
-      (r) =>
-        r.id !== lastDeclinedRideId.current &&
-        (!r.declined_by || !r.declined_by.includes(profile.id)),
-    );
-    if (next) await fetchPendingRide(next.id);
-  }
-
-  async function fetchPendingRide(rideId: string) {
-    if (!profile) return;
-    const { data: ride } = await supabase
-      .from("rides")
-      .select("*")
-      .eq("id", rideId)
-      .eq("status", "pending")
-      .single();
-    if (!ride) return;
-    if (ride.declined_by && ride.declined_by.includes(profile.id)) return;
-
-    const { data: passenger } = await supabase
-      .from("profiles")
-      .select("name, phone")
-      .eq("id", ride.passenger_id)
-      .maybeSingle();
-
-    setPendingRide({
-      id: ride.id,
-      pickup_address: ride.pickup_address,
-      dropoff_address: ride.dropoff_address,
-      pickup_lat: ride.pickup_lat,
-      pickup_lng: ride.pickup_lng,
-      dropoff_lat: ride.dropoff_lat,
-      dropoff_lng: ride.dropoff_lng,
-      fare_estimate: ride.fare_estimate,
-      passenger_name: passenger?.name ?? null,
-      passenger_phone: passenger?.phone ?? null,
-    });
-  }
-
   async function toggleOnline() {
     if (!profile) return;
     if (!location && !isOnline) {
@@ -306,61 +217,8 @@ export default function DriverHomeScreen({
       Alert.alert("Error", error.message);
     } else {
       setIsOnline(goingOnline);
-      if (!goingOnline) setPendingRide(null);
     }
     setTogglingOnline(false);
-  }
-
-  async function acceptRide() {
-    if (!pendingRide || !profile) return;
-    const { data, error } = await supabase
-      .from("rides")
-      .update({
-        driver_id: profile.id,
-        status: "assigned",
-        confirmed_by_driver: true,
-      })
-      .eq("id", pendingRide.id)
-      .eq("status", "pending")
-      .select("id")
-      .single();
-    if (error || !data) {
-      Alert.alert("Ride unavailable", "This ride was already taken.");
-      setPendingRide(null);
-      return;
-    }
-    setPendingRide(null);
-    onRideAccepted();
-  }
-
-  // timedOut=true: driver ignored the request (30s elapsed), re-show after 30s pause
-  // timedOut=false: driver manually declined, write to declined_by, re-show after 1s
-  async function declineRide(timedOut: boolean) {
-    if (pendingRide && profile?.id) {
-      lastDeclinedRideId.current = pendingRide.id;
-
-      if (!timedOut) {
-        const { error } = await supabase.rpc("append_declined_by", {
-          p_ride_id: pendingRide.id,
-          p_driver_id: profile.id,
-        });
-        if (error) console.error("[declineRide] rpc error:", error);
-      }
-    }
-
-    setPendingRide(null);
-
-    if (timedOut) {
-      setTimeout(() => {
-        lastDeclinedRideId.current = null;
-        checkExistingPendingRides();
-      }, 30000);
-    } else {
-      setTimeout(() => {
-        lastDeclinedRideId.current = null;
-        checkExistingPendingRides();
-      }, 1000);
-    }
   }
 
   const hasAssignedRide = !!assignedRide;
@@ -444,23 +302,64 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       </View>
 
-      {/* Assigned ride banner */}
+      {/* Assigned ride banner — dispatch-assigned rides only */}
       {hasAssignedRide && (
         <TouchableOpacity
-          style={styles.assignedBanner}
+          style={[
+            styles.assignedBanner,
+            assignedRide!.scheduled_at && styles.assignedBannerScheduled,
+          ]}
           onPress={onOpenAssigned}
           activeOpacity={0.85}
         >
-          <View style={styles.assignedBannerDot} />
+          <View
+            style={[
+              styles.assignedBannerDot,
+              assignedRide!.scheduled_at && { backgroundColor: "#A855F7" },
+            ]}
+          />
           <View style={{ flex: 1 }}>
-            <Text style={styles.assignedBannerTitle}>
-              Ride assignment pending
+            <Text
+              style={[
+                styles.assignedBannerTitle,
+                assignedRide!.scheduled_at && { color: "#A855F7" },
+              ]}
+            >
+              {assignedRide!.scheduled_at
+                ? "Scheduled ride pending confirmation"
+                : "Ride assignment pending"}
             </Text>
-            <Text style={styles.assignedBannerSub} numberOfLines={1}>
-              {assignedRide!.pickup_address} → {assignedRide!.dropoff_address}
-            </Text>
+            {assignedRide!.scheduled_at ? (
+              <>
+                <Text style={styles.assignedBannerScheduledTime}>
+                  {new Date(assignedRide!.scheduled_at).toLocaleString(
+                    "en-CA",
+                    {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    },
+                  )}
+                </Text>
+                <Text style={styles.assignedBannerSub} numberOfLines={1}>
+                  {assignedRide!.pickup_address} →{" "}
+                  {assignedRide!.dropoff_address}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.assignedBannerSub} numberOfLines={1}>
+                {assignedRide!.pickup_address} → {assignedRide!.dropoff_address}
+              </Text>
+            )}
           </View>
-          <View style={styles.assignedBannerBtn}>
+          <View
+            style={[
+              styles.assignedBannerBtn,
+              assignedRide!.scheduled_at && { backgroundColor: "#A855F7" },
+            ]}
+          >
             <Text style={styles.assignedBannerBtnText}>View</Text>
           </View>
         </TouchableOpacity>
@@ -594,14 +493,6 @@ export default function DriverHomeScreen({
           </View>
         )}
       </View>
-
-      {pendingRide && isOnline && (
-        <RideRequestSheet
-          ride={pendingRide}
-          onAccept={acceptRide}
-          onDecline={declineRide}
-        />
-      )}
 
       {historyVisible && (
         <View style={StyleSheet.absoluteFill}>
@@ -741,6 +632,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   assignedBannerBtnText: { fontSize: 12, fontWeight: "600", color: "#111827" },
+  assignedBannerScheduled: {
+    backgroundColor: "rgba(168,85,247,0.12)",
+    borderColor: "rgba(168,85,247,0.35)",
+  },
+  assignedBannerScheduledTime: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#A855F7",
+    marginBottom: 1,
+  },
   recenterBtn: {
     position: "absolute",
     right: 16,
