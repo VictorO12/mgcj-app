@@ -76,20 +76,87 @@ async function notifyDispatchNoDrivers(rideId: string, pickupAddress: string) {
   console.log(`Notified ${notifications.length} dispatcher(s) — no drivers available`)
 }
 
-async function assignRide(rideId: string, declinedByDriverId?: string) {
-  // ── If a driver is declining, handle the reset first ────────
-  // This runs server-side so RLS doesn't block the driver_id = null update
-  if (declinedByDriverId) {
-    console.log(`Driver ${declinedByDriverId.slice(0, 8)} declining ride ${rideId}`)
+// ── Pick the closest driver from a candidate pool ────────────
+async function pickWinner(
+  candidates: { id: string; current_lat: number; current_lng: number; push_token: string }[],
+  pickupLat: number,
+  pickupLng: number
+): Promise<string> {
+  const withDistance = candidates
+    .map(d => ({
+      ...d,
+      straightLineKm: distanceKm(d.current_lat, d.current_lng, pickupLat, pickupLng),
+    }))
+    .sort((a, b) => a.straightLineKm - b.straightLineKm)
+    .slice(0, 5)
 
-    // Append to declined_by using the existing RPC
-    const { error: rpcError } = await supabase.rpc('append_declined_by', {
-      p_ride_id: rideId,
-      p_driver_id: declinedByDriverId,
-    })
-    if (rpcError) console.error('append_declined_by error:', rpcError)
+  console.log(
+    `Top ${withDistance.length} candidates:`,
+    withDistance.map(d => `${d.id.slice(0, 8)} (${d.straightLineKm.toFixed(1)}km)`).join(', ')
+  )
 
-    // Reset the ride back to pending so we can reassign
+  if (withDistance.length === 1) {
+    console.log(`Single candidate: ${withDistance[0].id.slice(0, 8)}`)
+    return withDistance[0].id
+  }
+
+  const driveTimes = await getDriveTimes(
+    withDistance.map(d => ({ lat: d.current_lat, lng: d.current_lng, id: d.id })),
+    pickupLat,
+    pickupLng
+  )
+
+  if (driveTimes.size === 0) {
+    console.warn('Distance Matrix failed — falling back to Haversine')
+    return withDistance[0].id
+  }
+
+  let bestTime = Infinity
+  let winnerId = withDistance[0].id
+  for (const [id, seconds] of driveTimes) {
+    console.log(`Driver ${id.slice(0, 8)}: ${Math.round(seconds / 60)} min drive`)
+    if (seconds < bestTime) { bestTime = seconds; winnerId = id }
+  }
+  console.log(`Winner: ${winnerId.slice(0, 8)} at ${Math.round(bestTime / 60)} min`)
+  return winnerId
+}
+
+async function assignRide(
+  rideId: string,
+  declinedByDriverId?: string,
+  timedOutDriverId?: string
+) {
+  // ── Handle decline/timeout reset first (server-side, bypasses RLS) ──
+  if (declinedByDriverId || timedOutDriverId) {
+    const driverId = (declinedByDriverId ?? timedOutDriverId)!
+    const isTimeout = !!timedOutDriverId
+    console.log(`Driver ${driverId.slice(0, 8)} ${isTimeout ? 'timed out on' : 'declining'} ride ${rideId}`)
+
+    if (isTimeout) {
+      // Timeout: add to timed_out_by (eligible again on second pass)
+      const { data: current } = await supabase
+        .from('rides')
+        .select('timed_out_by')
+        .eq('id', rideId)
+        .single()
+
+      const currentTimedOut: string[] = current?.timed_out_by ?? []
+      const updatedTimedOut = [...new Set([...currentTimedOut, driverId])]
+
+      await supabase
+        .from('rides')
+        .update({ timed_out_by: updatedTimedOut })
+        .eq('id', rideId)
+    } else {
+      // Hard decline: add to declined_by (excluded permanently)
+      const { error: rpcError } = await supabase.rpc('append_declined_by', {
+        p_ride_id: rideId,
+        p_driver_id: driverId,
+      })
+      if (rpcError) console.error('append_declined_by error:', rpcError)
+    }
+
+    // Reset ride to pending for reassignment
     const { error: resetError } = await supabase
       .from('rides')
       .update({
@@ -98,14 +165,14 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
         confirmed_by_driver: false,
       })
       .eq('id', rideId)
-      .eq('driver_id', declinedByDriverId) // safety: only reset if still assigned to this driver
+      .eq('driver_id', driverId)
 
     if (resetError) {
-      console.error('Failed to reset ride after decline:', resetError)
+      console.error('Failed to reset ride:', resetError)
       return { success: false, reason: 'reset_failed' }
     }
 
-    console.log(`Ride ${rideId} reset to pending after decline`)
+    console.log(`Ride ${rideId} reset to pending`)
   }
 
   // ── Fetch the ride ───────────────────────────────────────────
@@ -126,9 +193,10 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
   }
 
   const declinedBy: string[] = ride.declined_by ?? []
-  console.log(`Assigning ride ${rideId} | declined_by: [${declinedBy.join(', ')}]`)
+  const timedOutBy: string[] = ride.timed_out_by ?? []
+  console.log(`Assigning ride ${rideId} | declined_by: [${declinedBy.map(id => id.slice(0,8)).join(', ')}] | timed_out_by: [${timedOutBy.map(id => id.slice(0,8)).join(', ')}]`)
 
-  // ── Fetch online drivers ─────────────────────────────────────
+  // ── Fetch all online drivers ─────────────────────────────────
   const { data: allDrivers, error: driversError } = await supabase
     .from('drivers')
     .select('id, push_token, current_lat, current_lng')
@@ -143,15 +211,7 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
     return { success: false, reason: 'no_drivers' }
   }
 
-  // Filter out declined drivers
-  const eligibleDrivers = allDrivers.filter(d => !declinedBy.includes(d.id))
-  if (eligibleDrivers.length === 0) {
-    console.log('All drivers have declined')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address)
-    return { success: false, reason: 'all_declined' }
-  }
-
-  // Filter out drivers currently on a confirmed active ride
+  // Filter out drivers on an active confirmed ride
   const { data: busyRides } = await supabase
     .from('rides')
     .select('driver_id')
@@ -160,51 +220,44 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
     .not('driver_id', 'is', null)
 
   const busySet = new Set((busyRides ?? []).map((r: any) => r.driver_id))
-  const freeDrivers = eligibleDrivers.filter(d => !busySet.has(d.id))
+  const availableDrivers = allDrivers.filter(d => !busySet.has(d.id))
 
-  if (freeDrivers.length === 0) {
-    console.log('All eligible drivers are busy')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address)
-    return { success: false, reason: 'all_busy' }
-  }
-
-  // ── Haversine → top 5 → Distance Matrix ─────────────────────
-  const withDistance = freeDrivers
-    .map(d => ({
-      ...d,
-      straightLineKm: distanceKm(d.current_lat, d.current_lng, ride.pickup_lat, ride.pickup_lng),
-    }))
-    .sort((a, b) => a.straightLineKm - b.straightLineKm)
-    .slice(0, 5)
-
-  console.log(
-    `Top ${withDistance.length} candidates:`,
-    withDistance.map(d => `${d.id.slice(0, 8)} (${d.straightLineKm.toFixed(1)}km)`).join(', ')
+  // ── Two-pass driver selection ────────────────────────────────
+  // Pass 1: drivers who haven't seen this ride at all
+  const freshDrivers = availableDrivers.filter(
+    d => !declinedBy.includes(d.id) && !timedOutBy.includes(d.id)
   )
 
-  let winnerId: string
-  if (withDistance.length === 1) {
-    winnerId = withDistance[0].id
-    console.log(`Single candidate: ${winnerId.slice(0, 8)}`)
-  } else {
-    const driveTimes = await getDriveTimes(
-      withDistance.map(d => ({ lat: d.current_lat, lng: d.current_lng, id: d.id })),
-      ride.pickup_lat,
-      ride.pickup_lng
-    )
-    if (driveTimes.size === 0) {
-      console.warn('Distance Matrix failed — falling back to Haversine')
-      winnerId = withDistance[0].id
-    } else {
-      let bestTime = Infinity
-      winnerId = withDistance[0].id
-      for (const [id, seconds] of driveTimes) {
-        console.log(`Driver ${id.slice(0, 8)}: ${Math.round(seconds / 60)} min drive`)
-        if (seconds < bestTime) { bestTime = seconds; winnerId = id }
-      }
-      console.log(`Winner: ${winnerId.slice(0, 8)} at ${Math.round(bestTime / 60)} min`)
-    }
+  // Pass 2: drivers who timed out (missed notification) but didn't hard decline
+  const timedOutDrivers = availableDrivers.filter(
+    d => timedOutBy.includes(d.id) && !declinedBy.includes(d.id)
+  )
+
+  let candidatePool = freshDrivers
+  let pass = 1
+
+  if (candidatePool.length === 0 && timedOutDrivers.length > 0) {
+    // All fresh drivers exhausted — give timed-out drivers another chance
+    console.log('No fresh drivers — cycling back to timed-out drivers')
+    candidatePool = timedOutDrivers
+    // Clear timed_out_by so they each get a full 30s window again
+    await supabase
+      .from('rides')
+      .update({ timed_out_by: [] })
+      .eq('id', rideId)
+    pass = 2
   }
+
+  if (candidatePool.length === 0) {
+    console.log('All drivers exhausted — notifying dispatch')
+    await notifyDispatchNoDrivers(rideId, ride.pickup_address)
+    return { success: false, reason: 'all_declined' }
+  }
+
+  console.log(`Pass ${pass}: ${candidatePool.length} candidate(s)`)
+
+  // ── Pick closest driver ──────────────────────────────────────
+  const winnerId = await pickWinner(candidatePool, ride.pickup_lat, ride.pickup_lng)
 
   // ── Assign — optimistic lock on status = pending ─────────────
   const { error: assignError, count } = await supabase
@@ -219,7 +272,7 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
     return { success: false, reason: 'race_condition' }
   }
 
-  console.log(`Ride ${rideId} assigned to driver ${winnerId.slice(0, 8)}`)
+  console.log(`Ride ${rideId} assigned to driver ${winnerId.slice(0, 8)} (pass ${pass})`)
 
   // ── Push notification to winning driver ──────────────────────
   const { data: passenger } = await supabase
@@ -243,7 +296,14 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
       to: winnerDriver.push_token,
       title: '🚗 New ride assigned to you',
       body: `${passengerName} · ${ride.pickup_address} → ${ride.dropoff_address} · ${fareText}`,
-      data: { rideId: ride.id, pickupAddress: ride.pickup_address, dropoffAddress: ride.dropoff_address, fareEstimate: ride.fare_estimate, passengerName, type: 'ride_assigned' },
+      data: {
+        rideId: ride.id,
+        pickupAddress: ride.pickup_address,
+        dropoffAddress: ride.dropoff_address,
+        fareEstimate: ride.fare_estimate,
+        passengerName,
+        type: 'ride_assigned',
+      },
       categoryIdentifier: 'RIDE_REQUEST',
       sound: 'default',
       priority: 'high',
@@ -253,7 +313,7 @@ async function assignRide(rideId: string, declinedByDriverId?: string) {
   const pushResult = await pushRes.json()
   console.log('Push result:', JSON.stringify(pushResult))
 
-  return { success: true, driverId: winnerId }
+  return { success: true, driverId: winnerId, pass }
 }
 
 // ── Entry point ───────────────────────────────────────────────
@@ -262,6 +322,7 @@ Deno.serve(async (req) => {
     const body = await req.json()
     let rideId: string | undefined
     let declinedByDriverId: string | undefined
+    let timedOutDriverId: string | undefined
 
     if (body.type === 'INSERT' && body.table === 'rides') {
       const ride = body.record
@@ -270,13 +331,13 @@ Deno.serve(async (req) => {
       rideId = ride.id
     } else if (body.ride_id) {
       rideId = body.ride_id
-      // Present when called from DriverApp decline handler
       declinedByDriverId = body.declined_by_driver_id
+      timedOutDriverId = body.timed_out_driver_id
     }
 
     if (!rideId) return new Response('No ride_id', { status: 400 })
 
-    const result = await assignRide(rideId, declinedByDriverId)
+    const result = await assignRide(rideId, declinedByDriverId, timedOutDriverId)
     return new Response(JSON.stringify(result), {
       headers: { 'Content-Type': 'application/json' },
       status: 200,

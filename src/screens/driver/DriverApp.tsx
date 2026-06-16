@@ -223,9 +223,8 @@ export default function DriverApp() {
   }
 
   // ── Decline and immediately trigger reassignment server-side ──
-  async function declineAndReassign(rideId: string) {
+  async function declineAndReassign(rideId: string, timedOut: boolean = false) {
     if (!profile) return;
-
     const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
     const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey;
 
@@ -233,7 +232,7 @@ export default function DriverApp() {
     setPendingRide(null);
 
     try {
-      const res = await fetch(`${supabaseUrl}/functions/v1/assign-ride`, {
+      await fetch(`${supabaseUrl}/functions/v1/assign-ride`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -241,11 +240,13 @@ export default function DriverApp() {
         },
         body: JSON.stringify({
           ride_id: rideId,
-          declined_by_driver_id: profile.id,
+          // Hard decline → declined_by_driver_id (excluded permanently)
+          // Timeout → timed_out_driver_id (eligible again on second pass)
+          ...(timedOut
+            ? { timed_out_driver_id: profile.id }
+            : { declined_by_driver_id: profile.id }),
         }),
       });
-      const json = await res.json();
-      console.log("[declineAndReassign] response:", JSON.stringify(json));
     } catch (e) {
       console.error("[declineAndReassign] fetch error:", e);
     } finally {
@@ -267,20 +268,10 @@ export default function DriverApp() {
   // ── Decline from popup sheet (manual or timeout) ─────────────
   // Uses pendingRideRef so the timer callback (fired 30s after mount)
   // always reads the current ride, not a stale closure value
-  async function handleDeclinePendingRide(_timedOut: boolean) {
-    console.log("[decline] timedOut:", _timedOut);
-    console.log(
-      "[decline] pendingRideRef.current:",
-      pendingRideRef.current?.id,
-    );
-    console.log("[decline] pendingRide state:", pendingRide?.id);
+  async function handleDeclinePendingRide(timedOut: boolean) {
     const ride = pendingRideRef.current;
-    if (!ride) {
-      console.log("[decline] no ride found — aborting");
-      return;
-    }
-    console.log("[decline] calling declineAndReassign for", ride.id);
-    await declineAndReassign(ride.id);
+    if (!ride) return;
+    await declineAndReassign(ride.id, timedOut);
   }
 
   async function fetchDriverRecord() {

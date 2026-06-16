@@ -15,10 +15,10 @@ Deno.serve(async (_req) => {
     // Find immediate rides assigned to a driver but not confirmed within 60s
     const { data: staleRides, error } = await supabase
       .from('rides')
-      .select('id, driver_id, declined_by, pickup_address')
+      .select('id, driver_id, declined_by, timed_out_by, pickup_address')
       .eq('status', 'assigned')
       .eq('confirmed_by_driver', false)
-      .is('scheduled_at', null)       // immediate rides only
+      .is('scheduled_at', null)
       .lt('updated_at', cutoff)
 
     if (error) {
@@ -37,36 +37,18 @@ Deno.serve(async (_req) => {
       staleRides.map(async (ride) => {
         console.log(`Stale ride ${ride.id} — non-responding driver: ${ride.driver_id}`)
 
-        // Add non-responding driver to declined_by and reset the ride to pending
-        const currentDeclined: string[] = ride.declined_by ?? []
-        const updatedDeclined = ride.driver_id
-          ? [...new Set([...currentDeclined, ride.driver_id])]
-          : currentDeclined
-
-        const { error: updateError } = await supabase
-          .from('rides')
-          .update({
-            driver_id: null,
-            status: 'pending',
-            confirmed_by_driver: false,
-            declined_by: updatedDeclined,
-          })
-          .eq('id', ride.id)
-          .eq('status', 'assigned') // guard: don't reset if driver already confirmed
-
-        if (updateError) {
-          console.error(`Failed to reset ride ${ride.id}:`, updateError)
-          return { rideId: ride.id, success: false }
-        }
-
-        // Re-run assign-ride to find the next best available driver
+        // Call assign-ride with timed_out_driver_id so it gets added to
+        // timed_out_by (not declined_by) — eligible again on second pass
         const res = await fetch(ASSIGN_RIDE_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
           },
-          body: JSON.stringify({ ride_id: ride.id }),
+          body: JSON.stringify({
+            ride_id: ride.id,
+            timed_out_driver_id: ride.driver_id,
+          }),
         })
 
         const result = await res.json()
