@@ -32,7 +32,7 @@ import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 
-const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey;
+const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -77,7 +77,7 @@ const VALLEY_REGION = {
   latitudeDelta: 0.15,
   longitudeDelta: 0.15,
 };
-const BUSY_STATUSES = ["assigned", "driver_arriving", "in_progress"];
+const BUSY_STATUSES = ["offered", "assigned", "driver_arriving", "in_progress"];
 
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
@@ -549,7 +549,8 @@ export default function PassengerHomeScreen() {
         }
         const { error: rideError } = await supabase.from("rides").insert({
           passenger_id: profile.id,
-          status: "pending",
+          company_id: profile.company_id,
+          status: scheduledAt ? "scheduled" : "pending",
           pickup_address: pickupText,
           pickup_lat: pickupCoords.latitude,
           pickup_lng: pickupCoords.longitude,
@@ -586,7 +587,8 @@ export default function PassengerHomeScreen() {
 
     const { error: rideError } = await supabase.from("rides").insert({
       passenger_id: profile.id,
-      status: "pending",
+      company_id: profile.company_id,
+      status: scheduledAt ? "scheduled" : "pending",
       pickup_address: pickupText,
       pickup_lat: pickupCoords.latitude,
       pickup_lng: pickupCoords.longitude,

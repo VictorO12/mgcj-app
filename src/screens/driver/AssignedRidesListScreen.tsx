@@ -55,7 +55,7 @@ export default function AssignedRidesListScreen({
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
-      .in("status", ["assigned", "scheduled"])
+      .in("status", ["offered", "assigned", "scheduled"])
       // ← removed .eq("confirmed_by_driver", false) so confirmed rides stay visible
       .or(`scheduled_at.is.null,scheduled_at.gte.${graceCutoff}`)
       .order("scheduled_at", { ascending: true, nullsFirst: false });
@@ -96,9 +96,12 @@ export default function AssignedRidesListScreen({
     }
 
     setActionLoading(ride.id);
+    const update = isImmediate
+      ? { confirmed_by_driver: true, status: "assigned" }
+      : { confirmed_by_driver: true };
     const { error } = await supabase
       .from("rides")
-      .update({ confirmed_by_driver: true })
+      .update(update)
       .eq("id", ride.id)
       .eq("driver_id", profile?.id);
     setActionLoading(null);

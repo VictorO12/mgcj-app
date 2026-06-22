@@ -15,10 +15,13 @@ Deno.serve(async () => {
   const rebroadcastCutoff = new Date(now.getTime() - REBROADCAST_MINUTES * 60 * 1000).toISOString();
 
   // ── 1. Cancel rides pending > 5 minutes ─────────────────────
+  // Includes 'offered' — a ride being actively cycled between drivers
+  // by reassign-stale-rides is almost never caught sitting at 'pending'
+  // long enough for this query to see it there.
   const { data: expiredRides, error: expiredError } = await supabase
     .from("rides")
     .select("id, passenger_id")
-    .eq("status", "pending")
+    .in("status", ["pending", "offered"])
     .is("scheduled_at", null)
     .lt("created_at", timeoutCutoff);
 
@@ -48,7 +51,7 @@ Deno.serve(async () => {
   const { data: staleRides, error: staleError } = await supabase
     .from("rides")
     .select("id, declined_by")
-    .eq("status", "pending")
+    .in("status", ["pending", "offered"])
     .is("scheduled_at", null)
     .lt("created_at", rebroadcastCutoff)
     .gte("created_at", timeoutCutoff); // not already in the expired bucket

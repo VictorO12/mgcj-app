@@ -6,7 +6,7 @@ const supabase = createClient(
 )
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
-const MAPS_KEY = Deno.env.get('GOOGLE_MAPS_KEY')!
+const MAPS_KEY = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371
@@ -262,7 +262,7 @@ async function assignRide(
   // ── Assign — optimistic lock on status = pending ─────────────
   const { error: assignError, count } = await supabase
     .from('rides')
-    .update({ driver_id: winnerId, status: 'assigned', confirmed_by_driver: false })
+    .update({ driver_id: winnerId, status: 'offered', confirmed_by_driver: false })
     .eq('id', rideId)
     .eq('status', 'pending')
     .select('id', { count: 'exact', head: true })

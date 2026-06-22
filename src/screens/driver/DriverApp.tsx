@@ -9,6 +9,7 @@ import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
 import RideRequestSheet from "./RideRequestSheet";
 import Constants from "expo-constants";
+import { Alert } from "react-native";
 
 interface ActiveRide {
   id: string;
@@ -73,6 +74,7 @@ const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true;
+  if (row.auto_started) return true; // cron has flipped it live
   return new Date(row.scheduled_at) <= new Date();
 }
 
@@ -96,6 +98,19 @@ export default function DriverApp() {
     pendingRideRef.current = pendingRide;
   }, [pendingRide]);
 
+  // Refs so the realtime callback can check "am I free?" without stale closures
+  const activeRideRef = useRef<ActiveRide | null>(null);
+  useEffect(() => {
+    activeRideRef.current = activeRide;
+  }, [activeRide]);
+  const assignedRideRef = useRef<AssignedRide | null>(null);
+  useEffect(() => {
+    assignedRideRef.current = assignedRide;
+  }, [assignedRide]);
+
+  // Scheduled offers this driver dismissed — stays open for everyone else
+  const dismissedOfferIds = useRef<Set<string>>(new Set());
+
   // Track rides we're currently processing a decline/timeout for so the
   // realtime callback doesn't re-show the popup while the server is resetting
   const decliningRideIds = useRef<Set<string>>(new Set());
@@ -118,11 +133,25 @@ export default function DriverApp() {
         { event: "*", schema: "public", table: "rides" },
         async (payload) => {
           const row = payload.new as any;
+
+          // Unclaimed scheduled offer broadcast to the company — free drivers only
+          if (row.status === "scheduled" && !row.driver_id) {
+            if (row.company_id !== profile.company_id) return;
+            if (activeRideRef.current || assignedRideRef.current) return;
+            if (dismissedOfferIds.current.has(row.id)) return;
+            setPendingRide((prev) => {
+              if (prev?.id === row.id) return prev;
+              showRideRequestPopup(row);
+              return prev;
+            });
+            return;
+          }
+
           if (row.driver_id !== profile.id) return;
 
           const isFutureScheduled = !isRideNow(row);
 
-          if (row.status === "assigned" && !row.confirmed_by_driver) {
+          if (row.status === "offered") {
             if (decliningRideIds.current.has(row.id)) return;
             setPendingRide((prev) => {
               if (prev?.id === row.id) return prev;
@@ -157,33 +186,64 @@ export default function DriverApp() {
     const sub = Notifications.addNotificationResponseReceivedListener(
       async (response) => {
         const action = response.actionIdentifier;
-        const rideId = response.notification.request.content.data?.rideId;
+        const data = response.notification.request.content.data ?? {};
+        const rideId = data.rideId;
         if (!rideId || !profile) return;
 
-        if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) {
-          const { data: rideRow } = await supabase
-            .from("rides")
-            .select("*")
-            .eq("id", rideId)
-            .eq("driver_id", profile.id)
-            .maybeSingle();
+        if (data.type === "scheduled_offer") {
+          // body tap or ACCEPT both claim; DECLINE just dismisses (it wasn't theirs)
+          if (action !== "DECLINE") await claimScheduledRide(rideId);
+          return;
+        }
 
-          if (rideRow && !rideRow.confirmed_by_driver) {
-            await showRideRequestPopup(rideRow);
-          } else if (rideRow?.confirmed_by_driver) {
-            fetchAssignedRide();
-            setShowAssigned(true);
-          }
+        if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) {
+          await fetchAssignedRide();
+          setShowAssigned(true);
         } else if (action === "ACCEPT") {
-          await confirmRide(rideId);
+          const { error } = await supabase
+            .from("rides")
+            .update({
+              driver_id: profile.id,
+              status: "assigned",
+              confirmed_by_driver: true,
+            })
+            .eq("id", rideId)
+            .eq("status", "offered");
+          if (!error) fetchActiveRide();
         } else if (action === "DECLINE") {
-          await declineAndReassign(rideId);
+          console.log("Driver declined ride from notification:", rideId);
         }
       },
     );
     return () => sub.remove();
   }, [profile]);
 
+  async function claimScheduledRide(rideId: string) {
+    if (!profile) return;
+    const { data, error } = await supabase
+      .from("rides")
+      .update({ driver_id: profile.id, confirmed_by_driver: true })
+      .eq("id", rideId)
+      .is("driver_id", null) // race-safe: only an unclaimed ride
+      .eq("status", "scheduled") // stays 'scheduled' — not active yet
+      .select("id");
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      Alert.alert(
+        "Already taken",
+        "Another driver claimed this scheduled ride.",
+      );
+      return;
+    }
+    Alert.alert(
+      "Scheduled ride claimed 🗓",
+      "It'll go live automatically at pickup time.",
+    );
+    fetchConfirmedScheduledRides();
+  }
   // ── Fetch a ride row and show the RideRequestSheet popup ─────
   async function showRideRequestPopup(rideRow: any) {
     const { data: passenger } = await supabase
@@ -212,10 +272,10 @@ export default function DriverApp() {
     if (!profile) return;
     const { error } = await supabase
       .from("rides")
-      .update({ confirmed_by_driver: true })
+      .update({ confirmed_by_driver: true, status: "assigned" })
       .eq("id", rideId)
       .eq("driver_id", profile.id)
-      .eq("status", "assigned");
+      .eq("status", "offered");
 
     if (!error) {
       setPendingRide(null);
@@ -258,10 +318,13 @@ export default function DriverApp() {
 
   // ── Accept from popup sheet ───────────────────────────────────
   async function handleAcceptPendingRide() {
-    if (!pendingRideRef.current) return;
-    await confirmRide(pendingRideRef.current.id);
-    if (pendingRideRef.current?.scheduled_at) {
-      fetchConfirmedScheduledRides();
+    const ride = pendingRideRef.current;
+    if (!ride) return;
+    if (ride.scheduled_at) {
+      await claimScheduledRide(ride.id);
+      setPendingRide(null);
+    } else {
+      await confirmRide(ride.id);
     }
   }
 
@@ -271,6 +334,12 @@ export default function DriverApp() {
   async function handleDeclinePendingRide(timedOut: boolean) {
     const ride = pendingRideRef.current;
     if (!ride) return;
+    if (ride.scheduled_at) {
+      // Unclaimed offer — just dismiss locally, it stays open for others
+      dismissedOfferIds.current.add(ride.id);
+      setPendingRide(null);
+      return;
+    }
     await declineAndReassign(ride.id, timedOut);
   }
 
@@ -294,7 +363,7 @@ export default function DriverApp() {
       .eq("driver_id", profile.id)
       .in("status", ACTIVE_STATUSES)
       .eq("confirmed_by_driver", true)
-      .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
+      .or(`scheduled_at.is.null,scheduled_at.lte.${now},auto_started.eq.true`)
       .order("created_at", { ascending: false })
       .limit(1);
 
@@ -363,7 +432,7 @@ export default function DriverApp() {
       .from("rides")
       .select("*")
       .eq("driver_id", profile.id)
-      .in("status", ["assigned", "scheduled", "pending"])
+      .in("status", ["offered", "assigned", "scheduled", "pending"])
       .eq("confirmed_by_driver", false)
       .order("scheduled_at", { ascending: true, nullsFirst: false })
       .limit(1);

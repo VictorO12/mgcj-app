@@ -16,7 +16,7 @@ Deno.serve(async (_req) => {
     const { data: staleRides, error } = await supabase
       .from('rides')
       .select('id, driver_id, declined_by, timed_out_by, pickup_address')
-      .eq('status', 'assigned')
+      .eq('status', 'offered')
       .eq('confirmed_by_driver', false)
       .is('scheduled_at', null)
       .lt('updated_at', cutoff)

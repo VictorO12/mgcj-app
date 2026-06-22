@@ -27,8 +27,8 @@ export interface ActiveRide {
   driver: Driver | null
 }
 
-const ACTIVE_STATUSES = ['pending', 'assigned', 'driver_arriving', 'in_progress']
-const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsKey
+const ACTIVE_STATUSES = ['pending', 'offered', 'assigned', 'driver_arriving', 'in_progress']
+const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey
 
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true
@@ -69,8 +69,6 @@ export function useActiveRide(passengerId: string | undefined) {
         console.log('[Realtime] ride update:', row.status, '| scheduled_at:', row.scheduled_at)
 
         if (ACTIVE_STATUSES.includes(row.status) && isRideNow(row)) {
-          // Don't fetch for assigned rides that haven't been confirmed yet
-          if (row.status === 'assigned' && !row.confirmed_by_driver) return
           fetchActiveRide(passengerId)
         } else if (row.status === 'completed') {
           // Use lastRideRef to surface the completed state even if ride
@@ -157,11 +155,6 @@ export function useActiveRide(passengerId: string | undefined) {
       .eq('passenger_id', pid)
       .in('status', ACTIVE_STATUSES)
       .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
-      // Don't surface the ride to the passenger until the driver has confirmed.
-      // 'pending' rides have no driver yet so confirmed_by_driver is false by
-      // definition — we still want to show those (passenger sees "Finding driver").
-      // Only filter out 'assigned' rides that haven't been confirmed yet.
-      .or('status.eq.pending,confirmed_by_driver.eq.true')
       .order('created_at', { ascending: false })
       .limit(1);
     if (error) { console.error('[fetchActiveRide] error:', error); return }
@@ -170,7 +163,9 @@ export function useActiveRide(passengerId: string | undefined) {
     const rideRow = rides[0]
     let driver: Driver | null = null
 
-    if (rideRow.driver_id) {
+    // Don't reveal the candidate driver until they've actually confirmed —
+    // 'offered' rides have a driver_id but it's not committed yet.
+    if (rideRow.driver_id && rideRow.status !== 'offered') {
       const { data: driverRow, error: driverError } = await supabase
         .from('drivers')
         .select('id, vehicle_make, vehicle_model, plate_number, current_lat, current_lng')
@@ -248,6 +243,7 @@ export function useActiveRide(passengerId: string | undefined) {
     const name = driverName?.split(' ')[0] ?? 'Your driver'
     switch (status) {
       case 'pending':         return 'Finding your driver…'
+      case 'offered':         return 'Finding your driver…'
       case 'assigned':        return `${name} is on the way`
       case 'driver_arriving': return `${name} has arrived!`
       case 'in_progress':     return "You're on your way"

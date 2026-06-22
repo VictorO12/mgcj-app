@@ -77,13 +77,6 @@ Deno.serve(async (req) => {
 
     switch (ride.status) {
       case 'assigned': {
-        // ── KEY FIX: don't notify passenger until driver has confirmed ──
-        // assign-ride sets status=assigned with confirmed_by_driver=false.
-        // We only want to notify the passenger once the driver taps Accept.
-        if (!ride.confirmed_by_driver) {
-          return new Response('Driver not yet confirmed — skipping notification', { status: 200 })
-        }
-
         if (isScheduled) {
           const when = formatScheduledTime(ride.scheduled_at)
           title = '🗓️ Scheduled ride confirmed!'

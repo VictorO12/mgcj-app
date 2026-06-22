@@ -118,6 +118,7 @@ export default function RideTrackingSheet({
   const isCompleted = ride.status === "completed";
   const isCancelled = ride.status === "cancelled";
   const isPending = ride.status === "pending";
+  const isOffered = ride.status === "offered";
   const isInProgress = ride.status === "in_progress";
   const hasDriver = !!ride.driver;
 
@@ -125,7 +126,7 @@ export default function RideTrackingSheet({
     ? "#1D9E75"
     : isCancelled
       ? "#E24B4A"
-      : isPending
+      : isPending || isOffered
         ? "#F59E0B"
         : "#E8500A";
 
