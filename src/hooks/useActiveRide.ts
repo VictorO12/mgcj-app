@@ -63,7 +63,16 @@ export function useActiveRide(passengerId: string | undefined) {
         event: '*',
         schema: 'public',
         table: 'rides',
+        filter: 'passenger_id=eq.' + passengerId,
       }, (payload) => {
+        if (payload.eventType === 'DELETE') {
+          const deletedId = (payload.old as any)?.id
+          console.log('[Realtime] ride deleted:', deletedId)
+          setRide(prev => (prev && prev.id === deletedId ? null : prev))
+          setEta(null)
+          return
+        }
+
         const row = payload.new as any
         if (!row || row.passenger_id !== passengerId) return
         console.log('[Realtime] ride update:', row.status, '| scheduled_at:', row.scheduled_at)

@@ -101,6 +101,9 @@ export default function PassengerHomeScreen() {
   const [bookingLoading, setBookingLoading] = useState(false);
   const [sheet, setSheet] = useState<"search" | "confirm" | null>(null);
   const [activeDrivers, setActiveDrivers] = useState<ActiveDriver[]>([]);
+  const activeDriversDebounce = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [scheduledVisible, setScheduledVisible] = useState(false);
@@ -369,6 +372,40 @@ export default function PassengerHomeScreen() {
       return () => clearInterval(interval);
     }
     setActiveDrivers([]);
+  }, [!!ride]);
+
+  // Realtime: refresh the "drivers online" count immediately on relevant
+  // changes instead of waiting for the 15s poll above (which stays as a
+  // fallback). Debounced since a burst of ride updates shouldn't trigger
+  // a refetch per row.
+  useEffect(() => {
+    if (ride) return;
+    const channel = supabase
+      .channel("active-drivers")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "drivers" },
+        () => {
+          if (activeDriversDebounce.current)
+            clearTimeout(activeDriversDebounce.current);
+          activeDriversDebounce.current = setTimeout(fetchActiveDrivers, 400);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rides" },
+        () => {
+          if (activeDriversDebounce.current)
+            clearTimeout(activeDriversDebounce.current);
+          activeDriversDebounce.current = setTimeout(fetchActiveDrivers, 400);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (activeDriversDebounce.current)
+        clearTimeout(activeDriversDebounce.current);
+      supabase.removeChannel(channel);
+    };
   }, [!!ride]);
 
   useEffect(() => {

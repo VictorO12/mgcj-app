@@ -46,6 +46,36 @@ export default function AssignedRidesListScreen({
     fetchAssignedRides();
   }, [profile]);
 
+  // Realtime: keep this list live while it's open (cancellations,
+  // reassignments, deletions elsewhere shouldn't require a manual refresh).
+  // No server-side filter — a Postgres changes filter only matches against
+  // the *new* row, so a reassignment away from this driver (driver_id
+  // changing from profile.id to someone else) wouldn't match and we'd miss
+  // it. Checking old/new client-side catches both directions.
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel("assigned-rides-list-" + profile.id)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rides" },
+        (payload) => {
+          const oldRow = payload.old as any;
+          const newRow = payload.new as any;
+          if (
+            oldRow?.driver_id === profile.id ||
+            newRow?.driver_id === profile.id
+          ) {
+            fetchAssignedRides();
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
   async function fetchAssignedRides() {
     if (!profile) return;
 

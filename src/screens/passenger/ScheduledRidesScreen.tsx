@@ -54,6 +54,28 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
     fetchRides();
   }, [profile]);
 
+  // Realtime: keep this list live while it's open (claims, cancellations,
+  // dispatch edits elsewhere shouldn't require a manual pull-to-refresh).
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel("scheduled-rides-list-" + profile.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rides",
+          filter: "passenger_id=eq." + profile.id,
+        },
+        () => fetchRides(),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
   async function fetchRides() {
     if (!profile) return;
     setLoading(true);

@@ -130,8 +130,27 @@ export default function DriverApp() {
       .channel("driver-ride-" + profile.id)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "rides" },
+        {
+          event: "*",
+          schema: "public",
+          table: "rides",
+          filter: "company_id=eq." + profile.company_id,
+        },
         async (payload) => {
+          if (payload.eventType === "DELETE") {
+            const deletedId = (payload.old as any)?.id;
+            if (activeRideRef.current?.id === deletedId) setActiveRide(null);
+            if (assignedRideRef.current?.id === deletedId)
+              setAssignedRide(null);
+            setPendingRide((prev) =>
+              prev?.id === deletedId ? null : prev,
+            );
+            setConfirmedScheduledRides((prev) =>
+              prev.filter((r) => r.id !== deletedId),
+            );
+            return;
+          }
+
           const row = payload.new as any;
 
           // Unclaimed scheduled offer broadcast to the company — free drivers only
