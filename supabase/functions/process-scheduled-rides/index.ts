@@ -8,7 +8,7 @@ const supabase = createClient(
 )
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
-const GOOGLE_MAPS_KEY = Deno.env.get('GOOGLE_MAPS_KEY') ?? ''
+const GOOGLE_MAPS_KEY = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY') ?? ''
 
 Deno.serve(async (_req) => {
   try {
