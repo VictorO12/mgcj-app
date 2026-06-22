@@ -505,6 +505,13 @@ export default function PassengerHomeScreen() {
       );
       return;
     }
+    if (!isScheduled && activeDrivers.length === 0) {
+      Alert.alert(
+        "No drivers available",
+        "There are no drivers online right now. Please try again shortly, or schedule a ride for later.",
+      );
+      return;
+    }
     setBookingLoading(true);
     const scheduledAt =
       isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
@@ -640,6 +647,7 @@ export default function PassengerHomeScreen() {
   }
 
   const hasActiveRide = !!ride;
+  const noDriversForImmediate = !isScheduled && activeDrivers.length === 0;
   const hasDriver = !!ride?.driver?.current_lat && !!ride?.driver?.current_lng;
   const driverCoords: LatLng | null = hasDriver
     ? {
@@ -1324,15 +1332,24 @@ export default function PassengerHomeScreen() {
                     <Text style={styles.editBtnText}>Edit</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.bookBtn, bookingLoading && { opacity: 0.6 }]}
+                    style={[
+                      styles.bookBtn,
+                      (bookingLoading || noDriversForImmediate) && {
+                        opacity: 0.6,
+                      },
+                    ]}
                     onPress={confirmBooking}
-                    disabled={bookingLoading}
+                    disabled={bookingLoading || noDriversForImmediate}
                   >
                     {bookingLoading ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
                       <Text style={styles.bookBtnText}>
-                        {isScheduled ? "Schedule ride" : "Book ride"}
+                        {noDriversForImmediate
+                          ? "No drivers available"
+                          : isScheduled
+                            ? "Schedule ride"
+                            : "Book ride"}
                       </Text>
                     )}
                   </TouchableOpacity>
