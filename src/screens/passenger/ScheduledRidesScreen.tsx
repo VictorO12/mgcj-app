@@ -205,8 +205,16 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
           }
         >
           {rides.map((ride) => {
-            const statusColor = STATUS_COLORS[ride.status] ?? "#6B7280";
-            const statusLabel = STATUS_LABELS[ride.status] ?? ride.status;
+            const isUnclaimed =
+              ride.status === "scheduled" && !ride.driver_name;
+            const statusColor = isUnclaimed
+              ? "#6B7280"
+              : (STATUS_COLORS[ride.status] ?? "#6B7280");
+            const statusLabel = isUnclaimed
+              ? "Finding a driver"
+              : ride.status === "scheduled"
+                ? "Confirmed"
+                : (STATUS_LABELS[ride.status] ?? ride.status);
             const isCancelling = cancelling === ride.id;
 
             return (
