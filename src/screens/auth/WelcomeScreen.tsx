@@ -1,15 +1,19 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
+import { useTheme } from '../../theme/ThemeContext'
+import type { Colors } from '../../theme/colors'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Welcome'>
 }
 
 export default function WelcomeScreen({ navigation }: Props) {
+  const { colors } = useTheme()
+  const styles = useMemo(() => makeStyles(colors), [colors])
   return (
     <View style={styles.container}>
 
@@ -71,17 +75,17 @@ export default function WelcomeScreen({ navigation }: Props) {
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827' },
+const makeStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
   top: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
   },
-  wordmark: { fontSize: 46, fontWeight: '700', color: '#E8500A', letterSpacing: 1, marginBottom: 6 },
-  tagline: { fontSize: 15, color: '#6B7280', marginBottom: 36 },
+  wordmark: { fontSize: 46, fontWeight: '700', color: colors.accentOrange, letterSpacing: 1, marginBottom: 6 },
+  tagline: { fontSize: 15, color: colors.textSecondary, marginBottom: 36 },
   mapIllustration: {
     width: 220, height: 180, borderRadius: 24, overflow: 'hidden',
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 0.5, borderColor: colors.border,
   },
   mapBg: { flex: 1, backgroundColor: '#1d2c3f', position: 'relative' },
   road: { position: 'absolute', backgroundColor: '#253d56' },
@@ -89,37 +93,37 @@ const styles = StyleSheet.create({
   roadV: { top: 0, bottom: 0, width: 8 },
   carDot: {
     position: 'absolute', top: '38%', left: '25%',
-    backgroundColor: '#1E2A3A', borderRadius: 20, padding: 6,
-    borderWidth: 1.5, borderColor: '#E8500A',
+    backgroundColor: colors.surface, borderRadius: 20, padding: 6,
+    borderWidth: 1.5, borderColor: colors.accentOrange,
   },
   carEmoji: { fontSize: 18 },
   pinDot: { position: 'absolute' },
   pinEmoji: { fontSize: 22 },
   bottom: {
-    backgroundColor: '#1E2A3A',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    borderTopWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
+    borderTopWidth: 0.5, borderColor: colors.border,
     paddingHorizontal: 28, paddingTop: 32,
     paddingBottom: Platform.OS === 'ios' ? 48 : 32,
   },
-  headline: { fontSize: 28, fontWeight: '700', color: '#F1F5F9', lineHeight: 36, marginBottom: 12 },
-  subheadline: { fontSize: 14, color: '#6B7280', lineHeight: 22, marginBottom: 28 },
+  headline: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, lineHeight: 36, marginBottom: 12 },
+  subheadline: { fontSize: 14, color: colors.textSecondary, lineHeight: 22, marginBottom: 28 },
   signupBtn: {
-    backgroundColor: '#E8500A', borderRadius: 14,
+    backgroundColor: colors.accentOrange, borderRadius: 14,
     paddingVertical: 15, alignItems: 'center', marginBottom: 12,
   },
   signupBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   loginBtn: {
     backgroundColor: 'transparent', borderRadius: 14,
     paddingVertical: 15, alignItems: 'center',
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.15)', marginBottom: 12,
+    borderWidth: 0.5, borderColor: colors.borderStrong, marginBottom: 12,
   },
-  loginBtnText: { color: '#CBD5E1', fontSize: 16, fontWeight: '500' },
+  loginBtnText: { color: colors.textOnSurfaceLight, fontSize: 16, fontWeight: '500' },
   driverBtn: {
     backgroundColor: 'transparent', borderRadius: 14,
     paddingVertical: 15, alignItems: 'center',
     borderWidth: 0.5, borderColor: 'rgba(29,158,117,0.4)', marginBottom: 24,
   },
-  driverBtnText: { color: '#1D9E75', fontSize: 16, fontWeight: '500' },
-  legal: { fontSize: 11, color: '#374151', textAlign: 'center', lineHeight: 17 },
+  driverBtnText: { color: colors.accentGreen, fontSize: 16, fontWeight: '500' },
+  legal: { fontSize: 11, color: colors.textFaint, textAlign: 'center', lineHeight: 17 },
 })

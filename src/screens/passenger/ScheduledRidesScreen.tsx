@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface ScheduledRide {
   id: string;
@@ -29,12 +31,14 @@ interface Props {
   onClose: () => void;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: "#6B7280",
-  assigned: "#A855F7",
-  scheduled: "#A855F7",
-  driver_arriving: "#F59E0B",
-};
+function getStatusColors(colors: Colors): Record<string, string> {
+  return {
+    pending: colors.textSecondary,
+    assigned: colors.accentPurple,
+    scheduled: colors.accentPurple,
+    driver_arriving: colors.accentAmber,
+  };
+}
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Awaiting driver",
@@ -45,6 +49,9 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function ScheduledRidesScreen({ onClose }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const STATUS_COLORS = useMemo(() => getStatusColors(colors), [colors]);
   const [rides, setRides] = useState<ScheduledRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -195,7 +202,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Scheduled rides</Text>
         <View style={{ width: 36 }} />
@@ -203,12 +210,12 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#E8500A" size="large" />
+          <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
       ) : rides.length === 0 ? (
         <View style={styles.emptyWrap}>
           <View style={styles.emptyIcon}>
-            <Ionicons name="calendar-outline" size={36} color="#374151" />
+            <Ionicons name="calendar-outline" size={36} color={colors.textFaint} />
           </View>
           <Text style={styles.emptyTitle}>No upcoming rides</Text>
           <Text style={styles.emptySub}>
@@ -222,7 +229,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#E8500A"
+              tintColor={colors.accentOrange}
             />
           }
         >
@@ -230,8 +237,8 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
             const isUnclaimed =
               ride.status === "scheduled" && !ride.driver_name;
             const statusColor = isUnclaimed
-              ? "#6B7280"
-              : (STATUS_COLORS[ride.status] ?? "#6B7280");
+              ? colors.textSecondary
+              : (STATUS_COLORS[ride.status] ?? colors.textSecondary);
             const statusLabel = isUnclaimed
               ? "Finding a driver"
               : ride.status === "scheduled"
@@ -244,7 +251,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                 {/* Time + status row */}
                 <View style={styles.cardTopRow}>
                   <View style={styles.timeWrap}>
-                    <Ionicons name="calendar" size={14} color="#A855F7" />
+                    <Ionicons name="calendar" size={14} color={colors.accentPurple} />
                     <Text style={styles.timeText}>
                       {formatDate(ride.scheduled_at)}
                     </Text>
@@ -276,7 +283,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                 <View style={styles.route}>
                   <View style={styles.routeRow}>
                     <View
-                      style={[styles.dot, { backgroundColor: "#4a9eff" }]}
+                      style={[styles.dot, { backgroundColor: colors.accentBlue }]}
                     />
                     <Text style={styles.routeText} numberOfLines={1}>
                       {ride.pickup_address}
@@ -289,7 +296,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                     <View
                       style={[
                         styles.dot,
-                        { backgroundColor: "#E8500A", borderRadius: 3 },
+                        { backgroundColor: colors.accentOrange, borderRadius: 3 },
                       ]}
                     />
                     <Text style={styles.routeText} numberOfLines={1}>
@@ -301,7 +308,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                 {/* Fare */}
                 {ride.fare_estimate != null && (
                   <View style={styles.fareRow}>
-                    <Ionicons name="cash-outline" size={14} color="#6B7280" />
+                    <Ionicons name="cash-outline" size={14} color={colors.textSecondary} />
                     <Text style={styles.fareText}>
                       Est. ${ride.fare_estimate.toFixed(2)} · Cash
                     </Text>
@@ -314,7 +321,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                     <Ionicons
                       name="person-circle-outline"
                       size={14}
-                      color="#6B7280"
+                      color={colors.textSecondary}
                     />
                     <Text style={styles.driverText}>
                       {ride.driver_name}
@@ -331,7 +338,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                   activeOpacity={0.8}
                 >
                   {isCancelling ? (
-                    <ActivityIndicator color="#F87171" size="small" />
+                    <ActivityIndicator color={colors.accentRed} size="small" />
                   ) : (
                     <Text style={styles.cancelBtnText}>Cancel ride</Text>
                   )}
@@ -345,181 +352,182 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#F1F5F9",
-  },
-  loadingWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emptyWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 40,
-    gap: 12,
-  },
-  emptyIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    textAlign: "center",
-  },
-  emptySub: {
-    fontSize: 13,
-    color: "#6B7280",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  list: {
-    padding: 16,
-    gap: 14,
-  },
-  card: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    gap: 10,
-  },
-  cardTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  timeWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  timeText: {
-    fontSize: 13,
-    color: "#A855F7",
-    fontWeight: "600",
-  },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    borderRadius: 20,
-    borderWidth: 0.5,
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  countdown: {
-    fontSize: 12,
-    color: "#4B5563",
-    fontWeight: "500",
-    marginTop: -4,
-  },
-  route: {
-    backgroundColor: "rgba(0,0,0,0.2)",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.05)",
-  },
-  routeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    flexShrink: 0,
-  },
-  routeText: {
-    fontSize: 13,
-    color: "#CBD5E1",
-    flex: 1,
-  },
-  routeLineWrap: {
-    paddingLeft: 3,
-    paddingVertical: 3,
-  },
-  routeLine: {
-    width: 1.5,
-    height: 12,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 3.5,
-  },
-  fareRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  fareText: {
-    fontSize: 13,
-    color: "#6B7280",
-  },
-  driverRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  driverText: {
-    fontSize: 13,
-    color: "#6B7280",
-  },
-  cancelBtn: {
-    marginTop: 4,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.3)",
-    alignItems: "center",
-    backgroundColor: "rgba(248,113,113,0.07)",
-  },
-  cancelBtnText: {
-    color: "#F87171",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 16,
+      paddingBottom: 16,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: "700",
+      color: colors.textPrimary,
+    },
+    loadingWrap: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    emptyWrap: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 40,
+      gap: 12,
+    },
+    emptyIcon: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 8,
+    },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      textAlign: "center",
+    },
+    emptySub: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: "center",
+      lineHeight: 20,
+    },
+    list: {
+      padding: 16,
+      gap: 14,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 18,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      gap: 10,
+    },
+    cardTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    timeWrap: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+    },
+    timeText: {
+      fontSize: 13,
+      color: colors.accentPurple,
+      fontWeight: "600",
+    },
+    statusBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      borderRadius: 20,
+      borderWidth: 0.5,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+    },
+    statusDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    statusText: {
+      fontSize: 11,
+      fontWeight: "600",
+    },
+    countdown: {
+      fontSize: 12,
+      color: colors.textMuted,
+      fontWeight: "500",
+      marginTop: -4,
+    },
+    route: {
+      backgroundColor: "rgba(0,0,0,0.2)",
+      borderRadius: 12,
+      padding: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    routeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    dot: {
+      width: 9,
+      height: 9,
+      borderRadius: 5,
+      flexShrink: 0,
+    },
+    routeText: {
+      fontSize: 13,
+      color: colors.textOnSurfaceLight,
+      flex: 1,
+    },
+    routeLineWrap: {
+      paddingLeft: 3,
+      paddingVertical: 3,
+    },
+    routeLine: {
+      width: 1.5,
+      height: 12,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 3.5,
+    },
+    fareRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    fareText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    driverRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    driverText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    cancelBtn: {
+      marginTop: 4,
+      paddingVertical: 10,
+      borderRadius: 10,
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.3)",
+      alignItems: "center",
+      backgroundColor: "rgba(248,113,113,0.07)",
+    },
+    cancelBtnText: {
+      color: colors.accentRed,
+      fontSize: 13,
+      fontWeight: "600",
+    },
+  });

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   UIManager,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 if (
   Platform.OS === "android" &&
@@ -56,6 +58,8 @@ const FAQS: FAQ[] = [
 ];
 
 export default function HelpSupportScreen({ onClose }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   function toggleFAQ(index: number) {
@@ -78,7 +82,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Help & Support</Text>
         <View style={{ width: 40 }} />
@@ -103,7 +107,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
                 { backgroundColor: "rgba(29,158,117,0.12)" },
               ]}
             >
-              <Ionicons name="call-outline" size={22} color="#1D9E75" />
+              <Ionicons name="call-outline" size={22} color={colors.accentGreen} />
             </View>
             <Text style={styles.contactLabel}>Call us</Text>
             <Text style={styles.contactSub}>Mon–Sat, 8am–8pm</Text>
@@ -120,7 +124,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
                 { backgroundColor: "rgba(232,80,10,0.12)" },
               ]}
             >
-              <Ionicons name="mail-outline" size={22} color="#E8500A" />
+              <Ionicons name="mail-outline" size={22} color={colors.accentOrange} />
             </View>
             <Text style={styles.contactLabel}>Email us</Text>
             <Text style={styles.contactSub}>Reply within 24h</Text>
@@ -144,7 +148,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
                 <Ionicons
                   name={expandedIndex === i ? "chevron-up" : "chevron-down"}
                   size={16}
-                  color="#6B7280"
+                  color={colors.textSecondary}
                 />
               </TouchableOpacity>
               {expandedIndex === i && (
@@ -161,95 +165,96 @@ export default function HelpSupportScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: "rgba(17,24,39,0.95)",
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 48 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    letterSpacing: 0.08,
-    marginBottom: 12,
-  },
-  contactRow: { flexDirection: "row", gap: 12 },
-  contactCard: {
-    flex: 1,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 16,
-    alignItems: "center",
-    gap: 8,
-  },
-  contactIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  contactLabel: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  contactSub: { fontSize: 11, color: "#6B7280", textAlign: "center" },
-  faqCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    overflow: "hidden",
-  },
-  faqRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    gap: 12,
-  },
-  faqQuestion: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#F1F5F9",
-    lineHeight: 20,
-  },
-  faqAnswer: {
-    fontSize: 13,
-    color: "#9CA3AF",
-    lineHeight: 20,
-    paddingHorizontal: 18,
-    paddingBottom: 16,
-  },
-  faqDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginHorizontal: 18,
-  },
-  versionText: {
-    fontSize: 12,
-    color: "#374151",
-    textAlign: "center",
-    marginTop: 32,
-  },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      backgroundColor: colors.backgroundOverlay,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 48 },
+    sectionLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      letterSpacing: 0.08,
+      marginBottom: 12,
+    },
+    contactRow: { flexDirection: "row", gap: 12 },
+    contactCard: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      padding: 16,
+      alignItems: "center",
+      gap: 8,
+    },
+    contactIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    contactLabel: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    contactSub: { fontSize: 11, color: colors.textSecondary, textAlign: "center" },
+    faqCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    faqRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 18,
+      paddingVertical: 16,
+      gap: 12,
+    },
+    faqQuestion: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: "500",
+      color: colors.textPrimary,
+      lineHeight: 20,
+    },
+    faqAnswer: {
+      fontSize: 13,
+      color: colors.textTertiary,
+      lineHeight: 20,
+      paddingHorizontal: 18,
+      paddingBottom: 16,
+    },
+    faqDivider: {
+      height: 0.5,
+      backgroundColor: colors.borderSubtle,
+      marginHorizontal: 18,
+    },
+    versionText: {
+      fontSize: 12,
+      color: colors.textFaint,
+      textAlign: "center",
+      marginTop: 32,
+    },
+  });

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Profile } from "../types";
+import { useTheme, type ThemeMode } from "../theme/ThemeContext";
+import type { Colors } from "../theme/colors";
 
 interface Props {
   profile: Profile | null;
@@ -42,8 +44,16 @@ export default function ProfileMenu({
   hasAssignedRide,
   onOpenAssigned,
 }: Props) {
+  const { themeMode, setThemeMode, colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const slideY = useRef(new Animated.Value(600)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+
+  const themeOptions: { mode: ThemeMode; icon: string; label: string }[] = [
+    { mode: "system", icon: "phone-portrait-outline", label: "System" },
+    { mode: "light", icon: "sunny-outline", label: "Light" },
+    { mode: "dark", icon: "moon-outline", label: "Dark" },
+  ];
 
   useEffect(() => {
     if (visible) {
@@ -233,7 +243,7 @@ export default function ProfileMenu({
               </View>
             )}
             <TouchableOpacity style={styles.editBtn} onPress={handleEditPress}>
-              <Ionicons name="pencil-outline" size={16} color="#6B7280" />
+              <Ionicons name="pencil-outline" size={16} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
@@ -257,7 +267,7 @@ export default function ProfileMenu({
                   <Ionicons
                     name={item.icon as any}
                     size={20}
-                    color={item.badge ? "#F59E0B" : "#9CA3AF"}
+                    color={item.badge ? colors.accentAmber : colors.textTertiary}
                   />
                 </View>
                 <View style={styles.menuText}>
@@ -272,9 +282,46 @@ export default function ProfileMenu({
                   <Text style={styles.menuSublabel}>{item.sublabel}</Text>
                 </View>
                 {item.badge ? <View style={styles.menuBadgeDot} /> : null}
-                <Ionicons name="chevron-forward" size={16} color="#374151" />
+                <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
               </TouchableOpacity>
             ))}
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* Theme */}
+          <View style={styles.themeRow}>
+            <Text style={styles.themeLabel}>Theme</Text>
+            <View style={styles.themeSegment}>
+              {themeOptions.map((opt) => {
+                const active = themeMode === opt.mode;
+                return (
+                  <TouchableOpacity
+                    key={opt.mode}
+                    style={[
+                      styles.themeOption,
+                      active && styles.themeOptionActive,
+                    ]}
+                    onPress={() => setThemeMode(opt.mode)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name={opt.icon as any}
+                      size={15}
+                      color={active ? colors.accentOrange : colors.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.themeOptionText,
+                        active && styles.themeOptionTextActive,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           <View style={styles.divider} />
@@ -289,7 +336,7 @@ export default function ProfileMenu({
             activeOpacity={0.7}
           >
             <View style={[styles.menuIconWrap, styles.signOutIconWrap]}>
-              <Ionicons name="log-out-outline" size={20} color="#F87171" />
+              <Ionicons name="log-out-outline" size={20} color={colors.accentRed} />
             </View>
             <Text style={styles.signOutText}>Sign out</Text>
           </TouchableOpacity>
@@ -301,25 +348,25 @@ export default function ProfileMenu({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   root: { flex: 1, justifyContent: "flex-end" },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.55)",
   },
   sheet: {
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
   handleRow: { alignItems: "center", paddingTop: 12, paddingBottom: 4 },
   handle: {
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: colors.borderStrong,
   },
   profileHeader: {
     flexDirection: "row",
@@ -333,22 +380,22 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     borderWidth: 1.5,
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
   },
   avatar: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: "#1E3A5F",
+    backgroundColor: colors.surfaceAlt,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
   },
-  avatarText: { fontSize: 18, fontWeight: "700", color: "#93C5FD" },
+  avatarText: { fontSize: 18, fontWeight: "700", color: colors.avatarText },
   profileInfo: { flex: 1 },
-  profileName: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
-  profilePhone: { fontSize: 13, color: "#6B7280", marginTop: 2 },
+  profileName: { fontSize: 17, fontWeight: "600", color: colors.textPrimary },
+  profilePhone: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
   headerBadge: {
     backgroundColor: "rgba(245,158,11,0.15)",
     borderRadius: 12,
@@ -357,20 +404,20 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(245,158,11,0.3)",
   },
-  headerBadgeText: { fontSize: 11, color: "#F59E0B", fontWeight: "600" },
+  headerBadgeText: { fontSize: 11, color: colors.accentAmber, fontWeight: "600" },
   editBtn: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: colors.borderStrong,
     alignItems: "center",
     justifyContent: "center",
   },
   divider: {
     height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.07)",
+    backgroundColor: colors.border,
     marginHorizontal: 20,
   },
   menuList: { paddingVertical: 6 },
@@ -385,9 +432,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -396,15 +443,43 @@ const styles = StyleSheet.create({
     borderColor: "rgba(245,158,11,0.25)",
   },
   menuText: { flex: 1 },
-  menuLabel: { fontSize: 14, fontWeight: "500", color: "#F1F5F9" },
-  menuLabelBadged: { color: "#F59E0B" },
-  menuSublabel: { fontSize: 12, color: "#6B7280", marginTop: 1 },
+  menuLabel: { fontSize: 14, fontWeight: "500", color: colors.textPrimary },
+  menuLabelBadged: { color: colors.accentAmber },
+  menuSublabel: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
   menuBadgeDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#F59E0B",
+    backgroundColor: colors.accentAmber,
   },
+  themeRow: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  themeLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
+  themeSegment: {
+    flexDirection: "row",
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    padding: 3,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  themeOption: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  themeOptionActive: {
+    backgroundColor: "rgba(232,80,10,0.12)",
+  },
+  themeOptionText: { fontSize: 12, fontWeight: "500", color: colors.textSecondary },
+  themeOptionTextActive: { color: colors.accentOrange, fontWeight: "600" },
   signOutBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -416,5 +491,5 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(248,113,113,0.1)",
     borderColor: "rgba(248,113,113,0.2)",
   },
-  signOutText: { fontSize: 14, fontWeight: "500", color: "#F87171" },
+  signOutText: { fontSize: 14, fontWeight: "500", color: colors.accentRed },
 });

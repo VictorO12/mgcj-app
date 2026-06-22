@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,8 @@ import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
 import DriverEditProfileScreen from "./DriverEditProfileScreen";
 import HelpSupportScreen from "../shared/HelpSupportScreen";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface AssignedRide {
   id: string;
@@ -72,6 +74,8 @@ export default function DriverHomeScreen({
   onRideAccepted,
 }: Props) {
   const { profile, signOut } = useAuth();
+  const { colors, resolvedTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { average, count } = useDriverRating(profile?.id);
   useNotifications();
   const mapRef = useRef<MapView>(null);
@@ -232,7 +236,7 @@ export default function DriverHomeScreen({
         initialRegion={VALLEY_REGION}
         showsUserLocation
         showsMyLocationButton={false}
-        customMapStyle={darkMapStyle}
+        customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
       >
         {location && isOnline && (
           <Marker coordinate={location} anchor={{ x: 0.5, y: 0.5 }} title="You">
@@ -253,7 +257,7 @@ export default function DriverHomeScreen({
             <Animated.View
               style={[
                 styles.statusDot,
-                { backgroundColor: isOnline ? "#1D9E75" : "#4B5563" },
+                { backgroundColor: isOnline ? colors.accentGreen : colors.textMuted },
                 isOnline && { transform: [{ scale: pulseAnim }] },
               ]}
             />
@@ -263,7 +267,7 @@ export default function DriverHomeScreen({
           </View>
           {average != null && (
             <View style={styles.ratingPill}>
-              <Ionicons name="star" size={12} color="#F59E0B" />
+              <Ionicons name="star" size={12} color={colors.accentAmber} />
               <Text style={styles.ratingText}>{average.toFixed(1)}/5</Text>
               <Text style={styles.ratingCount}>({count})</Text>
             </View>
@@ -315,14 +319,14 @@ export default function DriverHomeScreen({
           <View
             style={[
               styles.assignedBannerDot,
-              assignedRide!.scheduled_at && { backgroundColor: "#A855F7" },
+              assignedRide!.scheduled_at && { backgroundColor: colors.accentPurple },
             ]}
           />
           <View style={{ flex: 1 }}>
             <Text
               style={[
                 styles.assignedBannerTitle,
-                assignedRide!.scheduled_at && { color: "#A855F7" },
+                assignedRide!.scheduled_at && { color: colors.accentPurple },
               ]}
             >
               {assignedRide!.scheduled_at
@@ -357,7 +361,7 @@ export default function DriverHomeScreen({
           <View
             style={[
               styles.assignedBannerBtn,
-              assignedRide!.scheduled_at && { backgroundColor: "#A855F7" },
+              assignedRide!.scheduled_at && { backgroundColor: colors.accentPurple },
             ]}
           >
             <Text style={styles.assignedBannerBtnText}>View</Text>
@@ -376,7 +380,7 @@ export default function DriverHomeScreen({
             )
           }
         >
-          <Ionicons name="locate" size={20} color="#F1F5F9" />
+          <Ionicons name="locate" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
       )}
 
@@ -384,7 +388,7 @@ export default function DriverHomeScreen({
       {confirmedScheduledRides.length > 0 && (
         <View style={styles.scheduledPanel}>
           <View style={styles.scheduledPanelHeader}>
-            <Ionicons name="calendar" size={14} color="#A855F7" />
+            <Ionicons name="calendar" size={14} color={colors.accentPurple} />
             <Text style={styles.scheduledPanelTitle}>UPCOMING SCHEDULED</Text>
             <View style={styles.scheduledPanelBadge}>
               <Text style={styles.scheduledPanelBadgeText}>
@@ -453,7 +457,7 @@ export default function DriverHomeScreen({
           <View style={styles.onlineSheet}>
             <View style={styles.waitingRow}>
               <View style={styles.waitingIcon}>
-                <Ionicons name="radio-outline" size={22} color="#1D9E75" />
+                <Ionicons name="radio-outline" size={22} color={colors.accentGreen} />
               </View>
               <View>
                 <Text style={styles.waitingTitle}>
@@ -530,282 +534,324 @@ export default function DriverHomeScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  map: { flex: 1 },
-  topBar: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-    backgroundColor: "rgba(17,24,39,0.88)",
-  },
-  topName: { fontSize: 20, fontWeight: "700", color: "#F1F5F9", flex: 1 },
-  statusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 3,
-  },
-  ratingPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginTop: 4,
-    alignSelf: "flex-start",
-  },
-  ratingText: { fontSize: 13, fontWeight: "600", color: "#F59E0B" },
-  ratingCount: { fontSize: 12, color: "#6B7280" },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { fontSize: 12, color: "#6B7280" },
-  avatarWrap: { position: "relative", padding: 4 },
-  topAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  topAvatarFallback: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  topAvatarInitials: { fontSize: 13, fontWeight: "700", color: "#93C5FD" },
-  badge: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: "#E24B4A",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#111827",
-  },
-  badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
-  assignedBanner: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 110 : 96,
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(245,158,11,0.12)",
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(245,158,11,0.35)",
-  },
-  assignedBannerDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#F59E0B",
-    flexShrink: 0,
-  },
-  assignedBannerTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#F59E0B",
-    marginBottom: 2,
-  },
-  assignedBannerSub: { fontSize: 11, color: "#6B7280" },
-  assignedBannerBtn: {
-    backgroundColor: "#F59E0B",
-    borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  assignedBannerBtnText: { fontSize: 12, fontWeight: "600", color: "#111827" },
-  assignedBannerScheduled: {
-    backgroundColor: "rgba(168,85,247,0.12)",
-    borderColor: "rgba(168,85,247,0.35)",
-  },
-  assignedBannerScheduledTime: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#A855F7",
-    marginBottom: 1,
-  },
-  recenterBtn: {
-    position: "absolute",
-    right: 16,
-    bottom: 220,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  myMarker: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 20,
-    padding: 5,
-    borderWidth: 1.5,
-    borderColor: "#1D9E75",
-  },
-  bottomSheet: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "#111827",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: Platform.OS === "ios" ? 44 : 24,
-  },
-  onlineSheet: { gap: 16 },
-  waitingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.25)",
-  },
-  waitingIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(29,158,117,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  waitingTitle: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  waitingSubtitle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  offlineBtn: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  offlineBtnText: { color: "#9CA3AF", fontSize: 15, fontWeight: "500" },
-  offlineSheet: { alignItems: "center", paddingVertical: 10 },
-  offlineTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    marginBottom: 8,
-  },
-  offlineSubtitle: {
-    fontSize: 14,
-    color: "#6B7280",
-    textAlign: "center",
-    lineHeight: 20,
-    marginBottom: 24,
-    paddingHorizontal: 10,
-  },
-  onlineBtn: {
-    backgroundColor: "#1D9E75",
-    borderRadius: 14,
-    paddingVertical: 15,
-    paddingHorizontal: 48,
-    alignItems: "center",
-  },
-  onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  scheduledPanel: {
-    position: "absolute",
-    bottom: Platform.OS === "ios" ? 210 : 190,
-    left: 16,
-    right: 16,
-    backgroundColor: "#1A1F2E",
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(168,85,247,0.25)",
-    overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  dotsRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 5,
-    paddingVertical: 8,
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "rgba(168,85,247,0.25)",
-  },
-  dotActive: { width: 14, backgroundColor: "#A855F7" },
-  scheduledPanelHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(168,85,247,0.15)",
-  },
-  scheduledPanelTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#A855F7",
-    letterSpacing: 0.5,
-    flex: 1,
-  },
-  scheduledPanelBadge: {
-    backgroundColor: "#A855F7",
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 5,
-  },
-  scheduledPanelBadgeText: { fontSize: 11, fontWeight: "700", color: "#fff" },
-  scheduledRideRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.04)",
-  },
-  scheduledRideTime: {
-    backgroundColor: "rgba(168,85,247,0.12)",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  scheduledRideTimeText: { fontSize: 11, fontWeight: "600", color: "#C084FC" },
-  scheduledRideInfo: { flex: 1 },
-  scheduledRidePassenger: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  scheduledRideRoute: { fontSize: 11, color: "#6B7280", marginTop: 1 },
-  scheduledRideFare: { fontSize: 13, fontWeight: "600", color: "#1D9E75" },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    map: { flex: 1 },
+    topBar: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 12,
+      backgroundColor: colors.backgroundOverlay,
+    },
+    topName: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      flex: 1,
+    },
+    statusRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 3,
+    },
+    ratingPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      marginTop: 4,
+      alignSelf: "flex-start",
+    },
+    ratingText: { fontSize: 13, fontWeight: "600", color: colors.accentAmber },
+    ratingCount: { fontSize: 12, color: colors.textSecondary },
+    statusDot: { width: 8, height: 8, borderRadius: 4 },
+    statusText: { fontSize: 12, color: colors.textSecondary },
+    avatarWrap: { position: "relative", padding: 4 },
+    topAvatar: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    topAvatarFallback: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    topAvatarInitials: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.avatarText,
+    },
+    badge: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.accentRedDeep,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.background,
+    },
+    badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
+    assignedBanner: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 110 : 96,
+      left: 16,
+      right: 16,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: "rgba(245,158,11,0.12)",
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 0.5,
+      borderColor: "rgba(245,158,11,0.35)",
+    },
+    assignedBannerDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.accentAmber,
+      flexShrink: 0,
+    },
+    assignedBannerTitle: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.accentAmber,
+      marginBottom: 2,
+    },
+    assignedBannerSub: { fontSize: 11, color: colors.textSecondary },
+    assignedBannerBtn: {
+      backgroundColor: colors.accentAmber,
+      borderRadius: 8,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+    },
+    assignedBannerBtnText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.background,
+    },
+    assignedBannerScheduled: {
+      backgroundColor: "rgba(168,85,247,0.12)",
+      borderColor: "rgba(168,85,247,0.35)",
+    },
+    assignedBannerScheduledTime: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accentPurple,
+      marginBottom: 1,
+    },
+    recenterBtn: {
+      position: "absolute",
+      right: 16,
+      bottom: 220,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    myMarker: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 5,
+      borderWidth: 1.5,
+      borderColor: colors.accentGreen,
+    },
+    bottomSheet: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      borderTopWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      paddingBottom: Platform.OS === "ios" ? 44 : 24,
+    },
+    onlineSheet: { gap: 16 },
+    waitingRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 14,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.25)",
+    },
+    waitingIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: "rgba(29,158,117,0.1)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    waitingTitle: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    waitingSubtitle: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginTop: 2,
+    },
+    offlineBtn: {
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: "center",
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    offlineBtnText: {
+      color: colors.textTertiary,
+      fontSize: 15,
+      fontWeight: "500",
+    },
+    offlineSheet: { alignItems: "center", paddingVertical: 10 },
+    offlineTitle: {
+      fontSize: 22,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 8,
+    },
+    offlineSubtitle: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: "center",
+      lineHeight: 20,
+      marginBottom: 24,
+      paddingHorizontal: 10,
+    },
+    onlineBtn: {
+      backgroundColor: colors.accentGreen,
+      borderRadius: 14,
+      paddingVertical: 15,
+      paddingHorizontal: 48,
+      alignItems: "center",
+    },
+    onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    scheduledPanel: {
+      position: "absolute",
+      bottom: Platform.OS === "ios" ? 210 : 190,
+      left: 16,
+      right: 16,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.25)",
+      overflow: "hidden",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    dotsRow: {
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 5,
+      paddingVertical: 8,
+    },
+    dot: {
+      width: 5,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: "rgba(168,85,247,0.25)",
+    },
+    dotActive: { width: 14, backgroundColor: colors.accentPurple },
+    scheduledPanelHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderBottomWidth: 0.5,
+      borderBottomColor: "rgba(168,85,247,0.15)",
+    },
+    scheduledPanelTitle: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.accentPurple,
+      letterSpacing: 0.5,
+      flex: 1,
+    },
+    scheduledPanelBadge: {
+      backgroundColor: colors.accentPurple,
+      borderRadius: 10,
+      minWidth: 18,
+      height: 18,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 5,
+    },
+    scheduledPanelBadgeText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: "#fff",
+    },
+    scheduledRideRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.borderSubtle,
+    },
+    scheduledRideTime: {
+      backgroundColor: "rgba(168,85,247,0.12)",
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
+    scheduledRideTimeText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.accentPurpleTextSubtle,
+    },
+    scheduledRideInfo: { flex: 1 },
+    scheduledRidePassenger: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
+    scheduledRideRoute: {
+      fontSize: 11,
+      color: colors.textSecondary,
+      marginTop: 1,
+    },
+    scheduledRideFare: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.accentGreen,
+    },
+  });
 
 const darkMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2c3f" }] },

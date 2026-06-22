@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,8 @@ import {
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
@@ -31,6 +33,8 @@ interface Props {
 export default function AddCardScreen({ onClose, onCardAdded }: Props) {
   const { profile } = useAuth();
   const { createPaymentMethod } = useStripe();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [cardDetails, setCardDetails] = useState<CardFieldInput.Details | null>(
     null,
@@ -109,7 +113,7 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Add card</Text>
         <View style={{ width: 36 }} />
@@ -122,7 +126,7 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
       >
         {/* Info banner */}
         <View style={styles.infoBanner}>
-          <Ionicons name="shield-checkmark" size={20} color="#1D9E75" />
+          <Ionicons name="shield-checkmark" size={20} color={colors.accentGreen} />
           <View style={{ flex: 1 }}>
             <Text style={styles.infoBannerTitle}>Secured by Stripe</Text>
             <Text style={styles.infoBannerSub}>
@@ -139,13 +143,13 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
             postalCodeEnabled={false}
             placeholders={{ number: "1234 5678 9012 3456" }}
             cardStyle={{
-              backgroundColor: "#1E2A3A",
-              textColor: "#F1F5F9",
-              placeholderColor: "#4B5563",
-              borderColor: "rgba(255,255,255,0.08)",
+              backgroundColor: colors.surface,
+              textColor: colors.textPrimary,
+              placeholderColor: colors.textMuted,
+              borderColor: colors.border,
               borderWidth: 0.5,
               borderRadius: 12,
-              cursorColor: "#E8500A",
+              cursorColor: colors.accentOrange,
               fontSize: 16,
             }}
             style={styles.cardField}
@@ -153,7 +157,7 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
           />
           {isComplete && (
             <View style={styles.cardCompleteRow}>
-              <Ionicons name="checkmark-circle" size={14} color="#1D9E75" />
+              <Ionicons name="checkmark-circle" size={14} color={colors.accentGreen} />
               <Text style={styles.cardCompleteText}>
                 Card details look good
               </Text>
@@ -211,127 +215,128 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-  scroll: { padding: 20, gap: 20 },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 16,
+      paddingBottom: 16,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+    scroll: { padding: 20, gap: 20 },
 
-  infoBanner: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-    backgroundColor: "rgba(29,158,117,0.08)",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.2)",
-  },
-  infoBannerTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#1D9E75",
-    marginBottom: 3,
-  },
-  infoBannerSub: {
-    fontSize: 12,
-    color: "#6B7280",
-    lineHeight: 17,
-  },
+    infoBanner: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 12,
+      backgroundColor: "rgba(29,158,117,0.08)",
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.2)",
+    },
+    infoBannerTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.accentGreen,
+      marginBottom: 3,
+    },
+    infoBannerSub: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      lineHeight: 17,
+    },
 
-  cardFieldWrap: { gap: 10 },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#6B7280",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  cardField: {
-    width: "100%",
-    height: 50,
-  },
-  cardCompleteRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 2,
-  },
-  cardCompleteText: {
-    fontSize: 12,
-    color: "#1D9E75",
-    fontWeight: "500",
-  },
+    cardFieldWrap: { gap: 10 },
+    fieldLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    cardField: {
+      width: "100%",
+      height: 50,
+    },
+    cardCompleteRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 2,
+    },
+    cardCompleteText: {
+      fontSize: 12,
+      color: colors.accentGreen,
+      fontWeight: "500",
+    },
 
-  explainerCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    gap: 10,
-  },
-  explainerTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    marginBottom: 2,
-  },
-  explainerRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-  },
-  explainerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#E8500A",
-    marginTop: 5,
-    flexShrink: 0,
-  },
-  explainerText: {
-    fontSize: 13,
-    color: "#9CA3AF",
-    flex: 1,
-    lineHeight: 19,
-  },
+    explainerCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      gap: 10,
+    },
+    explainerTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 2,
+    },
+    explainerRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    explainerDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.accentOrange,
+      marginTop: 5,
+      flexShrink: 0,
+    },
+    explainerText: {
+      fontSize: 13,
+      color: colors.textTertiary,
+      flex: 1,
+      lineHeight: 19,
+    },
 
-  saveBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: "#E8500A",
-    borderRadius: 14,
-    paddingVertical: 16,
-  },
-  saveBtnDisabled: {
-    opacity: 0.4,
-  },
-  saveBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-});
+    saveBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      backgroundColor: colors.accentOrange,
+      borderRadius: 14,
+      paddingVertical: 16,
+    },
+    saveBtnDisabled: {
+      opacity: 0.4,
+    },
+    saveBtnText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "600",
+    },
+  });

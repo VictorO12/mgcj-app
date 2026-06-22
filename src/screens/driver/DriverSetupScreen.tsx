@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface Props {
   onComplete: () => void;
@@ -38,6 +40,8 @@ const VEHICLE_MAKES = [
 
 export default function DriverSetupScreen({ onComplete }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [vehicleMake, setVehicleMake] = useState("");
   const [vehicleModel, setVehicleModel] = useState("");
   const [plateNumber, setPlateNumber] = useState("");
@@ -149,7 +153,7 @@ export default function DriverSetupScreen({ onComplete }: Props) {
             <TextInput
               style={styles.input}
               placeholder="e.g. Camry, Civic, F-150"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               value={vehicleModel}
               onChangeText={setVehicleModel}
               autoCapitalize="words"
@@ -164,7 +168,7 @@ export default function DriverSetupScreen({ onComplete }: Props) {
             <TextInput
               style={styles.input}
               placeholder="e.g. 2019"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               value={year}
               onChangeText={setYear}
               keyboardType="number-pad"
@@ -178,7 +182,7 @@ export default function DriverSetupScreen({ onComplete }: Props) {
             <TextInput
               style={[styles.input, styles.plateInput]}
               placeholder="ABC 123"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               value={plateNumber}
               onChangeText={(t) => setPlateNumber(t.toUpperCase())}
               autoCapitalize="characters"
@@ -237,132 +241,133 @@ export default function DriverSetupScreen({ onComplete }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  inner: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: Platform.OS === "ios" ? 60 : 40,
-    paddingBottom: 40,
-  },
-  header: { alignItems: "center", marginBottom: 32 },
-  emoji: { fontSize: 48, marginBottom: 12 },
-  title: {
-    fontSize: 26,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#6B7280",
-    lineHeight: 20,
-    textAlign: "center",
-  },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    inner: {
+      flexGrow: 1,
+      paddingHorizontal: 24,
+      paddingTop: Platform.OS === "ios" ? 60 : 40,
+      paddingBottom: 40,
+    },
+    header: { alignItems: "center", marginBottom: 32 },
+    emoji: { fontSize: 48, marginBottom: 12 },
+    title: {
+      fontSize: 26,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 8,
+      textAlign: "center",
+    },
+    subtitle: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      textAlign: "center",
+    },
 
-  form: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    gap: 16,
-    marginBottom: 16,
-  },
-  inputWrap: { gap: 6 },
-  label: {
-    fontSize: 12,
-    fontWeight: "500",
-    color: "#9CA3AF",
-    letterSpacing: 0.04,
-  },
-  optional: { color: "#4B5563", fontWeight: "400" },
-  input: {
-    backgroundColor: "#111827",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 15,
-    color: "#F1F5F9",
-  },
-  plateInput: {
-    fontSize: 18,
-    fontWeight: "600",
-    letterSpacing: 0.15,
-    textAlign: "center",
-  },
+    form: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 20,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      gap: 16,
+      marginBottom: 16,
+    },
+    inputWrap: { gap: 6 },
+    label: {
+      fontSize: 12,
+      fontWeight: "500",
+      color: colors.textTertiary,
+      letterSpacing: 0.04,
+    },
+    optional: { color: colors.textMuted, fontWeight: "400" },
+    input: {
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+      fontSize: 15,
+      color: colors.textPrimary,
+    },
+    plateInput: {
+      fontSize: 18,
+      fontWeight: "600",
+      letterSpacing: 0.15,
+      textAlign: "center",
+    },
 
-  selectBtn: {
-    backgroundColor: "#111827",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  selectText: { fontSize: 15, color: "#F1F5F9" },
-  placeholder: { color: "#4B5563" },
-  chevron: { fontSize: 11, color: "#6B7280" },
-  picker: {
-    backgroundColor: "#111827",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    marginTop: 4,
-    overflow: "hidden",
-  },
-  pickerItem: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.06)",
-  },
-  pickerItemSelected: { backgroundColor: "rgba(29,158,117,0.1)" },
-  pickerItemText: { fontSize: 14, color: "#CBD5E1" },
-  pickerItemTextSelected: { color: "#1D9E75", fontWeight: "600" },
+    selectBtn: {
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    selectText: { fontSize: 15, color: colors.textPrimary },
+    placeholder: { color: colors.textMuted },
+    chevron: { fontSize: 11, color: colors.textSecondary },
+    picker: {
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      marginTop: 4,
+      overflow: "hidden",
+    },
+    pickerItem: {
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.borderSubtle,
+    },
+    pickerItemSelected: { backgroundColor: "rgba(29,158,117,0.1)" },
+    pickerItemText: { fontSize: 14, color: colors.textOnSurfaceLight },
+    pickerItemTextSelected: { color: colors.accentGreen, fontWeight: "600" },
 
-  previewCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.25)",
-    marginBottom: 16,
-  },
-  previewLabel: {
-    fontSize: 11,
-    color: "#6B7280",
-    marginBottom: 12,
-    textAlign: "center",
-  },
-  previewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  previewAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  previewInitials: { fontSize: 14, fontWeight: "700", color: "#93C5FD" },
-  previewName: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  previewVehicle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
+    previewCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.25)",
+      marginBottom: 16,
+    },
+    previewLabel: {
+      fontSize: 11,
+      color: colors.textSecondary,
+      marginBottom: 12,
+      textAlign: "center",
+    },
+    previewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+    previewAvatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    previewInitials: { fontSize: 14, fontWeight: "700", color: colors.avatarText },
+    previewName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    previewVehicle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
 
-  btn: {
-    backgroundColor: "#1D9E75",
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  note: { fontSize: 12, color: "#374151", textAlign: "center" },
-});
+    btn: {
+      backgroundColor: colors.accentGreen,
+      borderRadius: 14,
+      paddingVertical: 15,
+      alignItems: "center",
+      marginBottom: 12,
+    },
+    btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    note: { fontSize: 12, color: colors.textFaint, textAlign: "center" },
+  });

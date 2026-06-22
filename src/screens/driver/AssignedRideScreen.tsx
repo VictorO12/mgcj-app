@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface AssignedRide {
   id: string;
@@ -42,6 +44,8 @@ export default function AssignedRideScreen({
   onClose,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
 
   const isScheduled = !!ride.scheduled_at;
@@ -144,7 +148,7 @@ export default function AssignedRideScreen({
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Ride assignment</Text>
         <View style={{ width: 36 }} />
@@ -165,7 +169,7 @@ export default function AssignedRideScreen({
       {/* Scheduled time card */}
       {isScheduled && (
         <View style={styles.scheduledCard}>
-          <Ionicons name="calendar-outline" size={20} color="#A855F7" />
+          <Ionicons name="calendar-outline" size={20} color={colors.accentPurple} />
           <View>
             <Text style={styles.scheduledLabel}>Scheduled for</Text>
             <Text style={styles.scheduledTime}>
@@ -201,7 +205,7 @@ export default function AssignedRideScreen({
         </View>
         {ride.passenger_phone && (
           <TouchableOpacity style={styles.callBtn} onPress={callPassenger}>
-            <Ionicons name="call-outline" size={18} color="#CBD5E1" />
+            <Ionicons name="call-outline" size={18} color={colors.textOnSurfaceLight} />
           </TouchableOpacity>
         )}
       </View>
@@ -209,7 +213,7 @@ export default function AssignedRideScreen({
       {/* Route */}
       <View style={styles.routeCard}>
         <View style={styles.routeRow}>
-          <View style={[styles.routeDot, { backgroundColor: "#4a9eff" }]} />
+          <View style={[styles.routeDot, { backgroundColor: colors.accentBlue }]} />
           <View style={styles.routeText}>
             <Text style={styles.routeLabel}>Pickup</Text>
             <Text style={styles.routeAddr}>{ride.pickup_address}</Text>
@@ -222,7 +226,7 @@ export default function AssignedRideScreen({
           <View
             style={[
               styles.routeDot,
-              { backgroundColor: "#E8500A", borderRadius: 3 },
+              { backgroundColor: colors.accentOrange, borderRadius: 3 },
             ]}
           />
           <View style={styles.routeText}>
@@ -235,13 +239,13 @@ export default function AssignedRideScreen({
       {/* Trip stats */}
       <View style={styles.statsRow}>
         <View style={styles.statBox}>
-          <Ionicons name="navigate-outline" size={16} color="#6B7280" />
+          <Ionicons name="navigate-outline" size={16} color={colors.textSecondary} />
           <Text style={styles.statValue}>{tripKm} km</Text>
           <Text style={styles.statLabel}>Trip distance</Text>
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statBox}>
-          <Ionicons name="cash-outline" size={16} color="#6B7280" />
+          <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
           <Text style={styles.statValue}>
             ${ride.fare_estimate?.toFixed(2) ?? "--"}
           </Text>
@@ -254,7 +258,7 @@ export default function AssignedRideScreen({
               ride.payment_method === "card" ? "card-outline" : "cash-outline"
             }
             size={16}
-            color="#6B7280"
+            color={colors.textSecondary}
           />
           <Text style={styles.statValue}>
             {ride.payment_method === "card" ? "Card" : "Cash"}
@@ -272,10 +276,10 @@ export default function AssignedRideScreen({
           activeOpacity={0.8}
         >
           {loading === "decline" ? (
-            <ActivityIndicator color="#F87171" />
+            <ActivityIndicator color={colors.accentRed} />
           ) : (
             <>
-              <Ionicons name="close-circle-outline" size={20} color="#F87171" />
+              <Ionicons name="close-circle-outline" size={20} color={colors.accentRed} />
               <Text style={styles.declineBtnText}>Decline</Text>
             </>
           )}
@@ -306,174 +310,188 @@ export default function AssignedRideScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
 
-  statusWrap: { paddingHorizontal: 20, marginBottom: 16 },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(245,158,11,0.1)",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(245,158,11,0.25)",
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#F59E0B",
-  },
-  statusText: { fontSize: 13, color: "#F59E0B", fontWeight: "500", flex: 1 },
+    statusWrap: { paddingHorizontal: 20, marginBottom: 16 },
+    statusBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: "rgba(245,158,11,0.1)",
+      borderRadius: 12,
+      padding: 12,
+      borderWidth: 0.5,
+      borderColor: "rgba(245,158,11,0.25)",
+    },
+    statusDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.accentAmber,
+    },
+    statusText: {
+      fontSize: 13,
+      color: colors.accentAmber,
+      fontWeight: "500",
+      flex: 1,
+    },
 
-  scheduledCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginHorizontal: 20,
-    marginBottom: 12,
-    backgroundColor: "rgba(168,85,247,0.1)",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(168,85,247,0.25)",
-  },
-  scheduledLabel: { fontSize: 11, color: "#A855F7", marginBottom: 2 },
-  scheduledTime: { fontSize: 15, fontWeight: "600", color: "#F1F5F9" },
+    scheduledCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      marginHorizontal: 20,
+      marginBottom: 12,
+      backgroundColor: "rgba(168,85,247,0.1)",
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.25)",
+    },
+    scheduledLabel: { fontSize: 11, color: colors.accentPurple, marginBottom: 2 },
+    scheduledTime: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
 
-  passengerCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginHorizontal: 20,
-    marginBottom: 12,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  passengerAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "rgba(74,158,255,0.3)",
-  },
-  passengerInitials: { fontSize: 15, fontWeight: "700", color: "#93C5FD" },
-  passengerInfo: { flex: 1 },
-  passengerName: { fontSize: 15, fontWeight: "600", color: "#F1F5F9" },
-  passengerSub: { fontSize: 12, color: "#6B7280", marginTop: 1 },
-  callBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#253D56",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
+    passengerCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      marginHorizontal: 20,
+      marginBottom: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    passengerAvatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: "rgba(74,158,255,0.3)",
+    },
+    passengerInitials: {
+      fontSize: 15,
+      fontWeight: "700",
+      color: colors.avatarText,
+    },
+    passengerInfo: { flex: 1 },
+    passengerName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+    passengerSub: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
+    callBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
 
-  routeCard: {
-    marginHorizontal: 20,
-    marginBottom: 12,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  routeRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
-  routeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 4,
-    flexShrink: 0,
-  },
-  routeText: { flex: 1 },
-  routeLabel: {
-    fontSize: 10,
-    color: "#6B7280",
-    marginBottom: 2,
-    textTransform: "uppercase",
-    letterSpacing: 0.05,
-  },
-  routeAddr: { fontSize: 14, color: "#F1F5F9", lineHeight: 20 },
-  routeLineWrap: { paddingLeft: 4, paddingVertical: 4 },
-  routeLine: {
-    width: 1.5,
-    height: 16,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 3,
-  },
+    routeCard: {
+      marginHorizontal: 20,
+      marginBottom: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    routeRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+    routeDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      marginTop: 4,
+      flexShrink: 0,
+    },
+    routeText: { flex: 1 },
+    routeLabel: {
+      fontSize: 10,
+      color: colors.textSecondary,
+      marginBottom: 2,
+      textTransform: "uppercase",
+      letterSpacing: 0.05,
+    },
+    routeAddr: { fontSize: 14, color: colors.textPrimary, lineHeight: 20 },
+    routeLineWrap: { paddingLeft: 4, paddingVertical: 4 },
+    routeLine: {
+      width: 1.5,
+      height: 16,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 3,
+    },
 
-  statsRow: {
-    flexDirection: "row",
-    marginHorizontal: 20,
-    marginBottom: 24,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    overflow: "hidden",
-  },
-  statBox: { flex: 1, alignItems: "center", paddingVertical: 14, gap: 4 },
-  statDivider: { width: 0.5, backgroundColor: "rgba(255,255,255,0.08)" },
-  statValue: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  statLabel: { fontSize: 11, color: "#6B7280" },
+    statsRow: {
+      flexDirection: "row",
+      marginHorizontal: 20,
+      marginBottom: 24,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    statBox: { flex: 1, alignItems: "center", paddingVertical: 14, gap: 4 },
+    statDivider: { width: 0.5, backgroundColor: colors.border },
+    statValue: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    statLabel: { fontSize: 11, color: colors.textSecondary },
 
-  actions: { flexDirection: "row", gap: 12, paddingHorizontal: 20 },
-  declineBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 15,
-    borderRadius: 14,
-    backgroundColor: "rgba(248,113,113,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.25)",
-  },
-  declineBtnText: { color: "#F87171", fontSize: 15, fontWeight: "600" },
-  acceptBtn: {
-    flex: 2,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 15,
-    borderRadius: 14,
-    backgroundColor: "#1D9E75",
-  },
-  acceptBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
-});
+    actions: { flexDirection: "row", gap: 12, paddingHorizontal: 20 },
+    declineBtn: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingVertical: 15,
+      borderRadius: 14,
+      backgroundColor: "rgba(248,113,113,0.1)",
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.25)",
+    },
+    declineBtnText: {
+      color: colors.accentRed,
+      fontSize: 15,
+      fontWeight: "600",
+    },
+    acceptBtn: {
+      flex: 2,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingVertical: 15,
+      borderRadius: 14,
+      backgroundColor: colors.accentGreen,
+    },
+    acceptBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  });

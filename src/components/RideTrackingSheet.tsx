@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,8 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
 import DriverProfileSheet from "./DriverProfileSheet";
 import ReportDriverModal from "./ReportDriverModal";
+import { useTheme } from "../theme/ThemeContext";
+import type { Colors } from "../theme/colors";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -35,6 +37,8 @@ export default function RideTrackingSheet({
   onCancel,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [expanded, setExpanded] = useState(false);
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
@@ -123,12 +127,12 @@ export default function RideTrackingSheet({
   const hasDriver = !!ride.driver;
 
   const statusColor = isCompleted
-    ? "#1D9E75"
+    ? colors.accentGreen
     : isCancelled
-      ? "#E24B4A"
+      ? colors.accentRedDeep
       : isPending || isOffered
-        ? "#F59E0B"
-        : "#E8500A";
+        ? colors.accentAmber
+        : colors.accentOrange;
 
   const driverInitials =
     ride.driver?.name
@@ -162,7 +166,7 @@ export default function RideTrackingSheet({
           <Ionicons
             name="chevron-up"
             size={16}
-            color="#6B7280"
+            color={colors.textSecondary}
             style={{ marginLeft: 8 }}
           />
         </View>
@@ -186,7 +190,7 @@ export default function RideTrackingSheet({
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Text style={styles.statusText}>{statusLabel}</Text>
           <TouchableOpacity onPress={collapse} style={styles.collapseBtn}>
-            <Ionicons name="chevron-down" size={20} color="#6B7280" />
+            <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
 
@@ -204,7 +208,7 @@ export default function RideTrackingSheet({
             <Text style={styles.routeAddr} numberOfLines={1}>
               {ride.pickup_address}
             </Text>
-            <Ionicons name="arrow-forward" size={12} color="#4B5563" />
+            <Ionicons name="arrow-forward" size={12} color={colors.textMuted} />
             <Text style={styles.routeAddr} numberOfLines={1}>
               {ride.dropoff_address}
             </Text>
@@ -231,7 +235,7 @@ export default function RideTrackingSheet({
               </Text>
               <View style={styles.viewProfileRow}>
                 <Text style={styles.viewProfileText}>View profile</Text>
-                <Ionicons name="chevron-forward" size={12} color="#6B7280" />
+                <Ionicons name="chevron-forward" size={12} color={colors.textSecondary} />
               </View>
             </View>
             <View style={styles.driverActions}>
@@ -242,7 +246,7 @@ export default function RideTrackingSheet({
                   smsDriver();
                 }}
               >
-                <Ionicons name="chatbubble-outline" size={18} color="#CBD5E1" />
+                <Ionicons name="chatbubble-outline" size={18} color={colors.textOnSurfaceLight} />
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionBtn}
@@ -251,7 +255,7 @@ export default function RideTrackingSheet({
                   callDriver();
                 }}
               >
-                <Ionicons name="call-outline" size={18} color="#CBD5E1" />
+                <Ionicons name="call-outline" size={18} color={colors.textOnSurfaceLight} />
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
@@ -277,7 +281,7 @@ export default function RideTrackingSheet({
           {isInProgress || isCompleted || isCancelled ? (
             isCompleted ? (
               <View style={styles.completedBadge}>
-                <Ionicons name="checkmark-circle" size={16} color="#1D9E75" />
+                <Ionicons name="checkmark-circle" size={16} color={colors.accentGreen} />
                 <Text style={styles.completedText}>Trip complete</Text>
               </View>
             ) : null
@@ -299,7 +303,7 @@ export default function RideTrackingSheet({
             <Ionicons
               name={alreadyReported ? "checkmark-circle" : "flag-outline"}
               size={18}
-              color={alreadyReported ? "#6B7280" : "#F87171"}
+              color={alreadyReported ? colors.textSecondary : colors.accentRed}
             />
             <Text
               style={[
@@ -333,18 +337,18 @@ export default function RideTrackingSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   miniBar: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     height: 80,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: colors.borderStrong,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 20,
@@ -352,22 +356,22 @@ const styles = StyleSheet.create({
   },
   miniLeft: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
   pulseDot: { width: 10, height: 10, borderRadius: 5 },
-  miniStatus: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  miniSub: { fontSize: 12, color: "#6B7280", marginTop: 1 },
+  miniStatus: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+  miniSub: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
   miniRight: { flexDirection: "row", alignItems: "baseline", gap: 2 },
-  miniEta: { fontSize: 24, fontWeight: "700", color: "#F1F5F9" },
-  miniEtaLabel: { fontSize: 12, color: "#6B7280" },
+  miniEta: { fontSize: 24, fontWeight: "700", color: colors.textPrimary },
+  miniEtaLabel: { fontSize: 12, color: colors.textSecondary },
 
   fullSheet: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === "ios" ? 36 : 24,
   },
@@ -376,7 +380,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: colors.borderStrong,
   },
 
   statusRow: {
@@ -386,22 +390,22 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { fontSize: 16, fontWeight: "600", color: "#F1F5F9", flex: 1 },
+  statusText: { fontSize: 16, fontWeight: "600", color: colors.textPrimary, flex: 1 },
   collapseBtn: { padding: 4 },
 
   etaBanner: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     marginBottom: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  etaNum: { fontSize: 28, fontWeight: "700", color: "#F1F5F9" },
-  etaLabel: { fontSize: 12, color: "#6B7280", marginTop: 2 },
+  etaNum: { fontSize: 28, fontWeight: "700", color: colors.textPrimary },
+  etaLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   routeSummary: {
     flexDirection: "row",
     alignItems: "center",
@@ -409,14 +413,14 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 16,
   },
-  routeAddr: { fontSize: 11, color: "#6B7280", flex: 1 },
+  routeAddr: { fontSize: 11, color: colors.textSecondary, flex: 1 },
 
   driverCard: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -426,31 +430,31 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: "#1E3A5F",
+    backgroundColor: colors.surfaceAlt,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
   },
-  driverInitials: { fontSize: 15, fontWeight: "700", color: "#93C5FD" },
+  driverInitials: { fontSize: 15, fontWeight: "700", color: colors.avatarText },
   driverInfo: { flex: 1 },
-  driverName: { fontSize: 15, fontWeight: "600", color: "#F1F5F9" },
-  driverVehicle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
+  driverName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  driverVehicle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   viewProfileRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
     marginTop: 4,
   },
-  viewProfileText: { fontSize: 11, color: "#6B7280" },
+  viewProfileText: { fontSize: 11, color: colors.textSecondary },
   driverActions: { flexDirection: "row", gap: 8 },
   actionBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: "#253D56",
+    backgroundColor: colors.surfaceAlt,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: colors.borderStrong,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -471,16 +475,16 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(107,114,128,0.08)",
     borderColor: "rgba(107,114,128,0.2)",
   },
-  reportRowText: { fontSize: 14, fontWeight: "600", color: "#F87171" },
-  reportRowTextDone: { color: "#6B7280" },
+  reportRowText: { fontSize: 14, fontWeight: "600", color: colors.accentRed },
+  reportRowTextDone: { color: colors.textSecondary },
 
   bottomRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  fareLabel: { fontSize: 12, color: "#6B7280" },
-  fareAmt: { fontSize: 22, fontWeight: "700", color: "#F1F5F9" },
+  fareLabel: { fontSize: 12, color: colors.textSecondary },
+  fareAmt: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
   cancelBtn: {
     backgroundColor: "rgba(226,75,74,0.12)",
     borderRadius: 10,
@@ -489,7 +493,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(226,75,74,0.3)",
   },
-  cancelText: { color: "#F87171", fontSize: 13, fontWeight: "500" },
+  cancelText: { color: colors.accentRed, fontSize: 13, fontWeight: "500" },
   completedBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -501,5 +505,5 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(29,158,117,0.3)",
   },
-  completedText: { color: "#1D9E75", fontSize: 13, fontWeight: "500" },
+  completedText: { color: colors.accentGreen, fontSize: 13, fontWeight: "500" },
 });

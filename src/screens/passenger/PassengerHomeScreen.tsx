@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -31,6 +31,8 @@ import ProfileScreen from "./ProfileScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
@@ -84,6 +86,8 @@ export default function PassengerHomeScreen() {
   const { ride, eta, statusLabel, cancelledReason, clearCancelledReason } =
     useActiveRide(profile?.id);
   useNotifications();
+  const { colors, resolvedTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const mapRef = useRef<MapView>(null);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
@@ -709,7 +713,7 @@ export default function PassengerHomeScreen() {
         initialRegion={VALLEY_REGION}
         showsUserLocation
         showsMyLocationButton={false}
-        customMapStyle={darkMapStyle}
+        customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
       >
         {!hasActiveRide &&
           activeDrivers.map((d) => (
@@ -725,12 +729,12 @@ export default function PassengerHomeScreen() {
             </Marker>
           ))}
         {!hasActiveRide && pickupCoords && pickupText !== "My location" && (
-          <Marker coordinate={pickupCoords} pinColor="#4a9eff" title="Pickup" />
+          <Marker coordinate={pickupCoords} pinColor={colors.accentBlue} title="Pickup" />
         )}
         {!hasActiveRide && dropoffCoords && (
           <Marker
             coordinate={dropoffCoords}
-            pinColor="#E8500A"
+            pinColor={colors.accentOrange}
             title="Drop-off"
           />
         )}
@@ -744,27 +748,27 @@ export default function PassengerHomeScreen() {
         {hasActiveRide && !isInProgress && pickupPin && (
           <Marker coordinate={pickupPin} anchor={{ x: 0.5, y: 1 }}>
             <View style={styles.pinWrap}>
-              <View style={[styles.pin, { backgroundColor: "#4a9eff" }]}>
+              <View style={[styles.pin, { backgroundColor: colors.accentBlue }]}>
                 <Ionicons name="person" size={12} color="#fff" />
               </View>
-              <View style={[styles.pinTail, { borderTopColor: "#4a9eff" }]} />
+              <View style={[styles.pinTail, { borderTopColor: colors.accentBlue }]} />
             </View>
           </Marker>
         )}
         {hasActiveRide && isInProgress && dropoffPin && (
           <Marker coordinate={dropoffPin} anchor={{ x: 0.5, y: 1 }}>
             <View style={styles.pinWrap}>
-              <View style={[styles.pin, { backgroundColor: "#E8500A" }]}>
+              <View style={[styles.pin, { backgroundColor: colors.accentOrange }]}>
                 <Ionicons name="flag" size={12} color="#fff" />
               </View>
-              <View style={[styles.pinTail, { borderTopColor: "#E8500A" }]} />
+              <View style={[styles.pinTail, { borderTopColor: colors.accentOrange }]} />
             </View>
           </Marker>
         )}
         {hasActiveRide && rideRouteCoords.length > 0 && (
           <Polyline
             coordinates={rideRouteCoords}
-            strokeColor={isInProgress ? "#E8500A" : "#4a9eff"}
+            strokeColor={isInProgress ? colors.accentOrange : colors.accentBlue}
             strokeWidth={3}
           />
         )}
@@ -790,7 +794,7 @@ export default function PassengerHomeScreen() {
               style={styles.calendarBtn}
               onPress={() => setScheduledVisible(true)}
             >
-              <Ionicons name="calendar-outline" size={20} color="#A855F7" />
+              <Ionicons name="calendar-outline" size={20} color={colors.accentPurple} />
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -840,7 +844,7 @@ export default function PassengerHomeScreen() {
             )
           }
         >
-          <Ionicons name="locate" size={20} color="#F1F5F9" />
+          <Ionicons name="locate" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
       )}
 
@@ -864,7 +868,7 @@ export default function PassengerHomeScreen() {
                   activeOpacity={0.8}
                 >
                   <View
-                    style={[styles.inputDot, { backgroundColor: "#4a9eff" }]}
+                    style={[styles.inputDot, { backgroundColor: colors.accentBlue }]}
                   />
                   <Text
                     style={[
@@ -888,7 +892,7 @@ export default function PassengerHomeScreen() {
                   <View
                     style={[
                       styles.inputDot,
-                      { backgroundColor: "#E8500A", borderRadius: 3 },
+                      { backgroundColor: colors.accentOrange, borderRadius: 3 },
                     ]}
                   />
                   <Text
@@ -910,7 +914,7 @@ export default function PassengerHomeScreen() {
                 <Ionicons
                   name="search"
                   size={16}
-                  color="#6B7280"
+                  color={colors.textSecondary}
                   style={{ marginRight: 8 }}
                 />
                 <TextInput
@@ -920,7 +924,7 @@ export default function PassengerHomeScreen() {
                       ? "Search pickup..."
                       : "Search destination..."
                   }
-                  placeholderTextColor="#6B7280"
+                  placeholderTextColor={colors.textSecondary}
                   autoFocus
                   onChangeText={(t) => {
                     activeField === "dropoff"
@@ -931,7 +935,7 @@ export default function PassengerHomeScreen() {
                   value={activeField === "dropoff" ? dropoffText : pickupText}
                 />
                 {searchLoading && (
-                  <ActivityIndicator size="small" color="#E8500A" />
+                  <ActivityIndicator size="small" color={colors.accentOrange} />
                 )}
                 <TouchableOpacity
                   onPress={() => {
@@ -940,7 +944,7 @@ export default function PassengerHomeScreen() {
                     setPredictions([]);
                   }}
                 >
-                  <Ionicons name="close" size={18} color="#6B7280" />
+                  <Ionicons name="close" size={18} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
             )}
@@ -961,7 +965,7 @@ export default function PassengerHomeScreen() {
                     <Ionicons
                       name="location-outline"
                       size={16}
-                      color="#6B7280"
+                      color={colors.textSecondary}
                       style={{ marginRight: 10 }}
                     />
                     <Text style={styles.predictionText} numberOfLines={2}>
@@ -1006,7 +1010,7 @@ export default function PassengerHomeScreen() {
                     activeOpacity={0.85}
                   >
                     <View style={styles.cardNudgeIcon}>
-                      <Ionicons name="card-outline" size={18} color="#E8500A" />
+                      <Ionicons name="card-outline" size={18} color={colors.accentOrange} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cardNudgeTitle}>
@@ -1017,7 +1021,7 @@ export default function PassengerHomeScreen() {
                       </Text>
                     </View>
                     <TouchableOpacity onPress={() => setShowCardNudge(false)}>
-                      <Ionicons name="close" size={16} color="#4B5563" />
+                      <Ionicons name="close" size={16} color={colors.textMuted} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 )}
@@ -1037,7 +1041,7 @@ export default function PassengerHomeScreen() {
                   <Text style={styles.confirmTitle}>Confirm your ride</Text>
                   <View style={styles.confirmDestRow}>
                     <View
-                      style={[styles.routeDot, { backgroundColor: "#4a9eff" }]}
+                      style={[styles.routeDot, { backgroundColor: colors.accentBlue }]}
                     />
                     <Text style={styles.confirmDestText} numberOfLines={1}>
                       {pickupText}
@@ -1048,7 +1052,7 @@ export default function PassengerHomeScreen() {
                     <View
                       style={[
                         styles.routeDot,
-                        { backgroundColor: "#E8500A", borderRadius: 3 },
+                        { backgroundColor: colors.accentOrange, borderRadius: 3 },
                       ]}
                     />
                     <Text style={styles.confirmDestText} numberOfLines={1}>
@@ -1077,7 +1081,7 @@ export default function PassengerHomeScreen() {
                     <Ionicons
                       name={isScheduled ? "calendar" : "calendar-outline"}
                       size={16}
-                      color={isScheduled ? "#A855F7" : "#6B7280"}
+                      color={isScheduled ? colors.accentPurple : colors.textSecondary}
                     />
                     <Text
                       style={[
@@ -1128,7 +1132,7 @@ export default function PassengerHomeScreen() {
                         <Ionicons
                           name="chevron-back"
                           size={18}
-                          color="#6B7280"
+                          color={colors.textSecondary}
                         />
                       </TouchableOpacity>
                       <Text style={styles.calMonthLabel}>
@@ -1150,7 +1154,7 @@ export default function PassengerHomeScreen() {
                         <Ionicons
                           name="chevron-forward"
                           size={18}
-                          color="#6B7280"
+                          color={colors.textSecondary}
                         />
                       </TouchableOpacity>
                     </View>
@@ -1240,7 +1244,7 @@ export default function PassengerHomeScreen() {
                         <Ionicons
                           name="checkmark-circle"
                           size={15}
-                          color="#A855F7"
+                          color={colors.accentPurple}
                         />
                         <Text style={styles.schedSummaryText}>
                           {formatScheduledDate(scheduledDate)}
@@ -1268,7 +1272,7 @@ export default function PassengerHomeScreen() {
                           name="card"
                           size={16}
                           color={
-                            selectedPayment === "card" ? "#E8500A" : "#6B7280"
+                            selectedPayment === "card" ? colors.accentOrange : colors.textSecondary
                           }
                         />
                         <View style={{ flex: 1 }}>
@@ -1286,7 +1290,7 @@ export default function PassengerHomeScreen() {
                           <Ionicons
                             name="checkmark-circle"
                             size={16}
-                            color="#E8500A"
+                            color={colors.accentOrange}
                           />
                         )}
                       </TouchableOpacity>
@@ -1299,7 +1303,7 @@ export default function PassengerHomeScreen() {
                         <Ionicons
                           name="add-circle-outline"
                           size={16}
-                          color="#E8500A"
+                          color={colors.accentOrange}
                         />
                         <Text style={styles.addCardPromptText}>
                           Add a card for faster checkout
@@ -1319,7 +1323,7 @@ export default function PassengerHomeScreen() {
                         name="cash-outline"
                         size={16}
                         color={
-                          selectedPayment === "cash" ? "#E8500A" : "#6B7280"
+                          selectedPayment === "cash" ? colors.accentOrange : colors.textSecondary
                         }
                       />
                       <Text
@@ -1335,7 +1339,7 @@ export default function PassengerHomeScreen() {
                         <Ionicons
                           name="checkmark-circle"
                           size={16}
-                          color="#E8500A"
+                          color={colors.accentOrange}
                         />
                       )}
                     </TouchableOpacity>
@@ -1352,7 +1356,7 @@ export default function PassengerHomeScreen() {
                     </Text>
                   </View>
                   {fareLoading ? (
-                    <ActivityIndicator color="#E8500A" />
+                    <ActivityIndicator color={colors.accentOrange} />
                   ) : (
                     <Text style={styles.fareAmount}>
                       ${fareEstimate?.toFixed(2) ?? "--"}
@@ -1508,470 +1512,471 @@ function decodePolyline(encoded: string): LatLng[] {
   return coords;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  map: { flex: 1 },
-  topBar: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-    backgroundColor: "rgba(17,24,39,0.88)",
-  },
-  topName: { fontSize: 20, fontWeight: "700", color: "#F1F5F9" },
-  topSub: { fontSize: 13, color: "#6B7280", marginTop: 2 },
-  topActions: { flexDirection: "row", alignItems: "center", gap: 8 },
-  topAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  topAvatarFallback: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  topAvatarInitials: { fontSize: 13, fontWeight: "700", color: "#93C5FD" },
-  calendarBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(168,85,247,0.12)",
-    borderWidth: 0.5,
-    borderColor: "rgba(168,85,247,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarBtn: { padding: 4 },
-  driversPill: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 110 : 96,
-    left: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(30,42,58,0.92)",
-    borderRadius: 20,
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  driversPillDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#1D9E75",
-  },
-  driversPillText: { fontSize: 12, color: "#9CA3AF", fontWeight: "500" },
-  recenterBtn: {
-    position: "absolute",
-    right: 16,
-    bottom: 320,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  driverMarker: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 20,
-    padding: 5,
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.15)",
-  },
-  driverMarkerMine: {
-    backgroundColor: "#2A1A0E",
-    borderRadius: 20,
-    padding: 5,
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  driverMarkerText: { fontSize: 16 },
-  pinWrap: { alignItems: "center" },
-  pin: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
-  },
-  pinTail: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderTopWidth: 7,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-  },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    map: { flex: 1 },
+    topBar: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 12,
+      backgroundColor: colors.backgroundOverlay,
+    },
+    topName: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
+    topSub: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
+    topActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+    topAvatar: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    topAvatarFallback: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    topAvatarInitials: { fontSize: 13, fontWeight: "700", color: colors.avatarText },
+    calendarBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: "rgba(168,85,247,0.12)",
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.3)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarBtn: { padding: 4 },
+    driversPill: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 110 : 96,
+      left: 20,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.surfaceOverlay,
+      borderRadius: 20,
+      paddingVertical: 5,
+      paddingHorizontal: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    driversPillDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.accentGreen,
+    },
+    driversPillText: { fontSize: 12, color: colors.textTertiary, fontWeight: "500" },
+    recenterBtn: {
+      position: "absolute",
+      right: 16,
+      bottom: 320,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    driverMarker: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 5,
+      borderWidth: 1.5,
+      borderColor: colors.borderStrong,
+    },
+    driverMarkerMine: {
+      backgroundColor: colors.surfaceOrangeTint,
+      borderRadius: 20,
+      padding: 5,
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    driverMarkerText: { fontSize: 16 },
+    pinWrap: { alignItems: "center" },
+    pin: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: "#fff",
+    },
+    pinTail: {
+      width: 0,
+      height: 0,
+      borderLeftWidth: 5,
+      borderRightWidth: 5,
+      borderTopWidth: 7,
+      borderLeftColor: "transparent",
+      borderRightColor: "transparent",
+    },
 
-  // ── Sheet layout ──
-  // KAV sits at the bottom and grows upward — no fixed height so it
-  // can size itself around its content and lift with the keyboard
-  kavContainer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    maxHeight: SCREEN_HEIGHT * 0.78,
-  },
-  sheet: {
-    backgroundColor: "#111827",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: Platform.OS === "ios" ? 36 : 24,
-  },
+    // ── Sheet layout ──
+    // KAV sits at the bottom and grows upward — no fixed height so it
+    // can size itself around its content and lift with the keyboard
+    kavContainer: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      maxHeight: SCREEN_HEIGHT * 0.78,
+    },
+    sheet: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      borderTopWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 20,
+      paddingTop: 16,
+      paddingBottom: Platform.OS === "ios" ? 36 : 24,
+    },
 
-  inputsCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    marginBottom: 14,
-    overflow: "hidden",
-  },
-  inputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  inputDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
-  inputDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    marginHorizontal: 16,
-  },
-  inputText: { fontSize: 15, color: "#F1F5F9", flex: 1 },
-  placeholder: { color: "#4B5563" },
+    inputsCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      marginBottom: 14,
+      overflow: "hidden",
+    },
+    inputRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+    },
+    inputDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
+    inputDivider: {
+      height: 0.5,
+      backgroundColor: colors.border,
+      marginHorizontal: 16,
+    },
+    inputText: { fontSize: 15, color: colors.textPrimary, flex: 1 },
+    placeholder: { color: colors.textMuted },
 
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1E2A3A",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-  },
-  searchInput: { flex: 1, fontSize: 15, color: "#F1F5F9" },
+    searchBox: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginBottom: 10,
+    },
+    searchInput: { flex: 1, fontSize: 15, color: colors.textPrimary },
 
-  predictionsList: { maxHeight: 240 },
-  predictionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 13,
-    paddingHorizontal: 4,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.06)",
-  },
-  predictionText: { fontSize: 13, color: "#CBD5E1", flex: 1, lineHeight: 18 },
+    predictionsList: { maxHeight: 240 },
+    predictionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 13,
+      paddingHorizontal: 4,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.borderSubtle,
+    },
+    predictionText: { fontSize: 13, color: colors.textOnSurfaceLight, flex: 1, lineHeight: 18 },
 
-  sectionLabel: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#374151",
-    letterSpacing: 0.08,
-    marginBottom: 10,
-    marginTop: 4,
-  },
-  quickChip: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    marginRight: 8,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  quickChipText: { fontSize: 13, color: "#CBD5E1" },
+    sectionLabel: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.textFaint,
+      letterSpacing: 0.08,
+      marginBottom: 10,
+      marginTop: 4,
+    },
+    quickChip: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      marginRight: 8,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    quickChipText: { fontSize: 13, color: colors.textOnSurfaceLight },
 
-  cardNudge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "rgba(232,80,10,0.07)",
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.2)",
-    padding: 12,
-    marginTop: 12,
-  },
-  cardNudgeIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "rgba(232,80,10,0.12)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  cardNudgeTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#F1F5F9",
-    marginBottom: 2,
-  },
-  cardNudgeSub: { fontSize: 11, color: "#6B7280" },
+    cardNudge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: "rgba(232,80,10,0.07)",
+      borderRadius: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.2)",
+      padding: 12,
+      marginTop: 12,
+    },
+    cardNudgeIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: "rgba(232,80,10,0.12)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    cardNudgeTitle: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      marginBottom: 2,
+    },
+    cardNudgeSub: { fontSize: 11, color: colors.textSecondary },
 
-  // Confirm
-  confirmScroll: { flexGrow: 0 },
-  confirmScrollContent: { paddingBottom: 4 },
-  confirmHeader: { marginBottom: 14 },
-  confirmTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    marginBottom: 8,
-  },
-  confirmDestRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  confirmRouteLine: {
-    width: 1.5,
-    height: 14,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    marginLeft: 4.5,
-    marginVertical: 3,
-  },
-  routeDot: { width: 10, height: 10, borderRadius: 5 },
-  confirmDestText: {
-    fontSize: 15,
-    color: "#CBD5E1",
-    flex: 1,
-    fontWeight: "500",
-  },
+    // Confirm
+    confirmScroll: { flexGrow: 0 },
+    confirmScrollContent: { paddingBottom: 4 },
+    confirmHeader: { marginBottom: 14 },
+    confirmTitle: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 8,
+    },
+    confirmDestRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    confirmRouteLine: {
+      width: 1.5,
+      height: 14,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 4.5,
+      marginVertical: 3,
+    },
+    routeDot: { width: 10, height: 10, borderRadius: 5 },
+    confirmDestText: {
+      fontSize: 15,
+      color: colors.textOnSurfaceLight,
+      flex: 1,
+      fontWeight: "500",
+    },
 
-  scheduleToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#1E2A3A",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-  },
-  scheduleToggleActive: {
-    borderColor: "rgba(168,85,247,0.4)",
-    backgroundColor: "rgba(168,85,247,0.08)",
-  },
-  scheduleToggleLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-  scheduleToggleText: { fontSize: 14, color: "#6B7280", fontWeight: "500" },
-  scheduleToggleTextActive: { color: "#A855F7" },
-  togglePill: {
-    width: 38,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#374151",
-    justifyContent: "center",
-    paddingHorizontal: 2,
-  },
-  togglePillActive: { backgroundColor: "#A855F7" },
-  toggleThumb: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: "#9CA3AF",
-    alignSelf: "flex-start",
-  },
-  toggleThumbActive: { backgroundColor: "#fff", alignSelf: "flex-end" },
+    scheduleToggle: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginBottom: 10,
+    },
+    scheduleToggleActive: {
+      borderColor: "rgba(168,85,247,0.4)",
+      backgroundColor: "rgba(168,85,247,0.08)",
+    },
+    scheduleToggleLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+    scheduleToggleText: { fontSize: 14, color: colors.textSecondary, fontWeight: "500" },
+    scheduleToggleTextActive: { color: colors.accentPurple },
+    togglePill: {
+      width: 38,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.textFaint,
+      justifyContent: "center",
+      paddingHorizontal: 2,
+    },
+    togglePillActive: { backgroundColor: colors.accentPurple },
+    toggleThumb: {
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.textTertiary,
+      alignSelf: "flex-start",
+    },
+    toggleThumbActive: { backgroundColor: "#fff", alignSelf: "flex-end" },
 
-  calendarWrap: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(168,85,247,0.25)",
-    padding: 12,
-    marginBottom: 12,
-  },
-  calHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  calNavBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#111827",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  calMonthLabel: { fontSize: 14, fontWeight: "700", color: "#F1F5F9" },
-  calWeekRow: { flexDirection: "row", marginBottom: 4 },
-  calWeekLabel: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#4B5563",
-    textTransform: "uppercase",
-  },
-  calGrid: { flexDirection: "row", flexWrap: "wrap" },
-  calCell: {
-    width: `${100 / 7}%` as any,
-    aspectRatio: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 100,
-  },
-  calCellSelected: { backgroundColor: "#A855F7" },
-  calCellToday: { borderWidth: 1, borderColor: "rgba(168,85,247,0.5)" },
-  calDayText: { fontSize: 13, color: "#9CA3AF", fontWeight: "500" },
-  calDayDisabled: { color: "#2D3748" },
-  calDaySelected: { color: "#fff", fontWeight: "700" },
-  calDayToday: { color: "#A855F7", fontWeight: "700" },
-  timeSection: {
-    marginTop: 10,
-    borderTopWidth: 0.5,
-    borderTopColor: "rgba(255,255,255,0.06)",
-    paddingTop: 10,
-  },
-  timeSectionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  timeScrollContent: { gap: 8, paddingRight: 4 },
-  timeChip: {
-    paddingVertical: 7,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    backgroundColor: "#111827",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  timeChipSelected: {
-    backgroundColor: "rgba(168,85,247,0.2)",
-    borderColor: "#A855F7",
-  },
-  timeChipText: { fontSize: 13, color: "#6B7280", fontWeight: "500" },
-  timeChipTextSelected: { color: "#E9D5FF", fontWeight: "600" },
-  schedSummary: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 0.5,
-    borderTopColor: "rgba(255,255,255,0.06)",
-  },
-  schedSummaryText: { fontSize: 13, color: "#A855F7", fontWeight: "600" },
+    calendarWrap: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.25)",
+      padding: 12,
+      marginBottom: 12,
+    },
+    calHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 10,
+    },
+    calNavBtn: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      backgroundColor: colors.background,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    calMonthLabel: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
+    calWeekRow: { flexDirection: "row", marginBottom: 4 },
+    calWeekLabel: {
+      flex: 1,
+      textAlign: "center",
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.textMuted,
+      textTransform: "uppercase",
+    },
+    calGrid: { flexDirection: "row", flexWrap: "wrap" },
+    calCell: {
+      width: `${100 / 7}%` as any,
+      aspectRatio: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 100,
+    },
+    calCellSelected: { backgroundColor: colors.accentPurple },
+    calCellToday: { borderWidth: 1, borderColor: "rgba(168,85,247,0.5)" },
+    calDayText: { fontSize: 13, color: colors.textTertiary, fontWeight: "500" },
+    calDayDisabled: { color: colors.textFaint },
+    calDaySelected: { color: "#fff", fontWeight: "700" },
+    calDayToday: { color: colors.accentPurple, fontWeight: "700" },
+    timeSection: {
+      marginTop: 10,
+      borderTopWidth: 0.5,
+      borderTopColor: colors.borderSubtle,
+      paddingTop: 10,
+    },
+    timeSectionLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: 8,
+    },
+    timeScrollContent: { gap: 8, paddingRight: 4 },
+    timeChip: {
+      paddingVertical: 7,
+      paddingHorizontal: 14,
+      borderRadius: 20,
+      backgroundColor: colors.background,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    timeChipSelected: {
+      backgroundColor: "rgba(168,85,247,0.2)",
+      borderColor: colors.accentPurple,
+    },
+    timeChipText: { fontSize: 13, color: colors.textSecondary, fontWeight: "500" },
+    timeChipTextSelected: { color: colors.accentPurpleTextStrong, fontWeight: "600" },
+    schedSummary: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 10,
+      paddingTop: 10,
+      borderTopWidth: 0.5,
+      borderTopColor: colors.borderSubtle,
+    },
+    schedSummaryText: { fontSize: 13, color: colors.accentPurple, fontWeight: "600" },
 
-  paymentSection: { marginBottom: 12 },
-  paymentLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  paymentOptions: { gap: 8 },
-  paymentOption: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  paymentOptionSelected: {
-    borderColor: "rgba(232,80,10,0.4)",
-    backgroundColor: "rgba(232,80,10,0.07)",
-  },
-  paymentOptionTitle: {
-    fontSize: 14,
-    color: "#6B7280",
-    fontWeight: "500",
-    flex: 1,
-  },
-  paymentOptionTitleSelected: { color: "#F1F5F9" },
-  addCardPrompt: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(232,80,10,0.06)",
-    borderRadius: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.25)",
-    borderStyle: "dashed",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  addCardPromptText: {
-    fontSize: 13,
-    color: "#E8500A",
-    fontWeight: "500",
-    flex: 1,
-  },
+    paymentSection: { marginBottom: 12 },
+    paymentLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: 8,
+    },
+    paymentOptions: { gap: 8 },
+    paymentOption: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    paymentOptionSelected: {
+      borderColor: "rgba(232,80,10,0.4)",
+      backgroundColor: "rgba(232,80,10,0.07)",
+    },
+    paymentOptionTitle: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      fontWeight: "500",
+      flex: 1,
+    },
+    paymentOptionTitleSelected: { color: colors.textPrimary },
+    addCardPrompt: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: "rgba(232,80,10,0.06)",
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.25)",
+      borderStyle: "dashed",
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    addCardPromptText: {
+      fontSize: 13,
+      color: colors.accentOrange,
+      fontWeight: "500",
+      flex: 1,
+    },
 
-  fareRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    marginBottom: 16,
-  },
-  fareLabel: { fontSize: 14, color: "#9CA3AF", marginBottom: 3 },
-  fareNote: { fontSize: 11, color: "#4B5563" },
-  fareAmount: { fontSize: 28, fontWeight: "700", color: "#F1F5F9" },
-  confirmBtns: { flexDirection: "row", gap: 12 },
-  editBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  editBtnText: { color: "#9CA3AF", fontSize: 15, fontWeight: "500" },
-  bookBtn: {
-    flex: 2,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "#E8500A",
-    alignItems: "center",
-  },
-  bookBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
-});
+    fareRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      marginBottom: 16,
+    },
+    fareLabel: { fontSize: 14, color: colors.textTertiary, marginBottom: 3 },
+    fareNote: { fontSize: 11, color: colors.textMuted },
+    fareAmount: { fontSize: 28, fontWeight: "700", color: colors.textPrimary },
+    confirmBtns: { flexDirection: "row", gap: 12 },
+    editBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    editBtnText: { color: colors.textTertiary, fontSize: 15, fontWeight: "500" },
+    bookBtn: {
+      flex: 2,
+      paddingVertical: 14,
+      borderRadius: 12,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+    },
+    bookBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  });
 
 const darkMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2c3f" }] },

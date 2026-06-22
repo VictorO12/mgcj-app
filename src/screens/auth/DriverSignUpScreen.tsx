@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform,
@@ -7,6 +7,8 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
 import { supabase } from '../../lib/supabase'
+import { useTheme } from '../../theme/ThemeContext'
+import type { Colors } from '../../theme/colors'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverSignUp'>
@@ -27,6 +29,8 @@ function formatDisplay(raw: string): string {
 }
 
 export default function DriverSignUpScreen({ navigation }: Props) {
+  const { colors } = useTheme()
+  const styles = useMemo(() => makeStyles(colors), [colors])
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [phone, setPhone] = useState('')
@@ -114,7 +118,7 @@ export default function DriverSignUpScreen({ navigation }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="First"
-                placeholderTextColor="#4B5563"
+                placeholderTextColor={colors.textMuted}
                 value={firstName}
                 onChangeText={setFirstName}
                 autoCapitalize="words"
@@ -126,7 +130,7 @@ export default function DriverSignUpScreen({ navigation }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="Last"
-                placeholderTextColor="#4B5563"
+                placeholderTextColor={colors.textMuted}
                 value={lastName}
                 onChangeText={setLastName}
                 autoCapitalize="words"
@@ -143,7 +147,7 @@ export default function DriverSignUpScreen({ navigation }: Props) {
               <TextInput
                 style={styles.phoneInput}
                 placeholder="(902) 555-1234"
-                placeholderTextColor="#4B5563"
+                placeholderTextColor={colors.textMuted}
                 keyboardType="phone-pad"
                 value={formatDisplay(phone)}
                 onChangeText={t => setPhone(t.replace(/\D/g, ''))}
@@ -157,7 +161,7 @@ export default function DriverSignUpScreen({ navigation }: Props) {
             <TextInput
               style={[styles.input, styles.codeInput, codeError ? styles.inputError : null]}
               placeholder="e.g. AB1C2D"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               value={inviteCode}
               onChangeText={t => { setInviteCode(t.toUpperCase()); setCodeError('') }}
               autoCapitalize="characters"
@@ -195,49 +199,49 @@ export default function DriverSignUpScreen({ navigation }: Props) {
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827' },
+const makeStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
   inner: { flexGrow: 1, paddingHorizontal: 24, paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 40 },
   backBtn: { marginBottom: 28 },
-  backText: { color: '#6B7280', fontSize: 15 },
-  title: { fontSize: 28, fontWeight: '700', color: '#F1F5F9', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#6B7280', lineHeight: 20, marginBottom: 32 },
+  backText: { color: colors.textSecondary, fontSize: 15 },
+  title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, lineHeight: 20, marginBottom: 32 },
   form: {
-    backgroundColor: '#1E2A3A', borderRadius: 20, padding: 20,
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)', gap: 16,
+    backgroundColor: colors.surface, borderRadius: 20, padding: 20,
+    borderWidth: 0.5, borderColor: colors.border, gap: 16,
   },
   nameRow: { flexDirection: 'row', gap: 12 },
   inputWrap: { gap: 6 },
-  label: { fontSize: 12, fontWeight: '500', color: '#9CA3AF', letterSpacing: 0.04 },
+  label: { fontSize: 12, fontWeight: '500', color: colors.textTertiary, letterSpacing: 0.04 },
   input: {
-    backgroundColor: '#111827', borderRadius: 12,
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.background, borderRadius: 12,
+    borderWidth: 0.5, borderColor: colors.borderStrong,
     paddingHorizontal: 14, paddingVertical: 13,
-    fontSize: 15, color: '#F1F5F9',
+    fontSize: 15, color: colors.textPrimary,
   },
   inputError: { borderColor: 'rgba(226,75,74,0.6)' },
   codeInput: {
     fontSize: 18, fontWeight: '600', letterSpacing: 0.2,
-    textAlign: 'center', color: '#1D9E75',
+    textAlign: 'center', color: colors.accentGreen,
   },
-  errorText: { fontSize: 12, color: '#F87171', marginTop: 2 },
-  codeHint: { fontSize: 11, color: '#4B5563', marginTop: 2 },
+  errorText: { fontSize: 12, color: colors.accentRed, marginTop: 2 },
+  codeHint: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   phoneRow: {
-    flexDirection: 'row', backgroundColor: '#111827',
-    borderRadius: 12, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)',
+    flexDirection: 'row', backgroundColor: colors.background,
+    borderRadius: 12, borderWidth: 0.5, borderColor: colors.borderStrong,
     overflow: 'hidden',
   },
   countryCode: {
     paddingHorizontal: 14, paddingVertical: 13,
-    borderRightWidth: 0.5, borderRightColor: 'rgba(255,255,255,0.1)',
+    borderRightWidth: 0.5, borderRightColor: colors.borderStrong,
   },
-  countryCodeText: { fontSize: 15, color: '#CBD5E1' },
+  countryCodeText: { fontSize: 15, color: colors.textOnSurfaceLight },
   phoneInput: {
     flex: 1, paddingHorizontal: 14, paddingVertical: 13,
-    fontSize: 15, color: '#F1F5F9',
+    fontSize: 15, color: colors.textPrimary,
   },
   btn: {
-    backgroundColor: '#1D9E75', borderRadius: 12,
+    backgroundColor: colors.accentGreen, borderRadius: 12,
     paddingVertical: 15, alignItems: 'center',
   },
   btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
@@ -245,6 +249,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'center',
     alignItems: 'center', marginTop: 28,
   },
-  loginText: { fontSize: 14, color: '#6B7280' },
-  loginLink: { fontSize: 14, color: '#E8500A', fontWeight: '600' },
+  loginText: { fontSize: 14, color: colors.textSecondary },
+  loginLink: { fontSize: 14, color: colors.accentOrange, fontWeight: '600' },
 })

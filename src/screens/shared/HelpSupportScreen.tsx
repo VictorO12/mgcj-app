@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface Props {
   onClose: () => void;
@@ -46,6 +48,8 @@ const FAQ_ITEMS = [
 ];
 
 export default function HelpSupportScreen({ onClose }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   function toggleFaq(i: number) {
@@ -69,7 +73,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
           onPress={onClose}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={22} color="#F1F5F9" />
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Help & support</Text>
         <View style={{ width: 40 }} />
@@ -88,7 +92,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
             activeOpacity={0.8}
           >
             <View style={styles.contactIconWrap}>
-              <Ionicons name="call" size={20} color="#1D9E75" />
+              <Ionicons name="call" size={20} color={colors.accentGreen} />
             </View>
             <Text style={styles.contactLabel}>Call</Text>
             <Text style={styles.contactValue}>(902) 000-0000</Text>
@@ -100,7 +104,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
             activeOpacity={0.8}
           >
             <View style={styles.contactIconWrap}>
-              <Ionicons name="mail" size={20} color="#4a9eff" />
+              <Ionicons name="mail" size={20} color={colors.accentBlue} />
             </View>
             <Text style={styles.contactLabel}>Email</Text>
             <Text style={styles.contactValue}>dispatch@mgcj.ca</Text>
@@ -108,7 +112,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
         </View>
 
         <View style={styles.hoursCard}>
-          <Ionicons name="time-outline" size={18} color="#6B7280" />
+          <Ionicons name="time-outline" size={18} color={colors.textSecondary} />
           <Text style={styles.hoursText}>
             Dispatch available <Text style={styles.hoursBold}>24 / 7</Text>
           </Text>
@@ -131,7 +135,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
                 <Ionicons
                   name={openIndex === i ? "chevron-up" : "chevron-down"}
                   size={16}
-                  color="#6B7280"
+                  color={colors.textSecondary}
                 />
               </TouchableOpacity>
               {openIndex === i && (
@@ -151,113 +155,114 @@ export default function HelpSupportScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    borderBottomWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  backBtn: { padding: 4, width: 40 },
-  headerTitle: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      borderBottomWidth: 0.5,
+      borderColor: colors.border,
+    },
+    backBtn: { padding: 4, width: 40 },
+    headerTitle: { fontSize: 17, fontWeight: "600", color: colors.textPrimary },
 
-  inner: { padding: 20, paddingBottom: 48 },
+    inner: { padding: 20, paddingBottom: 48 },
 
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#6B7280",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 12,
-  },
+    sectionLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 12,
+    },
 
-  contactRow: { flexDirection: "row", gap: 12, marginBottom: 10 },
-  contactCard: {
-    flex: 1,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 16,
-    alignItems: "center",
-    gap: 6,
-  },
-  contactIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 4,
-  },
-  contactLabel: { fontSize: 12, color: "#6B7280" },
-  contactValue: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#F1F5F9",
-    textAlign: "center",
-  },
+    contactRow: { flexDirection: "row", gap: 12, marginBottom: 10 },
+    contactCard: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      padding: 16,
+      alignItems: "center",
+      gap: 6,
+    },
+    contactIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.borderSubtle,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 4,
+    },
+    contactLabel: { fontSize: 12, color: colors.textSecondary },
+    contactValue: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      textAlign: "center",
+    },
 
-  hoursCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  hoursText: { fontSize: 13, color: "#6B7280" },
-  hoursBold: { color: "#F1F5F9", fontWeight: "600" },
+    hoursCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    hoursText: { fontSize: 13, color: colors.textSecondary },
+    hoursBold: { color: colors.textPrimary, fontWeight: "600" },
 
-  faqCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    overflow: "hidden",
-  },
-  faqRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 16,
-    gap: 12,
-  },
-  faqQuestion: {
-    flex: 1,
-    fontSize: 14,
-    color: "#F1F5F9",
-    fontWeight: "500",
-    lineHeight: 20,
-  },
-  faqAnswer: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-  },
-  faqAnswerText: {
-    fontSize: 13,
-    color: "#9CA3AF",
-    lineHeight: 20,
-  },
-  faqDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginHorizontal: 16,
-  },
+    faqCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    faqRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: 16,
+      gap: 12,
+    },
+    faqQuestion: {
+      flex: 1,
+      fontSize: 14,
+      color: colors.textPrimary,
+      fontWeight: "500",
+      lineHeight: 20,
+    },
+    faqAnswer: {
+      paddingHorizontal: 16,
+      paddingBottom: 16,
+    },
+    faqAnswerText: {
+      fontSize: 13,
+      color: colors.textTertiary,
+      lineHeight: 20,
+    },
+    faqDivider: {
+      height: 0.5,
+      backgroundColor: colors.borderSubtle,
+      marginHorizontal: 16,
+    },
 
-  versionText: {
-    fontSize: 12,
-    color: "#374151",
-    textAlign: "center",
-    marginTop: 32,
-  },
-});
+    versionText: {
+      fontSize: 12,
+      color: colors.textFaint,
+      textAlign: "center",
+      marginTop: 32,
+    },
+  });

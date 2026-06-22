@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,8 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface Props {
   onClose: () => void;
@@ -41,6 +43,8 @@ const VEHICLE_MAKES = [
 
 export default function DriverEditProfileScreen({ onClose }: Props) {
   const { profile, refetch } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [name, setName] = useState(profile?.name ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
@@ -202,7 +206,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
   if (loadingData) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator color="#E8500A" size="large" />
+        <ActivityIndicator color={colors.accentOrange} size="large" />
       </View>
     );
   }
@@ -219,7 +223,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
           onPress={onClose}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={22} color="#F1F5F9" />
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit profile</Text>
         <TouchableOpacity
@@ -283,7 +287,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               value={name}
               onChangeText={setName}
               placeholder="Your name"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="words"
             />
           </View>
@@ -311,7 +315,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               <Text
                 style={[
                   styles.fieldInput,
-                  !vehicleMake && { color: "#4B5563" },
+                  !vehicleMake && { color: colors.textMuted },
                 ]}
               >
                 {vehicleMake || "Select make"}
@@ -319,7 +323,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               <Ionicons
                 name={showMakePicker ? "chevron-up" : "chevron-down"}
                 size={16}
-                color="#6B7280"
+                color={colors.textSecondary}
               />
             </TouchableOpacity>
           </View>
@@ -348,7 +352,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
                     {make}
                   </Text>
                   {vehicleMake === make && (
-                    <Ionicons name="checkmark" size={16} color="#E8500A" />
+                    <Ionicons name="checkmark" size={16} color={colors.accentOrange} />
                   )}
                 </TouchableOpacity>
               ))}
@@ -365,7 +369,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               value={vehicleModel}
               onChangeText={setVehicleModel}
               placeholder="e.g. Camry, Civic"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="words"
             />
           </View>
@@ -379,7 +383,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               value={year}
               onChangeText={setYear}
               placeholder="e.g. 2019 (optional)"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
               maxLength={4}
             />
@@ -394,7 +398,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               value={plateNumber}
               onChangeText={(t) => setPlateNumber(t.toUpperCase())}
               placeholder="ABC 123"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="characters"
               maxLength={10}
             />
@@ -431,173 +435,184 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: "#111827",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: "#111827",
-    borderBottomWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  backBtn: { padding: 4, width: 40 },
-  headerTitle: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
-  saveBtn: {
-    backgroundColor: "#E8500A",
-    borderRadius: 10,
-    paddingVertical: 7,
-    paddingHorizontal: 16,
-    width: 70,
-    alignItems: "center",
-  },
-  saveBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    loadingContainer: {
+      flex: 1,
+      backgroundColor: colors.background,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      backgroundColor: colors.background,
+      borderBottomWidth: 0.5,
+      borderColor: colors.border,
+    },
+    backBtn: { padding: 4, width: 40 },
+    headerTitle: { fontSize: 17, fontWeight: "600", color: colors.textPrimary },
+    saveBtn: {
+      backgroundColor: colors.accentOrange,
+      borderRadius: 10,
+      paddingVertical: 7,
+      paddingHorizontal: 16,
+      width: 70,
+      alignItems: "center",
+    },
+    saveBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 
-  inner: { padding: 20, paddingBottom: 48 },
+    inner: { padding: 20, paddingBottom: 48 },
 
-  avatarSection: { alignItems: "center", marginBottom: 28 },
-  avatarWrap: { position: "relative", marginBottom: 10 },
-  avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 2,
-    borderColor: "#E8500A",
-  },
-  avatarFallback: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#E8500A",
-  },
-  avatarInitials: { fontSize: 32, fontWeight: "700", color: "#93C5FD" },
-  avatarEditBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#E8500A",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#111827",
-  },
-  avatarHint: { fontSize: 13, color: "#6B7280" },
+    avatarSection: { alignItems: "center", marginBottom: 28 },
+    avatarWrap: { position: "relative", marginBottom: 10 },
+    avatarImage: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      borderWidth: 2,
+      borderColor: colors.accentOrange,
+    },
+    avatarFallback: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.accentOrange,
+    },
+    avatarInitials: { fontSize: 32, fontWeight: "700", color: colors.avatarText },
+    avatarEditBadge: {
+      position: "absolute",
+      bottom: 0,
+      right: 0,
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.background,
+    },
+    avatarHint: { fontSize: 13, color: colors.textSecondary },
 
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#6B7280",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  card: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    marginBottom: 8,
-    overflow: "hidden",
-  },
-  fieldRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 52,
-  },
-  fieldLabel: { width: 72, fontSize: 14, color: "#9CA3AF", fontWeight: "500" },
-  fieldInput: { flex: 1, fontSize: 14, color: "#F1F5F9", textAlign: "right" },
-  plateInput: { fontFamily: Platform.OS === "ios" ? "Courier" : "monospace" },
-  fieldReadOnly: {
-    flex: 1,
-    fontSize: 14,
-    color: "#4B5563",
-    textAlign: "right",
-  },
-  fieldDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginLeft: 16,
-  },
-  fieldNote: {
-    fontSize: 12,
-    color: "#4B5563",
-    marginBottom: 20,
-    marginTop: 4,
-    paddingHorizontal: 4,
-  },
-  selectRow: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    gap: 6,
-  },
-  picker: { borderTopWidth: 0.5, borderColor: "rgba(255,255,255,0.06)" },
-  pickerItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 11,
-    paddingHorizontal: 20,
-    borderBottomWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.04)",
-  },
-  pickerItemSelected: { backgroundColor: "rgba(232,80,10,0.08)" },
-  pickerItemText: { fontSize: 14, color: "#9CA3AF" },
-  pickerItemTextSelected: { color: "#E8500A", fontWeight: "600" },
+    sectionLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 8,
+      marginTop: 4,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      marginBottom: 8,
+      overflow: "hidden",
+    },
+    fieldRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      minHeight: 52,
+    },
+    fieldLabel: {
+      width: 72,
+      fontSize: 14,
+      color: colors.textTertiary,
+      fontWeight: "500",
+    },
+    fieldInput: {
+      flex: 1,
+      fontSize: 14,
+      color: colors.textPrimary,
+      textAlign: "right",
+    },
+    plateInput: { fontFamily: Platform.OS === "ios" ? "Courier" : "monospace" },
+    fieldReadOnly: {
+      flex: 1,
+      fontSize: 14,
+      color: colors.textMuted,
+      textAlign: "right",
+    },
+    fieldDivider: {
+      height: 0.5,
+      backgroundColor: colors.borderSubtle,
+      marginLeft: 16,
+    },
+    fieldNote: {
+      fontSize: 12,
+      color: colors.textMuted,
+      marginBottom: 20,
+      marginTop: 4,
+      paddingHorizontal: 4,
+    },
+    selectRow: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "flex-end",
+      gap: 6,
+    },
+    picker: { borderTopWidth: 0.5, borderColor: colors.borderSubtle },
+    pickerItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: 11,
+      paddingHorizontal: 20,
+      borderBottomWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    pickerItemSelected: { backgroundColor: "rgba(232,80,10,0.08)" },
+    pickerItemText: { fontSize: 14, color: colors.textTertiary },
+    pickerItemTextSelected: { color: colors.accentOrange, fontWeight: "600" },
 
-  previewCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.25)",
-    marginTop: 8,
-  },
-  previewLabel: {
-    fontSize: 11,
-    color: "#6B7280",
-    marginBottom: 12,
-    textAlign: "center",
-  },
-  previewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  previewAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  previewAvatarImage: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    borderWidth: 1.5,
-    borderColor: "#E8500A",
-  },
-  previewInitials: { fontSize: 14, fontWeight: "700", color: "#93C5FD" },
-  previewName: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  previewVehicle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-});
+    previewCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.25)",
+      marginTop: 8,
+    },
+    previewLabel: {
+      fontSize: 11,
+      color: colors.textSecondary,
+      marginBottom: 12,
+      textAlign: "center",
+    },
+    previewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+    previewAvatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    previewAvatarImage: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      borderWidth: 1.5,
+      borderColor: colors.accentOrange,
+    },
+    previewInitials: { fontSize: 14, fontWeight: "700", color: colors.avatarText },
+    previewName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    previewVehicle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  });

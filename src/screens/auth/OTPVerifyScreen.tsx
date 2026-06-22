@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { RouteProp } from "@react-navigation/native";
 import { RootStackParamList } from "../../types";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, "OTPVerify">;
@@ -26,6 +28,8 @@ const CODE_LENGTH = 6;
 export default function OTPVerifyScreen({ navigation, route }: Props) {
   const { phone, name, isNewUser, isDriver, inviteCode } = route.params;
   const { refetch } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(30);
@@ -291,7 +295,7 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         </View>
         {loading && (
           <View style={styles.verifyingRow}>
-            <ActivityIndicator color="#E8500A" size="small" />
+            <ActivityIndicator color={colors.accentOrange} size="small" />
             <Text style={styles.verifyingText}>
               {isDriver ? "Setting up driver account…" : "Verifying…"}
             </Text>
@@ -317,23 +321,23 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
+const makeStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
   inner: {
     flex: 1,
     paddingHorizontal: 28,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
   },
   backBtn: { marginBottom: 28 },
-  backText: { color: "#6B7280", fontSize: 15 },
-  title: { fontSize: 28, fontWeight: "700", color: "#F1F5F9", marginBottom: 8 },
+  backText: { color: colors.textSecondary, fontSize: 15 },
+  title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, marginBottom: 8 },
   subtitle: {
     fontSize: 14,
-    color: "#6B7280",
+    color: colors.textSecondary,
     lineHeight: 20,
     marginBottom: 32,
   },
-  phoneHighlight: { color: "#F1F5F9", fontWeight: "600" },
+  phoneHighlight: { color: colors.textPrimary, fontWeight: "600" },
   driverBadge: {
     alignSelf: "flex-start",
     backgroundColor: "rgba(29,158,117,0.12)",
@@ -344,22 +348,22 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(29,158,117,0.3)",
   },
-  driverBadgeText: { fontSize: 13, color: "#1D9E75", fontWeight: "500" },
+  driverBadgeText: { fontSize: 13, color: colors.accentGreen, fontWeight: "500" },
   codeRow: { flexDirection: "row", gap: 10, marginBottom: 32 },
   digitBox: {
     flex: 1,
     height: 56,
     borderRadius: 12,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: colors.borderStrong,
     textAlign: "center",
     fontSize: 22,
     fontWeight: "700",
-    color: "#F1F5F9",
+    color: colors.textPrimary,
   },
   digitBoxFilled: {
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
     backgroundColor: "rgba(232,80,10,0.08)",
   },
   verifyingRow: {
@@ -368,8 +372,8 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 24,
   },
-  verifyingText: { fontSize: 14, color: "#9CA3AF" },
+  verifyingText: { fontSize: 14, color: colors.textTertiary },
   resendBtn: { alignSelf: "center" },
-  resendText: { fontSize: 14, color: "#E8500A", fontWeight: "500" },
-  resendDisabled: { color: "#4B5563" },
+  resendText: { fontSize: 14, color: colors.accentOrange, fontWeight: "500" },
+  resendDisabled: { color: colors.textMuted },
 });

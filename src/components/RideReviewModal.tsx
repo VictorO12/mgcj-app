@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
+import { useTheme } from "../theme/ThemeContext";
+import type { Colors } from "../theme/colors";
 
 interface Props {
   visible: boolean;
@@ -31,6 +33,8 @@ export default function RideReviewModal({
   onDismiss,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [rating, setRating] = useState(0);
   const [hoveredStar, setHoveredStar] = useState(0);
   const [comment, setComment] = useState("");
@@ -85,7 +89,7 @@ export default function RideReviewModal({
           {submitted ? (
             <View style={styles.successWrap}>
               <View style={styles.successIcon}>
-                <Ionicons name="checkmark" size={32} color="#1D9E75" />
+                <Ionicons name="checkmark" size={32} color={colors.accentGreen} />
               </View>
               <Text style={styles.successTitle}>Thanks for the feedback!</Text>
             </View>
@@ -112,7 +116,7 @@ export default function RideReviewModal({
                     <Ionicons
                       name={displayRating >= star ? "star" : "star-outline"}
                       size={40}
-                      color={displayRating >= star ? "#F59E0B" : "#374151"}
+                      color={displayRating >= star ? colors.accentAmber : colors.textFaint}
                     />
                   </TouchableOpacity>
                 ))}
@@ -125,7 +129,7 @@ export default function RideReviewModal({
               <TextInput
                 style={styles.commentInput}
                 placeholder="Add a comment (optional)"
-                placeholderTextColor="#4B5563"
+                placeholderTextColor={colors.textMuted}
                 value={comment}
                 onChangeText={setComment}
                 multiline
@@ -163,19 +167,19 @@ export default function RideReviewModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: colors.modalOverlay,
     justifyContent: "flex-end",
   },
   sheet: {
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: Platform.OS === "ios" ? 40 : 28,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
   header: {
     alignItems: "center",
@@ -187,11 +191,11 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#374151",
+    backgroundColor: colors.textFaint,
     marginBottom: 20,
   },
-  title: { fontSize: 20, fontWeight: "700", color: "#F1F5F9", marginBottom: 6 },
-  subtitle: { fontSize: 14, color: "#6B7280", textAlign: "center" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, textAlign: "center" },
   starsRow: {
     flexDirection: "row",
     justifyContent: "center",
@@ -203,17 +207,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 14,
     fontWeight: "600",
-    color: "#F59E0B",
+    color: colors.accentAmber,
     height: 20,
     marginBottom: 16,
   },
   commentInput: {
     marginHorizontal: 20,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    color: "#F1F5F9",
+    borderColor: colors.border,
+    color: colors.textPrimary,
     fontSize: 14,
     padding: 14,
     minHeight: 80,
@@ -226,17 +230,17 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 14,
     alignItems: "center",
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
-  skipText: { color: "#6B7280", fontSize: 15, fontWeight: "600" },
+  skipText: { color: colors.textSecondary, fontSize: 15, fontWeight: "600" },
   submitBtn: {
     flex: 2,
     paddingVertical: 15,
     borderRadius: 14,
     alignItems: "center",
-    backgroundColor: "#E8500A",
+    backgroundColor: colors.accentOrange,
   },
   submitBtnDisabled: { opacity: 0.4 },
   submitText: { color: "#fff", fontSize: 15, fontWeight: "700" },
@@ -256,5 +260,5 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "rgba(29,158,117,0.4)",
   },
-  successTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
+  successTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
 });

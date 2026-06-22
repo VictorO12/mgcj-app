@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import AddCardScreen from "./AddCardScreen";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 export interface PaymentMethod {
   id: string;
@@ -45,6 +47,8 @@ interface Props {
 
 export default function PaymentMethodsScreen({ onClose }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [cards, setCards] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -162,20 +166,20 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Payment methods</Text>
         <TouchableOpacity
           style={styles.addBtn}
           onPress={() => setShowAddCard(true)}
         >
-          <Ionicons name="add" size={22} color="#E8500A" />
+          <Ionicons name="add" size={22} color={colors.accentOrange} />
         </TouchableOpacity>
       </View>
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#E8500A" size="large" />
+          <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
       ) : (
         <ScrollView
@@ -184,7 +188,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#E8500A"
+              tintColor={colors.accentOrange}
             />
           }
           showsVerticalScrollIndicator={false}
@@ -192,7 +196,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
           {/* Cash — always shown */}
           <View style={styles.cashCard}>
             <View style={styles.cashIconWrap}>
-              <Ionicons name="cash-outline" size={22} color="#1D9E75" />
+              <Ionicons name="cash-outline" size={22} color={colors.accentGreen} />
             </View>
             <View style={styles.cardInfo}>
               <Text style={styles.cardBrand}>Cash</Text>
@@ -207,7 +211,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
           {cards.length === 0 ? (
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIcon}>
-                <Ionicons name="card-outline" size={32} color="#374151" />
+                <Ionicons name="card-outline" size={32} color={colors.textFaint} />
               </View>
               <Text style={styles.emptyTitle}>No saved cards</Text>
               <Text style={styles.emptySub}>
@@ -217,7 +221,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
                 style={styles.emptyAddBtn}
                 onPress={() => setShowAddCard(true)}
               >
-                <Ionicons name="add-circle-outline" size={18} color="#E8500A" />
+                <Ionicons name="add-circle-outline" size={18} color={colors.accentOrange} />
                 <Text style={styles.emptyAddBtnText}>Add your first card</Text>
               </TouchableOpacity>
             </View>
@@ -226,7 +230,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
               <Text style={styles.sectionLabel}>SAVED CARDS</Text>
               {cards.map((card) => {
                 const expired = isExpired(card.exp_month, card.exp_year);
-                const brandColor = BRAND_COLORS[card.brand] ?? "#6B7280";
+                const brandColor = BRAND_COLORS[card.brand] ?? colors.textSecondary;
                 const brandBg =
                   BRAND_BG[card.brand] ?? "rgba(107,114,128,0.12)";
                 const isSettingThis = settingDefault === card.id;
@@ -290,7 +294,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
                           disabled={!!settingDefault}
                         >
                           {isSettingThis ? (
-                            <ActivityIndicator size="small" color="#E8500A" />
+                            <ActivityIndicator size="small" color={colors.accentOrange} />
                           ) : (
                             <Text style={styles.setDefaultText}>
                               Set default
@@ -304,12 +308,12 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
                         disabled={!!deleting}
                       >
                         {isDeletingThis ? (
-                          <ActivityIndicator size="small" color="#F87171" />
+                          <ActivityIndicator size="small" color={colors.accentRed} />
                         ) : (
                           <Ionicons
                             name="trash-outline"
                             size={16}
-                            color="#F87171"
+                            color={colors.accentRed}
                           />
                         )}
                       </TouchableOpacity>
@@ -324,7 +328,7 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
                 onPress={() => setShowAddCard(true)}
                 activeOpacity={0.8}
               >
-                <Ionicons name="add-circle-outline" size={18} color="#E8500A" />
+                <Ionicons name="add-circle-outline" size={18} color={colors.accentOrange} />
                 <Text style={styles.addAnotherText}>Add another card</Text>
               </TouchableOpacity>
             </>
@@ -337,210 +341,211 @@ export default function PaymentMethodsScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-  addBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(232,80,10,0.12)",
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  list: { padding: 16, gap: 10 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-    marginTop: 8,
-    marginBottom: 4,
-    marginLeft: 4,
-  },
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 16,
+      paddingBottom: 16,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+    addBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: "rgba(232,80,10,0.12)",
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.3)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
+    list: { padding: 16, gap: 10 },
+    sectionLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      letterSpacing: 0.5,
+      textTransform: "uppercase",
+      marginTop: 8,
+      marginBottom: 4,
+      marginLeft: 4,
+    },
 
-  // Cash card
-  cashCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "rgba(29,158,117,0.08)",
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.2)",
-  },
-  cashIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: "rgba(29,158,117,0.12)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  cashBadge: {
-    backgroundColor: "rgba(29,158,117,0.15)",
-    borderRadius: 10,
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-  },
-  cashBadgeText: { fontSize: 10, color: "#1D9E75", fontWeight: "600" },
+    // Cash card
+    cashCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: "rgba(29,158,117,0.08)",
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.2)",
+    },
+    cashIconWrap: {
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      backgroundColor: "rgba(29,158,117,0.12)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    cashBadge: {
+      backgroundColor: "rgba(29,158,117,0.15)",
+      borderRadius: 10,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+    },
+    cashBadgeText: { fontSize: 10, color: colors.accentGreen, fontWeight: "600" },
 
-  // Saved card row
-  cardRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  cardRowDefault: {
-    borderColor: "rgba(232,80,10,0.35)",
-    backgroundColor: "rgba(232,80,10,0.05)",
-  },
-  cardRowExpired: {
-    opacity: 0.5,
-  },
-  brandIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brandInitial: {
-    fontSize: 14,
-    fontWeight: "800",
-    letterSpacing: 0.5,
-  },
-  cardInfo: { flex: 1, gap: 3 },
-  cardTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    flexWrap: "wrap",
-  },
-  cardBrand: { fontSize: 15, fontWeight: "600", color: "#F1F5F9" },
-  cardSub: { fontSize: 12, color: "#6B7280", letterSpacing: 0.5 },
-  cardHolder: { fontSize: 11, color: "#4B5563" },
-  defaultBadge: {
-    backgroundColor: "rgba(232,80,10,0.15)",
-    borderRadius: 8,
-    paddingVertical: 2,
-    paddingHorizontal: 7,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.3)",
-  },
-  defaultBadgeText: { fontSize: 10, color: "#E8500A", fontWeight: "600" },
-  expiredBadge: {
-    backgroundColor: "rgba(248,113,113,0.12)",
-    borderRadius: 8,
-    paddingVertical: 2,
-    paddingHorizontal: 7,
-  },
-  expiredBadgeText: { fontSize: 10, color: "#F87171", fontWeight: "600" },
-  cardActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  setDefaultBtn: {
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.3)",
-    backgroundColor: "rgba(232,80,10,0.08)",
-  },
-  setDefaultText: { fontSize: 11, color: "#E8500A", fontWeight: "500" },
-  deleteBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: "rgba(248,113,113,0.08)",
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.2)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+    // Saved card row
+    cardRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    cardRowDefault: {
+      borderColor: "rgba(232,80,10,0.35)",
+      backgroundColor: "rgba(232,80,10,0.05)",
+    },
+    cardRowExpired: {
+      opacity: 0.5,
+    },
+    brandIconWrap: {
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    brandInitial: {
+      fontSize: 14,
+      fontWeight: "800",
+      letterSpacing: 0.5,
+    },
+    cardInfo: { flex: 1, gap: 3 },
+    cardTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 7,
+      flexWrap: "wrap",
+    },
+    cardBrand: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+    cardSub: { fontSize: 12, color: colors.textSecondary, letterSpacing: 0.5 },
+    cardHolder: { fontSize: 11, color: colors.textMuted },
+    defaultBadge: {
+      backgroundColor: "rgba(232,80,10,0.15)",
+      borderRadius: 8,
+      paddingVertical: 2,
+      paddingHorizontal: 7,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.3)",
+    },
+    defaultBadgeText: { fontSize: 10, color: colors.accentOrange, fontWeight: "600" },
+    expiredBadge: {
+      backgroundColor: "rgba(248,113,113,0.12)",
+      borderRadius: 8,
+      paddingVertical: 2,
+      paddingHorizontal: 7,
+    },
+    expiredBadgeText: { fontSize: 10, color: colors.accentRed, fontWeight: "600" },
+    cardActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    setDefaultBtn: {
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.3)",
+      backgroundColor: "rgba(232,80,10,0.08)",
+    },
+    setDefaultText: { fontSize: 11, color: colors.accentOrange, fontWeight: "500" },
+    deleteBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      backgroundColor: "rgba(248,113,113,0.08)",
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.2)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
 
-  // Empty state
-  emptyWrap: {
-    alignItems: "center",
-    paddingVertical: 32,
-    gap: 10,
-  },
-  emptyIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 4,
-  },
-  emptyTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  emptySub: {
-    fontSize: 13,
-    color: "#6B7280",
-    textAlign: "center",
-    lineHeight: 20,
-    paddingHorizontal: 20,
-  },
-  emptyAddBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    marginTop: 8,
-    paddingVertical: 11,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    backgroundColor: "rgba(232,80,10,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.3)",
-  },
-  emptyAddBtnText: { color: "#E8500A", fontSize: 14, fontWeight: "600" },
+    // Empty state
+    emptyWrap: {
+      alignItems: "center",
+      paddingVertical: 32,
+      gap: 10,
+    },
+    emptyIcon: {
+      width: 68,
+      height: 68,
+      borderRadius: 34,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 4,
+    },
+    emptyTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    emptySub: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: "center",
+      lineHeight: 20,
+      paddingHorizontal: 20,
+    },
+    emptyAddBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 7,
+      marginTop: 8,
+      paddingVertical: 11,
+      paddingHorizontal: 20,
+      borderRadius: 12,
+      backgroundColor: "rgba(232,80,10,0.1)",
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.3)",
+    },
+    emptyAddBtnText: { color: colors.accentOrange, fontSize: 14, fontWeight: "600" },
 
-  // Add another
-  addAnotherBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 13,
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.25)",
-    borderStyle: "dashed",
-    marginTop: 4,
-  },
-  addAnotherText: { color: "#E8500A", fontSize: 14, fontWeight: "500" },
-});
+    // Add another
+    addAnotherBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingVertical: 13,
+      borderRadius: 14,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.25)",
+      borderStyle: "dashed",
+      marginTop: 4,
+    },
+    addAnotherText: { color: colors.accentOrange, fontSize: 14, fontWeight: "500" },
+  });

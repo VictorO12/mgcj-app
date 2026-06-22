@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../types";
 import { supabase } from "../../lib/supabase";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, "PhoneEntry">;
@@ -33,6 +35,8 @@ function formatDisplay(raw: string): string {
 }
 
 export default function PhoneEntryScreen({ navigation }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -107,7 +111,7 @@ export default function PhoneEntryScreen({ navigation }: Props) {
             <TextInput
               style={styles.input}
               placeholder="(902) 555-1234"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               keyboardType="phone-pad"
               value={formatDisplay(phone)}
               onChangeText={(t) => setPhone(t.replace(/\D/g, ""))}
@@ -141,60 +145,60 @@ export default function PhoneEntryScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
+const makeStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
   inner: {
     flex: 1,
     paddingHorizontal: 24,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
   },
   backBtn: { marginBottom: 28 },
-  backText: { color: "#6B7280", fontSize: 15 },
-  title: { fontSize: 28, fontWeight: "700", color: "#F1F5F9", marginBottom: 8 },
+  backText: { color: colors.textSecondary, fontSize: 15 },
+  title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, marginBottom: 8 },
   subtitle: {
     fontSize: 14,
-    color: "#6B7280",
+    color: colors.textSecondary,
     lineHeight: 20,
     marginBottom: 32,
   },
   form: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 20,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     gap: 16,
   },
   label: {
     fontSize: 12,
     fontWeight: "500",
-    color: "#9CA3AF",
+    color: colors.textTertiary,
     letterSpacing: 0.04,
   },
   inputRow: {
     flexDirection: "row",
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderRadius: 12,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: colors.borderStrong,
     overflow: "hidden",
   },
   countryCode: {
     paddingHorizontal: 14,
     paddingVertical: 13,
     borderRightWidth: 0.5,
-    borderRightColor: "rgba(255,255,255,0.1)",
+    borderRightColor: colors.borderStrong,
   },
-  countryCodeText: { fontSize: 15, color: "#CBD5E1" },
+  countryCodeText: { fontSize: 15, color: colors.textOnSurfaceLight },
   input: {
     flex: 1,
     paddingHorizontal: 14,
     paddingVertical: 13,
     fontSize: 15,
-    color: "#F1F5F9",
+    color: colors.textPrimary,
   },
   btn: {
-    backgroundColor: "#E8500A",
+    backgroundColor: colors.accentOrange,
     borderRadius: 12,
     paddingVertical: 15,
     alignItems: "center",
@@ -206,6 +210,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 28,
   },
-  signupText: { fontSize: 14, color: "#6B7280" },
-  signupLink: { fontSize: 14, color: "#E8500A", fontWeight: "600" },
+  signupText: { fontSize: 14, color: colors.textSecondary },
+  signupLink: { fontSize: 14, color: colors.accentOrange, fontWeight: "600" },
 });

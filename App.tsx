@@ -5,6 +5,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StripeProvider } from "@stripe/stripe-react-native";
 import Constants from "expo-constants";
 import { AuthProvider, useAuth } from "./src/hooks/AuthContext";
+import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
 import { RootStackParamList } from "./src/types";
 import WelcomeScreen from "./src/screens/auth/WelcomeScreen";
 import PhoneEntryScreen from "./src/screens/auth/PhoneEntryScreen";
@@ -20,11 +21,12 @@ const STRIPE_KEY = Constants.expoConfig?.extra?.stripePublishableKey ?? "";
 
 function RootNavigator() {
   const { session, profile, loading } = useAuth();
+  const { colors } = useTheme();
 
   if (loading) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color="#E8500A" size="large" />
+      <View style={[styles.loading, { backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.accentOrange} size="large" />
       </View>
     );
   }
@@ -62,18 +64,19 @@ function RootNavigator() {
 
 export default function App() {
   return (
-    <StripeProvider publishableKey={STRIPE_KEY}>
-      <AuthProvider>
-        <RootNavigator />
-      </AuthProvider>
-    </StripeProvider>
+    <ThemeProvider>
+      <StripeProvider publishableKey={STRIPE_KEY}>
+        <AuthProvider>
+          <RootNavigator />
+        </AuthProvider>
+      </StripeProvider>
+    </ThemeProvider>
   );
 }
 
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: "#111827",
     alignItems: "center",
     justifyContent: "center",
   },

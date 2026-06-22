@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import RideReviewModal from "../../components/RideReviewModal";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface RideRecord {
   id: string;
@@ -31,14 +33,14 @@ interface RideRecord {
   driver_id: string | null;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  completed: "#1D9E75",
-  cancelled: "#E24B4A",
-  in_progress: "#E8500A",
-  assigned: "#F59E0B",
-  driver_arriving: "#F59E0B",
-  pending: "#6B7280",
-};
+const getStatusColors = (colors: Colors): Record<string, string> => ({
+  completed: colors.accentGreen,
+  cancelled: colors.accentRedDeep,
+  in_progress: colors.accentOrange,
+  assigned: colors.accentAmber,
+  driver_arriving: colors.accentAmber,
+  pending: colors.textSecondary,
+});
 
 const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
@@ -55,6 +57,9 @@ interface Props {
 
 export default function RideHistoryScreen({ onClose }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const STATUS_COLORS = useMemo(() => getStatusColors(colors), [colors]);
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -263,7 +268,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Ride history</Text>
         <View style={{ width: 36 }} />
@@ -308,11 +313,11 @@ export default function RideHistoryScreen({ onClose }: Props) {
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#E8500A" size="large" />
+          <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
       ) : filtered.length === 0 ? (
         <View style={styles.emptyWrap}>
-          <Ionicons name="car-outline" size={48} color="#374151" />
+          <Ionicons name="car-outline" size={48} color={colors.textFaint} />
           <Text style={styles.emptyTitle}>No rides yet</Text>
           <Text style={styles.emptySubtitle}>
             {isDriver
@@ -328,7 +333,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#E8500A"
+              tintColor={colors.accentOrange}
             />
           }
         >
@@ -354,8 +359,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
                           style={[
                             styles.statusBadge,
                             {
-                              backgroundColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}18`,
-                              borderColor: `${STATUS_COLORS[ride.status] ?? "#6B7280"}40`,
+                              backgroundColor: `${STATUS_COLORS[ride.status] ?? colors.textSecondary}18`,
+                              borderColor: `${STATUS_COLORS[ride.status] ?? colors.textSecondary}40`,
                             },
                           ]}
                         >
@@ -363,7 +368,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                             style={[
                               styles.statusText,
                               {
-                                color: STATUS_COLORS[ride.status] ?? "#6B7280",
+                                color: STATUS_COLORS[ride.status] ?? colors.textSecondary,
                               },
                             ]}
                           >
@@ -392,7 +397,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                               <Ionicons
                                 name="person-outline"
                                 size={11}
-                                color="#93C5FD"
+                                color={colors.avatarText}
                               />
                               <Text style={styles.viewProfileBtnText}>
                                 View profile
@@ -408,7 +413,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                           <View
                             style={[
                               styles.routeDot,
-                              { backgroundColor: "#4a9eff" },
+                              { backgroundColor: colors.accentBlue },
                             ]}
                           />
                           <Text style={styles.routeText} numberOfLines={1}>
@@ -420,7 +425,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                           <View
                             style={[
                               styles.routeDot,
-                              { backgroundColor: "#E8500A", borderRadius: 3 },
+                              { backgroundColor: colors.accentOrange, borderRadius: 3 },
                             ]}
                           />
                           <Text style={styles.routeText} numberOfLines={1}>
@@ -461,8 +466,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
                                     size={16}
                                     color={
                                       ride.review_rating! >= s
-                                        ? "#F59E0B"
-                                        : "#374151"
+                                        ? colors.accentAmber
+                                        : colors.textFaint
                                     }
                                   />
                                 ))}
@@ -485,7 +490,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
                               <Ionicons
                                 name="star-outline"
                                 size={15}
-                                color="#F59E0B"
+                                color={colors.accentAmber}
                               />
                               <Text style={styles.rateBtnText}>
                                 Rate this ride
@@ -512,8 +517,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
                                     size={16}
                                     color={
                                       ride.received_rating! >= s
-                                        ? "#F59E0B"
-                                        : "#374151"
+                                        ? colors.accentAmber
+                                        : colors.textFaint
                                     }
                                   />
                                 ))}
@@ -566,170 +571,174 @@ export default function RideHistoryScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0D1117" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-    backgroundColor: "#111827",
-    borderBottomWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  summaryStrip: {
-    flexDirection: "row",
-    backgroundColor: "#111827",
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderBottomWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  summaryItem: { flex: 1, alignItems: "center" },
-  summaryDivider: { width: 0.5, backgroundColor: "rgba(255,255,255,0.08)" },
-  summaryValue: { fontSize: 22, fontWeight: "700", color: "#F1F5F9" },
-  summaryLabel: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  filterRow: {
-    flexDirection: "row",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
-  },
-  filterTab: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  filterTabActive: { backgroundColor: "#E8500A", borderColor: "#E8500A" },
-  filterTabText: { fontSize: 13, fontWeight: "500", color: "#6B7280" },
-  filterTabTextActive: { color: "#fff" },
-  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  emptyWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    paddingHorizontal: 40,
-  },
-  emptyTitle: { fontSize: 17, fontWeight: "600", color: "#F1F5F9" },
-  emptySubtitle: { fontSize: 13, color: "#6B7280", textAlign: "center" },
-  list: { flex: 1 },
-  rideList: { paddingHorizontal: 16, paddingTop: 4 },
-  dayGroup: { gap: 10 },
-  daySeparator: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 20,
-    marginBottom: 12,
-    gap: 10,
-  },
-  daySeparatorLine: {
-    flex: 1,
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.1)",
-  },
-  daySeparatorLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#6B7280",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-  },
-  rideCard: {
-    backgroundColor: "#111827",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.07)",
-  },
-  rideCardTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  rideTime: { fontSize: 13, fontWeight: "500", color: "#9CA3AF" },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-    borderWidth: 0.5,
-  },
-  statusText: { fontSize: 11, fontWeight: "600" },
-  otherPartyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  otherParty: { fontSize: 12, color: "#6B7280" },
-  otherPartyName: { color: "#94A3B8", fontWeight: "500" },
-  viewProfileBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-    backgroundColor: "rgba(147,197,253,0.08)",
-    borderWidth: 0.5,
-    borderColor: "rgba(147,197,253,0.2)",
-  },
-  viewProfileBtnText: { fontSize: 11, fontWeight: "600", color: "#93C5FD" },
-  routeWrap: { marginBottom: 12 },
-  routeRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  routeDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  routeText: { fontSize: 13, color: "#94A3B8", flex: 1 },
-  routeLine: {
-    width: 1,
-    height: 10,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 3.5,
-    marginVertical: 2,
-  },
-  fareRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingTop: 10,
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-    marginBottom: 10,
-  },
-  fareLabel: { fontSize: 12, color: "#6B7280" },
-  fareAmount: { fontSize: 15, fontWeight: "700", color: "#F1F5F9" },
-  reviewSection: {
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-    paddingTop: 10,
-  },
-  reviewedRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  starsReadOnly: { flexDirection: "row", gap: 2 },
-  reviewedLabel: { fontSize: 12, color: "#6B7280" },
-  rateBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    alignSelf: "flex-start",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: "rgba(245,158,11,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(245,158,11,0.3)",
-  },
-  rateBtnText: { fontSize: 13, fontWeight: "600", color: "#F59E0B" },
-  noRatingText: { fontSize: 12, color: "#374151", fontStyle: "italic" },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingBottom: 16,
+      paddingHorizontal: 16,
+      backgroundColor: colors.background,
+      borderBottomWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    summaryStrip: {
+      flexDirection: "row",
+      backgroundColor: colors.background,
+      paddingVertical: 16,
+      paddingHorizontal: 24,
+      borderBottomWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    summaryItem: { flex: 1, alignItems: "center" },
+    summaryDivider: { width: 0.5, backgroundColor: colors.border },
+    summaryValue: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
+    summaryLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    filterRow: {
+      flexDirection: "row",
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      gap: 8,
+    },
+    filterTab: {
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    filterTabActive: {
+      backgroundColor: colors.accentOrange,
+      borderColor: colors.accentOrange,
+    },
+    filterTabText: { fontSize: 13, fontWeight: "500", color: colors.textSecondary },
+    filterTabTextActive: { color: "#fff" },
+    loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
+    emptyWrap: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      paddingHorizontal: 40,
+    },
+    emptyTitle: { fontSize: 17, fontWeight: "600", color: colors.textPrimary },
+    emptySubtitle: { fontSize: 13, color: colors.textSecondary, textAlign: "center" },
+    list: { flex: 1 },
+    rideList: { paddingHorizontal: 16, paddingTop: 4 },
+    dayGroup: { gap: 10 },
+    daySeparator: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginTop: 20,
+      marginBottom: 12,
+      gap: 10,
+    },
+    daySeparatorLine: {
+      flex: 1,
+      height: 0.5,
+      backgroundColor: colors.borderStrong,
+    },
+    daySeparatorLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      letterSpacing: 0.8,
+      textTransform: "uppercase",
+    },
+    rideCard: {
+      backgroundColor: colors.background,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    rideCardTop: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10,
+    },
+    rideTime: { fontSize: 13, fontWeight: "500", color: colors.textTertiary },
+    statusBadge: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 20,
+      borderWidth: 0.5,
+    },
+    statusText: { fontSize: 11, fontWeight: "600" },
+    otherPartyRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 10,
+    },
+    otherParty: { fontSize: 12, color: colors.textSecondary },
+    otherPartyName: { color: colors.textTertiary, fontWeight: "500" },
+    viewProfileBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingVertical: 4,
+      paddingHorizontal: 10,
+      borderRadius: 20,
+      backgroundColor: "rgba(147,197,253,0.08)",
+      borderWidth: 0.5,
+      borderColor: "rgba(147,197,253,0.2)",
+    },
+    viewProfileBtnText: { fontSize: 11, fontWeight: "600", color: colors.avatarText },
+    routeWrap: { marginBottom: 12 },
+    routeRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    routeDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+    routeText: { fontSize: 13, color: colors.textTertiary, flex: 1 },
+    routeLine: {
+      width: 1,
+      height: 10,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 3.5,
+      marginVertical: 2,
+    },
+    fareRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingTop: 10,
+      borderTopWidth: 0.5,
+      borderColor: colors.borderSubtle,
+      marginBottom: 10,
+    },
+    fareLabel: { fontSize: 12, color: colors.textSecondary },
+    fareAmount: { fontSize: 15, fontWeight: "700", color: colors.textPrimary },
+    reviewSection: {
+      borderTopWidth: 0.5,
+      borderColor: colors.borderSubtle,
+      paddingTop: 10,
+    },
+    reviewedRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    starsReadOnly: { flexDirection: "row", gap: 2 },
+    reviewedLabel: { fontSize: 12, color: colors.textSecondary },
+    rateBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      alignSelf: "flex-start",
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 20,
+      backgroundColor: "rgba(245,158,11,0.1)",
+      borderWidth: 0.5,
+      borderColor: "rgba(245,158,11,0.3)",
+    },
+    rateBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentAmber },
+    noRatingText: { fontSize: 12, color: colors.textFaint, fontStyle: "italic" },
+  });

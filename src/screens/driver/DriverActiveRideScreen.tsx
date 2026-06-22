@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
@@ -124,6 +126,8 @@ export default function DriverActiveRideScreen({
   onStatusChange,
 }: Props) {
   const { profile } = useAuth();
+  const { colors, resolvedTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const mapRef = useRef<MapView>(null);
 
   const [location, setLocation] = useState<LatLng | null>(null);
@@ -477,7 +481,7 @@ export default function DriverActiveRideScreen({
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={darkMapStyle}
+        customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
         showsUserLocation
         showsMyLocationButton={false}
         showsTraffic={navMode}
@@ -492,7 +496,7 @@ export default function DriverActiveRideScreen({
           anchor={{ x: 0.5, y: 1 }}
         >
           <View style={styles.pickupMarker}>
-            <Ionicons name="location" size={20} color="#4a9eff" />
+            <Ionicons name="location" size={20} color={colors.accentBlue} />
           </View>
         </Marker>
         <Marker
@@ -503,13 +507,13 @@ export default function DriverActiveRideScreen({
           anchor={{ x: 0.5, y: 1 }}
         >
           <View style={styles.dropoffMarker}>
-            <Ionicons name="flag" size={18} color="#E8500A" />
+            <Ionicons name="flag" size={18} color={colors.accentOrange} />
           </View>
         </Marker>
         {routeCoords.length > 1 && (
           <Polyline
             coordinates={routeCoords}
-            strokeColor={isPickingUp ? "#4a9eff" : "#E8500A"}
+            strokeColor={isPickingUp ? colors.accentBlue : colors.accentOrange}
             strokeWidth={navMode ? 5 : 3.5}
           />
         )}
@@ -518,7 +522,7 @@ export default function DriverActiveRideScreen({
       {/* ── NAV INSTRUCTION BANNER ── */}
       {navMode && showRerouting && (
         <View style={styles.reroutingBanner}>
-          <ActivityIndicator size="small" color="#F59E0B" />
+          <ActivityIndicator size="small" color={colors.accentAmber} />
           <Text style={styles.reroutingText}>Rerouting…</Text>
         </View>
       )}
@@ -554,7 +558,7 @@ export default function DriverActiveRideScreen({
             <View
               style={[
                 styles.statusDot,
-                { backgroundColor: isPickingUp ? "#4a9eff" : "#E8500A" },
+                { backgroundColor: isPickingUp ? colors.accentBlue : colors.accentOrange },
               ]}
             />
             <Text style={styles.statusLabel}>{statusLabel()}</Text>
@@ -598,7 +602,7 @@ export default function DriverActiveRideScreen({
             <Ionicons
               name={isPickingUp ? "location" : "flag"}
               size={18}
-              color={isPickingUp ? "#4a9eff" : "#E8500A"}
+              color={isPickingUp ? colors.accentBlue : colors.accentOrange}
             />
           </View>
           <View style={styles.destText}>
@@ -647,7 +651,7 @@ export default function DriverActiveRideScreen({
                 <Ionicons
                   name={paymentIsCash ? "cash-outline" : "card-outline"}
                   size={11}
-                  color={paymentIsCash ? "#1D9E75" : "#4a9eff"}
+                  color={paymentIsCash ? colors.accentGreen : colors.accentBlue}
                 />
                 <Text
                   style={[
@@ -700,7 +704,7 @@ export default function DriverActiveRideScreen({
             <View style={styles.fareRouteCard}>
               <View style={styles.fareRouteRow}>
                 <View
-                  style={[styles.fareRouteDot, { backgroundColor: "#4a9eff" }]}
+                  style={[styles.fareRouteDot, { backgroundColor: colors.accentBlue }]}
                 />
                 <Text style={styles.fareRouteText} numberOfLines={1}>
                   {ride.pickup_address}
@@ -711,7 +715,7 @@ export default function DriverActiveRideScreen({
                 <View
                   style={[
                     styles.fareRouteDot,
-                    { backgroundColor: "#E8500A", borderRadius: 3 },
+                    { backgroundColor: colors.accentOrange, borderRadius: 3 },
                   ]}
                 />
                 <Text style={styles.fareRouteText} numberOfLines={1}>
@@ -721,14 +725,14 @@ export default function DriverActiveRideScreen({
             </View>
 
             <View style={styles.farePassengerRow}>
-              <Ionicons name="person-outline" size={14} color="#6B7280" />
+              <Ionicons name="person-outline" size={14} color={colors.textSecondary} />
               <Text style={styles.farePassengerText}>
                 {ride.passenger_name ?? "Passenger"}
               </Text>
               <View
                 style={[styles.paymentBadge, { marginLeft: "auto" as any }]}
               >
-                <Ionicons name="cash-outline" size={11} color="#1D9E75" />
+                <Ionicons name="cash-outline" size={11} color={colors.accentGreen} />
                 <Text style={styles.paymentBadgeText}>Cash</Text>
               </View>
             </View>
@@ -741,7 +745,7 @@ export default function DriverActiveRideScreen({
                 onChangeText={setFareInput}
                 keyboardType="decimal-pad"
                 placeholder="0.00"
-                placeholderTextColor="#374151"
+                placeholderTextColor={colors.textFaint}
                 autoFocus
                 selectTextOnFocus
               />
@@ -789,333 +793,362 @@ export default function DriverActiveRideScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  map: { flex: 1 },
-  reroutingBanner: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "#1a2436",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.08)",
-  },
-  reroutingText: { fontSize: 17, fontWeight: "700", color: "#F59E0B" },
-  navBanner: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1E2A3A",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-    gap: 14,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.08)",
-  },
-  navBannerIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: "#E8500A",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  navBannerText: { flex: 1 },
-  navInstruction: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    lineHeight: 22,
-  },
-  navDistance: { fontSize: 13, color: "#6B7280", marginTop: 3 },
-  navEtaBox: {
-    alignItems: "center",
-    backgroundColor: "#111827",
-    borderRadius: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  navEtaNum: { fontSize: 22, fontWeight: "700", color: "#F59E0B" },
-  navEtaUnit: { fontSize: 10, color: "#6B7280" },
-  topBar: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 56 : 40,
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(17,24,39,0.9)",
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusLabel: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  etaBadge: {
-    backgroundColor: "rgba(17,24,39,0.9)",
-    borderRadius: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  etaText: { fontSize: 13, fontWeight: "700", color: "#F59E0B" },
-  navBtn: {
-    position: "absolute",
-    right: 16,
-    bottom: 340,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#1D9E75",
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  navBtnActive: { backgroundColor: "#374151" },
-  navBtnText: { fontSize: 14, fontWeight: "600", color: "#fff" },
-  sheet: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "#111827",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: Platform.OS === "ios" ? 44 : 24,
-    gap: 12,
-  },
-  destinationCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  destIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "#111827",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  destText: { flex: 1 },
-  destLabel: { fontSize: 11, color: "#6B7280", marginBottom: 2 },
-  destAddress: { fontSize: 14, fontWeight: "600", color: "#F1F5F9" },
-  destDistance: { fontSize: 11, color: "#4B5563", marginTop: 2 },
-  etaLarge: { fontSize: 22, fontWeight: "700", color: "#F59E0B" },
-  passengerCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  passengerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "rgba(74,158,255,0.3)",
-  },
-  passengerInitials: { fontSize: 13, fontWeight: "700", color: "#93C5FD" },
-  passengerInfo: { flex: 1 },
-  passengerName: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#F1F5F9",
-    marginBottom: 4,
-  },
-  farePaymentRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  fareText: { fontSize: 13, color: "#9CA3AF" },
-  paymentBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "rgba(29,158,117,0.12)",
-    borderRadius: 8,
-    paddingVertical: 2,
-    paddingHorizontal: 7,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.25)",
-  },
-  paymentBadgeCard: {
-    backgroundColor: "rgba(74,158,255,0.12)",
-    borderColor: "rgba(74,158,255,0.25)",
-  },
-  paymentBadgeText: { fontSize: 10, color: "#1D9E75", fontWeight: "600" },
-  paymentBadgeTextCard: { color: "#4a9eff" },
-  actionBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "#E8500A",
-    borderRadius: 14,
-    paddingVertical: 16,
-  },
-  actionBtnText: { fontSize: 16, fontWeight: "600", color: "#fff" },
-  pickupMarker: {
-    backgroundColor: "rgba(74,158,255,0.15)",
-    borderRadius: 20,
-    padding: 6,
-    borderWidth: 1,
-    borderColor: "rgba(74,158,255,0.4)",
-  },
-  dropoffMarker: {
-    backgroundColor: "rgba(232,80,10,0.15)",
-    borderRadius: 20,
-    padding: 6,
-    borderWidth: 1,
-    borderColor: "rgba(232,80,10,0.4)",
-  },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.6)",
-  },
-  fareModal: {
-    backgroundColor: "#111827",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 24,
-    paddingBottom: Platform.OS === "ios" ? 44 : 28,
-    gap: 14,
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    alignSelf: "center",
-    marginBottom: 6,
-  },
-  fareModalTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    textAlign: "center",
-  },
-  fareModalSub: {
-    fontSize: 13,
-    color: "#6B7280",
-    textAlign: "center",
-    marginTop: -6,
-  },
-  fareRouteCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  fareRouteRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 3,
-  },
-  fareRouteDot: { width: 9, height: 9, borderRadius: 5, flexShrink: 0 },
-  fareRouteText: { fontSize: 13, color: "#CBD5E1", flex: 1 },
-  fareRouteLine: {
-    width: 1.5,
-    height: 12,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginLeft: 3.5,
-    marginVertical: 2,
-  },
-  farePassengerRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  farePassengerText: { fontSize: 13, color: "#9CA3AF" },
-  fareInputWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(232,80,10,0.35)",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 6,
-  },
-  fareCurrencySymbol: { fontSize: 32, fontWeight: "700", color: "#6B7280" },
-  fareInput: {
-    flex: 1,
-    fontSize: 42,
-    fontWeight: "700",
-    color: "#F1F5F9",
-    letterSpacing: 1,
-  },
-  estimateHint: {
-    alignSelf: "center",
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    backgroundColor: "rgba(232,80,10,0.08)",
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.2)",
-    marginTop: -4,
-  },
-  estimateHintText: { fontSize: 12, color: "#E8500A", fontWeight: "500" },
-  fareModalBtns: { flexDirection: "row", gap: 12, marginTop: 4 },
-  fareModalCancelBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  fareModalCancelText: { color: "#6B7280", fontSize: 15, fontWeight: "500" },
-  fareModalConfirmBtn: {
-    flex: 2,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: "#1D9E75",
-    alignItems: "center",
-  },
-  fareModalConfirmText: { color: "#fff", fontSize: 15, fontWeight: "600" },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    map: { flex: 1 },
+    reroutingBanner: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      backgroundColor: colors.surface,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingBottom: 16,
+      paddingHorizontal: 16,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    reroutingText: {
+      fontSize: 17,
+      fontWeight: "700",
+      color: colors.accentAmber,
+    },
+    navBanner: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingBottom: 16,
+      paddingHorizontal: 16,
+      gap: 14,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    navBannerIcon: {
+      width: 52,
+      height: 52,
+      borderRadius: 14,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0,
+    },
+    navBannerText: { flex: 1 },
+    navInstruction: {
+      fontSize: 17,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      lineHeight: 22,
+    },
+    navDistance: { fontSize: 13, color: colors.textSecondary, marginTop: 3 },
+    navEtaBox: {
+      alignItems: "center",
+      backgroundColor: colors.background,
+      borderRadius: 10,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    navEtaNum: { fontSize: 22, fontWeight: "700", color: colors.accentAmber },
+    navEtaUnit: { fontSize: 10, color: colors.textSecondary },
+    topBar: {
+      position: "absolute",
+      top: Platform.OS === "ios" ? 56 : 40,
+      left: 16,
+      right: 16,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+    },
+    statusBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: colors.backgroundOverlay,
+      borderRadius: 20,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    statusDot: { width: 8, height: 8, borderRadius: 4 },
+    statusLabel: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
+    etaBadge: {
+      backgroundColor: colors.backgroundOverlay,
+      borderRadius: 16,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    etaText: { fontSize: 13, fontWeight: "700", color: colors.accentAmber },
+    navBtn: {
+      position: "absolute",
+      right: 16,
+      bottom: 340,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.accentGreen,
+      borderRadius: 20,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+    },
+    navBtnActive: { backgroundColor: colors.textFaint },
+    navBtnText: { fontSize: 14, fontWeight: "600", color: "#fff" },
+    sheet: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      borderTopWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      paddingBottom: Platform.OS === "ios" ? 44 : 24,
+      gap: 12,
+    },
+    destinationCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    destIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: colors.background,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    destText: { flex: 1 },
+    destLabel: { fontSize: 11, color: colors.textSecondary, marginBottom: 2 },
+    destAddress: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    destDistance: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+    etaLarge: { fontSize: 22, fontWeight: "700", color: colors.accentAmber },
+    passengerCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    passengerAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: "rgba(74,158,255,0.3)",
+    },
+    passengerInitials: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.avatarText,
+    },
+    passengerInfo: { flex: 1 },
+    passengerName: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      marginBottom: 4,
+    },
+    farePaymentRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    fareText: { fontSize: 13, color: colors.textTertiary },
+    paymentBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: "rgba(29,158,117,0.12)",
+      borderRadius: 8,
+      paddingVertical: 2,
+      paddingHorizontal: 7,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.25)",
+    },
+    paymentBadgeCard: {
+      backgroundColor: "rgba(74,158,255,0.12)",
+      borderColor: "rgba(74,158,255,0.25)",
+    },
+    paymentBadgeText: {
+      fontSize: 10,
+      color: colors.accentGreen,
+      fontWeight: "600",
+    },
+    paymentBadgeTextCard: { color: colors.accentBlue },
+    actionBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      backgroundColor: colors.accentOrange,
+      borderRadius: 14,
+      paddingVertical: 16,
+    },
+    actionBtnText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+    pickupMarker: {
+      backgroundColor: "rgba(74,158,255,0.15)",
+      borderRadius: 20,
+      padding: 6,
+      borderWidth: 1,
+      borderColor: "rgba(74,158,255,0.4)",
+    },
+    dropoffMarker: {
+      backgroundColor: "rgba(232,80,10,0.15)",
+      borderRadius: 20,
+      padding: 6,
+      borderWidth: 1,
+      borderColor: "rgba(232,80,10,0.4)",
+    },
+    modalOverlay: {
+      flex: 1,
+      justifyContent: "flex-end",
+      backgroundColor: colors.modalOverlay,
+    },
+    fareModal: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      borderTopWidth: 0.5,
+      borderColor: colors.border,
+      padding: 24,
+      paddingBottom: Platform.OS === "ios" ? 44 : 28,
+      gap: 14,
+    },
+    modalHandle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.borderStrong,
+      alignSelf: "center",
+      marginBottom: 6,
+    },
+    fareModalTitle: {
+      fontSize: 22,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      textAlign: "center",
+    },
+    fareModalSub: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: "center",
+      marginTop: -6,
+    },
+    fareRouteCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    fareRouteRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 3,
+    },
+    fareRouteDot: { width: 9, height: 9, borderRadius: 5, flexShrink: 0 },
+    fareRouteText: {
+      fontSize: 13,
+      color: colors.textOnSurfaceLight,
+      flex: 1,
+    },
+    fareRouteLine: {
+      width: 1.5,
+      height: 12,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 3.5,
+      marginVertical: 2,
+    },
+    farePassengerRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+    farePassengerText: { fontSize: 13, color: colors.textTertiary },
+    fareInputWrap: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: "rgba(232,80,10,0.35)",
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      gap: 6,
+    },
+    fareCurrencySymbol: {
+      fontSize: 32,
+      fontWeight: "700",
+      color: colors.textSecondary,
+    },
+    fareInput: {
+      flex: 1,
+      fontSize: 42,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      letterSpacing: 1,
+    },
+    estimateHint: {
+      alignSelf: "center",
+      paddingVertical: 6,
+      paddingHorizontal: 16,
+      borderRadius: 10,
+      backgroundColor: "rgba(232,80,10,0.08)",
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.2)",
+      marginTop: -4,
+    },
+    estimateHintText: {
+      fontSize: 12,
+      color: colors.accentOrange,
+      fontWeight: "500",
+    },
+    fareModalBtns: { flexDirection: "row", gap: 12, marginTop: 4 },
+    fareModalCancelBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    fareModalCancelText: {
+      color: colors.textSecondary,
+      fontSize: 15,
+      fontWeight: "500",
+    },
+    fareModalConfirmBtn: {
+      flex: 2,
+      paddingVertical: 14,
+      borderRadius: 14,
+      backgroundColor: colors.accentGreen,
+      alignItems: "center",
+    },
+    fareModalConfirmText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  });
 
 const darkMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2c3f" }] },

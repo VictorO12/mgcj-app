@@ -1,15 +1,19 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
+import { useTheme } from '../../theme/ThemeContext'
+import type { Colors } from '../../theme/colors'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverWelcome'>
 }
 
 export default function DriverWelcomeScreen({ navigation }: Props) {
+  const { colors } = useTheme()
+  const styles = useMemo(() => makeStyles(colors), [colors])
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -70,10 +74,10 @@ export default function DriverWelcomeScreen({ navigation }: Props) {
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111827', paddingTop: Platform.OS === 'ios' ? 56 : 40 },
+const makeStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background, paddingTop: Platform.OS === 'ios' ? 56 : 40 },
   backBtn: { paddingHorizontal: 24, paddingBottom: 16 },
-  backText: { color: '#6B7280', fontSize: 15 },
+  backText: { color: colors.textSecondary, fontSize: 15 },
   content: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
   iconWrap: {
     width: 72, height: 72, borderRadius: 36,
@@ -83,12 +87,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   icon: { fontSize: 32 },
-  title: { fontSize: 28, fontWeight: '700', color: '#F1F5F9', marginBottom: 10 },
-  subtitle: { fontSize: 14, color: '#6B7280', lineHeight: 22, marginBottom: 32 },
+  title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, marginBottom: 10 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, lineHeight: 22, marginBottom: 32 },
   cards: { gap: 12, marginBottom: 24 },
   card: {
-    backgroundColor: '#1E2A3A', borderRadius: 16, padding: 18,
-    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: colors.surface, borderRadius: 16, padding: 18,
+    borderWidth: 0.5, borderColor: colors.border,
     flexDirection: 'row', alignItems: 'center', gap: 14,
   },
   cardIcon: {
@@ -99,12 +103,12 @@ const styles = StyleSheet.create({
   },
   cardEmoji: { fontSize: 20 },
   cardText: { flex: 1 },
-  cardTitle: { fontSize: 15, fontWeight: '600', color: '#F1F5F9', marginBottom: 4 },
-  cardDesc: { fontSize: 13, color: '#6B7280', lineHeight: 18 },
+  cardTitle: { fontSize: 15, fontWeight: '600', color: colors.textPrimary, marginBottom: 4 },
+  cardDesc: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
   notice: {
     backgroundColor: 'rgba(245,158,11,0.08)',
     borderRadius: 12, padding: 14,
     borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.2)',
   },
-  noticeText: { fontSize: 13, color: '#D97706', lineHeight: 18, textAlign: 'center' },
+  noticeText: { fontSize: 13, color: colors.accentAmberText, lineHeight: 18, textAlign: 'center' },
 })

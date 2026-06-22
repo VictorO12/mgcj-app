@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
 import ReportDriverModal from "./ReportDriverModal";
+import { useTheme } from "../theme/ThemeContext";
+import type { Colors } from "../theme/colors";
 
 interface Review {
   id: string;
@@ -42,7 +44,15 @@ interface Props {
   onClose: () => void;
 }
 
-function StarRow({ rating, size = 14 }: { rating: number; size?: number }) {
+function StarRow({
+  rating,
+  size = 14,
+  colors,
+}: {
+  rating: number;
+  size?: number;
+  colors: Colors;
+}) {
   return (
     <View style={{ flexDirection: "row", gap: 2 }}>
       {[1, 2, 3, 4, 5].map((s) => (
@@ -50,7 +60,7 @@ function StarRow({ rating, size = 14 }: { rating: number; size?: number }) {
           key={s}
           name={s <= Math.round(rating) ? "star" : "star-outline"}
           size={size}
-          color={s <= Math.round(rating) ? "#F59E0B" : "#374151"}
+          color={s <= Math.round(rating) ? colors.accentAmber : colors.textFaint}
         />
       ))}
     </View>
@@ -76,6 +86,8 @@ export default function DriverProfileSheet({
   onClose,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const slideY = useRef(new Animated.Value(700)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const [driver, setDriver] = useState<DriverProfile | null>(null);
@@ -258,7 +270,7 @@ export default function DriverProfileSheet({
                   <Ionicons
                     name={alreadyReported ? "checkmark-circle" : "flag-outline"}
                     size={14}
-                    color={alreadyReported ? "#6B7280" : "#F87171"}
+                    color={alreadyReported ? colors.textSecondary : colors.accentRed}
                   />
                   <Text
                     style={[
@@ -271,14 +283,14 @@ export default function DriverProfileSheet({
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-                <Ionicons name="close" size={18} color="#6B7280" />
+                <Ionicons name="close" size={18} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
           </View>
 
           {loading ? (
             <View style={styles.centerWrap}>
-              <ActivityIndicator color="#E8500A" size="large" />
+              <ActivityIndicator color={colors.accentOrange} size="large" />
             </View>
           ) : !driver ? (
             <View style={styles.centerWrap}>
@@ -313,7 +325,7 @@ export default function DriverProfileSheet({
                   ) : null}
                   {driver.average_rating !== null && (
                     <View style={styles.ratingPill}>
-                      <Ionicons name="star" size={12} color="#F59E0B" />
+                      <Ionicons name="star" size={12} color={colors.accentAmber} />
                       <Text style={styles.ratingPillText}>
                         {driver.average_rating.toFixed(1)} ·{" "}
                         {driver.review_count}{" "}
@@ -327,7 +339,7 @@ export default function DriverProfileSheet({
               {/* Rating summary */}
               {driver.review_count === 0 ? (
                 <View style={styles.noReviewsCard}>
-                  <Ionicons name="star-outline" size={28} color="#374151" />
+                  <Ionicons name="star-outline" size={28} color={colors.textFaint} />
                   <Text style={styles.noReviewsTitle}>No reviews yet</Text>
                   <Text style={styles.noReviewsSub}>
                     This driver hasn't received any ratings yet.
@@ -339,7 +351,7 @@ export default function DriverProfileSheet({
                     <Text style={styles.bigRating}>
                       {driver.average_rating?.toFixed(1)}
                     </Text>
-                    <StarRow rating={driver.average_rating ?? 0} size={16} />
+                    <StarRow rating={driver.average_rating ?? 0} size={16} colors={colors} />
                     <Text style={styles.reviewCount}>
                       {driver.review_count}{" "}
                       {driver.review_count === 1 ? "review" : "reviews"}
@@ -349,7 +361,7 @@ export default function DriverProfileSheet({
                     {[5, 4, 3, 2, 1].map((star) => (
                       <View key={star} style={styles.barRow}>
                         <Text style={styles.barLabel}>{star}</Text>
-                        <Ionicons name="star" size={9} color="#F59E0B" />
+                        <Ionicons name="star" size={9} color={colors.accentAmber} />
                         <View style={styles.barTrack}>
                           <View
                             style={[
@@ -386,7 +398,7 @@ export default function DriverProfileSheet({
                             {formatDate(review.created_at)}
                           </Text>
                         </View>
-                        <StarRow rating={review.rating} size={12} />
+                        <StarRow rating={review.rating} size={12} colors={colors} />
                       </View>
                       {review.comment ? (
                         <Text style={styles.reviewComment}>
@@ -417,18 +429,18 @@ export default function DriverProfileSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   root: { flex: 1, justifyContent: "flex-end" },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.6)",
   },
   sheet: {
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     maxHeight: "88%",
   },
   handleRow: { alignItems: "center", paddingTop: 12, paddingBottom: 4 },
@@ -436,7 +448,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: colors.borderStrong,
   },
   headerRow: {
     flexDirection: "row",
@@ -445,7 +457,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 12,
   },
-  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
+  headerTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   reportBtn: {
     flexDirection: "row",
@@ -462,52 +474,52 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(107,114,128,0.1)",
     borderColor: "rgba(107,114,128,0.25)",
   },
-  reportBtnText: { fontSize: 12, fontWeight: "600", color: "#F87171" },
-  reportBtnTextDone: { color: "#6B7280" },
+  reportBtnText: { fontSize: 12, fontWeight: "600", color: colors.accentRed },
+  reportBtnTextDone: { color: colors.textSecondary },
   closeBtn: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
   },
   centerWrap: { paddingVertical: 60, alignItems: "center" },
-  emptyText: { fontSize: 14, color: "#6B7280" },
+  emptyText: { fontSize: 14, color: colors.textSecondary },
   scroll: { paddingHorizontal: 20 },
 
   identityCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
   avatarImage: {
     width: 54,
     height: 54,
     borderRadius: 27,
     borderWidth: 2,
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
   },
   avatar: {
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: "#1E3A5F",
+    backgroundColor: colors.surfaceAlt,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
   },
-  avatarText: { fontSize: 18, fontWeight: "700", color: "#93C5FD" },
+  avatarText: { fontSize: 18, fontWeight: "700", color: colors.avatarText },
   identityInfo: { flex: 1, gap: 4 },
-  driverName: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  vehicleText: { fontSize: 13, color: "#6B7280" },
+  driverName: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+  vehicleText: { fontSize: 13, color: colors.textSecondary },
   ratingPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -521,23 +533,23 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     marginTop: 2,
   },
-  ratingPillText: { fontSize: 12, fontWeight: "600", color: "#F59E0B" },
+  ratingPillText: { fontSize: 12, fontWeight: "600", color: colors.accentAmber },
 
   noReviewsCard: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 24,
     alignItems: "center",
     gap: 8,
     marginBottom: 12,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
-  noReviewsTitle: { fontSize: 15, fontWeight: "600", color: "#4B5563" },
-  noReviewsSub: { fontSize: 13, color: "#374151", textAlign: "center" },
+  noReviewsTitle: { fontSize: 15, fontWeight: "600", color: colors.textMuted },
+  noReviewsSub: { fontSize: 13, color: colors.textFaint, textAlign: "center" },
 
   ratingCard: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
@@ -545,41 +557,41 @@ const styles = StyleSheet.create({
     gap: 20,
     marginBottom: 20,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
   ratingLeft: { alignItems: "center", gap: 4, minWidth: 70 },
   bigRating: {
     fontSize: 42,
     fontWeight: "800",
-    color: "#F1F5F9",
+    color: colors.textPrimary,
     lineHeight: 48,
   },
-  reviewCount: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+  reviewCount: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   bars: { flex: 1, gap: 5 },
   barRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  barLabel: { fontSize: 11, color: "#6B7280", width: 10, textAlign: "right" },
+  barLabel: { fontSize: 11, color: colors.textSecondary, width: 10, textAlign: "right" },
   barTrack: {
     flex: 1,
     height: 6,
-    backgroundColor: "#0F1C2A",
+    backgroundColor: colors.surface,
     borderRadius: 3,
     overflow: "hidden",
   },
-  barFill: { height: "100%", backgroundColor: "#F59E0B", borderRadius: 3 },
+  barFill: { height: "100%", backgroundColor: colors.accentAmber, borderRadius: 3 },
 
   reviewsSection: { gap: 10 },
   sectionTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#F1F5F9",
+    color: colors.textPrimary,
     marginBottom: 4,
   },
   reviewCard: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.07)",
+    borderColor: colors.border,
     gap: 8,
   },
   reviewHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -587,15 +599,15 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "#253D56",
+    backgroundColor: colors.surfaceAlt,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
-  reviewAvatarText: { fontSize: 11, fontWeight: "700", color: "#93C5FD" },
+  reviewAvatarText: { fontSize: 11, fontWeight: "700", color: colors.avatarText },
   reviewMeta: { flex: 1 },
-  reviewerName: { fontSize: 13, fontWeight: "600", color: "#F1F5F9" },
-  reviewDate: { fontSize: 11, color: "#6B7280", marginTop: 1 },
-  reviewComment: { fontSize: 13, color: "#9CA3AF", lineHeight: 19 },
+  reviewerName: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
+  reviewDate: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
+  reviewComment: { fontSize: 13, color: colors.textTertiary, lineHeight: 19 },
 });

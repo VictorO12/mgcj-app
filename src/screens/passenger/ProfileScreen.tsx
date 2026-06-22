@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,8 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface Props {
   onClose: () => void;
@@ -26,6 +28,8 @@ const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
   const { profile, refetch, signOut } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [name, setName] = useState(profile?.name ?? "");
   const [email, setEmail] = useState(profile?.email ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
@@ -190,7 +194,7 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
     >
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
         <View style={{ width: 40 }} />
@@ -244,7 +248,7 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
               value={name}
               onChangeText={setName}
               placeholder="Your name"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               returnKeyType="done"
             />
           </View>
@@ -266,7 +270,7 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
               value={email}
               onChangeText={setEmail}
               placeholder="you@example.com"
-              placeholderTextColor="#4B5563"
+              placeholderTextColor={colors.textMuted}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
@@ -302,10 +306,10 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
             activeOpacity={0.85}
           >
             {deleting ? (
-              <ActivityIndicator color="#F87171" />
+              <ActivityIndicator color={colors.accentRed} />
             ) : (
               <>
-                <Ionicons name="trash-outline" size={18} color="#F87171" />
+                <Ionicons name="trash-outline" size={18} color={colors.accentRed} />
                 <Text style={styles.deleteBtnText}>Delete account</Text>
               </>
             )}
@@ -320,124 +324,125 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: "rgba(17,24,39,0.95)",
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 48 },
-  avatarSection: { alignItems: "center", marginBottom: 28 },
-  avatarWrap: { position: "relative", marginBottom: 10 },
-  avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 2,
-    borderColor: "#E8500A",
-  },
-  avatarFallback: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "#1E3A5F",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#E8500A",
-  },
-  avatarInitials: { fontSize: 32, fontWeight: "700", color: "#93C5FD" },
-  avatarEditBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#E8500A",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#111827",
-  },
-  avatarHint: { fontSize: 13, color: "#6B7280" },
-  card: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 20,
-    marginBottom: 16,
-  },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    letterSpacing: 0.08,
-    marginBottom: 14,
-  },
-  field: { gap: 4 },
-  fieldLabel: { fontSize: 12, color: "#6B7280", fontWeight: "500" },
-  input: { fontSize: 15, color: "#F1F5F9", paddingVertical: 8 },
-  fieldValue: { fontSize: 15, color: "#CBD5E1", paddingVertical: 8 },
-  fieldNote: { fontSize: 12, color: "#4B5563", marginTop: 2 },
-  fieldDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    marginVertical: 8,
-  },
-  saveBtn: {
-    backgroundColor: "#E8500A",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-    marginBottom: 28,
-  },
-  saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  dangerCard: {
-    backgroundColor: "rgba(248,113,113,0.05)",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.2)",
-    padding: 20,
-  },
-  dangerLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#F87171",
-    letterSpacing: 0.08,
-    marginBottom: 14,
-    opacity: 0.8,
-  },
-  deleteBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(248,113,113,0.1)",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.25)",
-    marginBottom: 10,
-  },
-  deleteBtnText: { fontSize: 15, fontWeight: "600", color: "#F87171" },
-  dangerNote: { fontSize: 12, color: "#6B7280", lineHeight: 16 },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      backgroundColor: colors.backgroundOverlay,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 48 },
+    avatarSection: { alignItems: "center", marginBottom: 28 },
+    avatarWrap: { position: "relative", marginBottom: 10 },
+    avatarImage: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      borderWidth: 2,
+      borderColor: colors.accentOrange,
+    },
+    avatarFallback: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.accentOrange,
+    },
+    avatarInitials: { fontSize: 32, fontWeight: "700", color: colors.avatarText },
+    avatarEditBadge: {
+      position: "absolute",
+      bottom: 0,
+      right: 0,
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: colors.background,
+    },
+    avatarHint: { fontSize: 13, color: colors.textSecondary },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      padding: 20,
+      marginBottom: 16,
+    },
+    sectionLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      letterSpacing: 0.08,
+      marginBottom: 14,
+    },
+    field: { gap: 4 },
+    fieldLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: "500" },
+    input: { fontSize: 15, color: colors.textPrimary, paddingVertical: 8 },
+    fieldValue: { fontSize: 15, color: colors.textOnSurfaceLight, paddingVertical: 8 },
+    fieldNote: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+    fieldDivider: {
+      height: 0.5,
+      backgroundColor: colors.border,
+      marginVertical: 8,
+    },
+    saveBtn: {
+      backgroundColor: colors.accentOrange,
+      borderRadius: 14,
+      paddingVertical: 16,
+      alignItems: "center",
+      marginBottom: 28,
+    },
+    saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    dangerCard: {
+      backgroundColor: "rgba(248,113,113,0.05)",
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.2)",
+      padding: 20,
+    },
+    dangerLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.accentRed,
+      letterSpacing: 0.08,
+      marginBottom: 14,
+      opacity: 0.8,
+    },
+    deleteBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: "rgba(248,113,113,0.1)",
+      borderRadius: 12,
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.25)",
+      marginBottom: 10,
+    },
+    deleteBtnText: { fontSize: 15, fontWeight: "600", color: colors.accentRed },
+    dangerNote: { fontSize: 12, color: colors.textSecondary, lineHeight: 16 },
+  });

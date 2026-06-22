@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface Props {
   onClose: () => void;
@@ -24,6 +26,8 @@ interface NotifSetting {
 }
 
 export default function NotificationsScreen({ onClose }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [settings, setSettings] = useState<NotifSetting[]>([
     {
       id: "ride_updates",
@@ -78,7 +82,7 @@ export default function NotificationsScreen({ onClose }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
         <View style={{ width: 40 }} />
@@ -103,7 +107,7 @@ export default function NotificationsScreen({ onClose }: Props) {
                   <Ionicons
                     name={setting.icon as any}
                     size={18}
-                    color={setting.enabled ? "#E8500A" : "#6B7280"}
+                    color={setting.enabled ? colors.accentOrange : colors.textSecondary}
                   />
                 </View>
                 <View style={styles.settingText}>
@@ -113,9 +117,9 @@ export default function NotificationsScreen({ onClose }: Props) {
                 <Switch
                   value={setting.enabled}
                   onValueChange={() => toggle(setting.id)}
-                  trackColor={{ false: "#374151", true: "rgba(232,80,10,0.4)" }}
-                  thumbColor={setting.enabled ? "#E8500A" : "#6B7280"}
-                  ios_backgroundColor="#374151"
+                  trackColor={{ false: colors.textFaint, true: "rgba(232,80,10,0.4)" }}
+                  thumbColor={setting.enabled ? colors.accentOrange : colors.textSecondary}
+                  ios_backgroundColor={colors.textFaint}
                 />
               </View>
             </View>
@@ -134,80 +138,81 @@ export default function NotificationsScreen({ onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#111827" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: "rgba(17,24,39,0.95)",
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(255,255,255,0.07)",
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#1E2A3A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "700", color: "#F1F5F9" },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 48 },
-  intro: {
-    fontSize: 14,
-    color: "#6B7280",
-    lineHeight: 20,
-    marginBottom: 20,
-  },
-  card: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 20,
-    marginBottom: 20,
-  },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#4B5563",
-    letterSpacing: 0.08,
-    marginBottom: 14,
-  },
-  settingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 10,
-  },
-  settingIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "#111827",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  settingText: { flex: 1 },
-  settingLabel: { fontSize: 14, fontWeight: "500", color: "#F1F5F9" },
-  settingDesc: { fontSize: 12, color: "#6B7280", marginTop: 2, lineHeight: 16 },
-  itemDivider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginVertical: 2,
-  },
-  saveBtn: {
-    backgroundColor: "#E8500A",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      backgroundColor: colors.backgroundOverlay,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+    },
+    backBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 48 },
+    intro: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      marginBottom: 20,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      padding: 20,
+      marginBottom: 20,
+    },
+    sectionLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textMuted,
+      letterSpacing: 0.08,
+      marginBottom: 14,
+    },
+    settingRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 10,
+    },
+    settingIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: colors.background,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    settingText: { flex: 1 },
+    settingLabel: { fontSize: 14, fontWeight: "500", color: colors.textPrimary },
+    settingDesc: { fontSize: 12, color: colors.textSecondary, marginTop: 2, lineHeight: 16 },
+    itemDivider: {
+      height: 0.5,
+      backgroundColor: colors.borderSubtle,
+      marginVertical: 2,
+    },
+    saveBtn: {
+      backgroundColor: colors.accentOrange,
+      borderRadius: 14,
+      paddingVertical: 16,
+      alignItems: "center",
+    },
+    saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  });

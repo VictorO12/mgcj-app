@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useTheme } from "../../theme/ThemeContext";
+import type { Colors } from "../../theme/colors";
 
 interface AssignedRide {
   id: string;
@@ -38,6 +40,8 @@ export default function AssignedRidesListScreen({
   onAccepted,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [rides, setRides] = useState<AssignedRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -199,7 +203,7 @@ export default function AssignedRidesListScreen({
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onClose}>
-          <Ionicons name="chevron-back" size={24} color="#F1F5F9" />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Assigned rides</Text>
         <View style={{ width: 36 }} />
@@ -207,11 +211,11 @@ export default function AssignedRidesListScreen({
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator color="#E8500A" size="large" />
+          <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
       ) : rides.length === 0 ? (
         <View style={styles.emptyWrap}>
-          <Ionicons name="car-outline" size={48} color="#374151" />
+          <Ionicons name="car-outline" size={48} color={colors.textFaint} />
           <Text style={styles.emptyTitle}>No assigned rides</Text>
           <Text style={styles.emptySub}>
             Dispatch will notify you when a ride is assigned.
@@ -224,7 +228,7 @@ export default function AssignedRidesListScreen({
               <Text style={styles.sectionLabel}>IMMEDIATE RIDES</Text>
               {hasActiveRide && (
                 <View style={styles.warningBanner}>
-                  <Ionicons name="warning-outline" size={16} color="#F59E0B" />
+                  <Ionicons name="warning-outline" size={16} color={colors.accentAmber} />
                   <Text style={styles.warningText}>
                     Complete your current ride before accepting another
                     immediate ride
@@ -300,17 +304,19 @@ function RideCard({
   onDecline: () => void;
   onCall: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const isAccepting = actionLoading === ride.id;
   const isDeclining = actionLoading === ride.id + "-decline";
 
   function countdownColor(): string {
-    if (!ride.scheduled_at) return "#A855F7";
+    if (!ride.scheduled_at) return colors.accentPurple;
     const mins = Math.round(
       (new Date(ride.scheduled_at).getTime() - Date.now()) / 60000,
     );
-    if (mins <= 15) return "#EF4444";
-    if (mins <= 30) return "#F59E0B";
-    return "#A855F7";
+    if (mins <= 15) return colors.accentRedAlarm;
+    if (mins <= 30) return colors.accentAmber;
+    return colors.accentPurple;
   }
 
   return (
@@ -343,7 +349,7 @@ function RideCard({
           {/* ← Confirmed badge — only shows after driver accepts */}
           {ride.confirmed_by_driver && (
             <View style={styles.confirmedBadge}>
-              <Ionicons name="checkmark-circle" size={12} color="#1D9E75" />
+              <Ionicons name="checkmark-circle" size={12} color={colors.accentGreen} />
               <Text style={styles.confirmedBadgeText}>Confirmed</Text>
             </View>
           )}
@@ -351,7 +357,7 @@ function RideCard({
 
         {ride.passenger_phone && (
           <TouchableOpacity style={styles.callBtn} onPress={onCall}>
-            <Ionicons name="call-outline" size={15} color="#CBD5E1" />
+            <Ionicons name="call-outline" size={15} color={colors.textOnSurfaceLight} />
           </TouchableOpacity>
         )}
       </View>
@@ -359,7 +365,7 @@ function RideCard({
       {/* Scheduled time + countdown */}
       {ride.scheduled_at && (
         <View style={styles.scheduledRow}>
-          <Ionicons name="calendar-outline" size={13} color="#A855F7" />
+          <Ionicons name="calendar-outline" size={13} color={colors.accentPurple} />
           <Text style={styles.scheduledText}>
             {new Date(ride.scheduled_at).toLocaleString("en-CA", {
               weekday: "short",
@@ -395,7 +401,7 @@ function RideCard({
       {/* Route */}
       <View style={styles.route}>
         <View style={styles.routeRow}>
-          <View style={[styles.dot, { backgroundColor: "#4a9eff" }]} />
+          <View style={[styles.dot, { backgroundColor: colors.accentBlue }]} />
           <Text style={styles.routeText} numberOfLines={1}>
             {ride.pickup_address}
           </Text>
@@ -407,7 +413,7 @@ function RideCard({
           <View
             style={[
               styles.dot,
-              { backgroundColor: "#E8500A", borderRadius: 3 },
+              { backgroundColor: colors.accentOrange, borderRadius: 3 },
             ]}
           />
           <Text style={styles.routeText} numberOfLines={1}>
@@ -433,7 +439,7 @@ function RideCard({
             activeOpacity={0.8}
           >
             {isDeclining ? (
-              <ActivityIndicator color="#F87171" size="small" />
+              <ActivityIndicator color={colors.accentRed} size="small" />
             ) : (
               <Text style={styles.declineBtnText}>Decline</Text>
             )}
@@ -467,173 +473,186 @@ function RideCard({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingTop: Platform.OS === "ios" ? 56 : 40,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#1E2A3A",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-  loadingWrap: { paddingTop: 60, alignItems: "center" },
-  emptyWrap: { paddingTop: 60, alignItems: "center", gap: 10 },
-  emptyTitle: { fontSize: 18, fontWeight: "600", color: "#4B5563" },
-  emptySub: {
-    fontSize: 13,
-    color: "#374151",
-    textAlign: "center",
-    paddingHorizontal: 40,
-  },
-  list: { flex: 1, paddingHorizontal: 16 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#6B7280",
-    letterSpacing: 0.8,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  warningBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(245,158,11,0.1)",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(245,158,11,0.25)",
-  },
-  warningText: { fontSize: 13, color: "#F59E0B", flex: 1 },
-  rideCard: {
-    backgroundColor: "#1E2A3A",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  rideCardTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  rideCardTopLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    flex: 1,
-  },
-  typeBadge: {
-    backgroundColor: "rgba(232,80,10,0.15)",
-    borderRadius: 20,
-    paddingVertical: 3,
-    paddingHorizontal: 10,
-    borderWidth: 0.5,
-    borderColor: "rgba(232,80,10,0.3)",
-  },
-  typeBadgeScheduled: {
-    backgroundColor: "rgba(168,85,247,0.15)",
-    borderColor: "rgba(168,85,247,0.3)",
-  },
-  typeBadgeText: { fontSize: 11, fontWeight: "600", color: "#E8500A" },
-  typeBadgeTextScheduled: { color: "#A855F7" },
-  confirmedBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: "rgba(29,158,117,0.12)",
-    borderRadius: 20,
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.3)",
-  },
-  confirmedBadgeText: { fontSize: 11, fontWeight: "600", color: "#1D9E75" },
-  callBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#253D56",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.1)",
-  },
-  scheduledRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 8,
-  },
-  scheduledText: { fontSize: 12, color: "#A855F7", fontWeight: "500" },
-  countdownPill: {
-    borderRadius: 20,
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderWidth: 0.5,
-    marginLeft: 4,
-  },
-  countdownText: { fontSize: 11, fontWeight: "700" },
-  passengerName: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#F1F5F9",
-    marginBottom: 10,
-  },
-  route: { marginBottom: 10 },
-  routeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  dot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  routeText: { fontSize: 13, color: "#CBD5E1", flex: 1 },
-  routeLineWrap: { paddingLeft: 3, paddingVertical: 2 },
-  routeLine: {
-    width: 1.5,
-    height: 12,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    marginLeft: 3,
-  },
-  fareText: { fontSize: 13, color: "#6B7280", marginBottom: 12 },
-  actions: { flexDirection: "row", gap: 10 },
-  declineBtn: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 13,
-    borderRadius: 12,
-    backgroundColor: "rgba(248,113,113,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(248,113,113,0.25)",
-  },
-  declineBtnText: { color: "#F87171", fontSize: 14, fontWeight: "600" },
-  acceptBtn: {
-    flex: 2,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 13,
-    borderRadius: 12,
-    backgroundColor: "#1D9E75",
-  },
-  acceptBtnConfirmed: {
-    backgroundColor: "rgba(29,158,117,0.15)",
-    borderWidth: 0.5,
-    borderColor: "rgba(29,158,117,0.3)",
-  },
-  acceptBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-});
+const makeStyles = (colors: Colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      paddingTop: Platform.OS === "ios" ? 56 : 40,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+    },
+    backBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+    loadingWrap: { paddingTop: 60, alignItems: "center" },
+    emptyWrap: { paddingTop: 60, alignItems: "center", gap: 10 },
+    emptyTitle: { fontSize: 18, fontWeight: "600", color: colors.textMuted },
+    emptySub: {
+      fontSize: 13,
+      color: colors.textFaint,
+      textAlign: "center",
+      paddingHorizontal: 40,
+    },
+    list: { flex: 1, paddingHorizontal: 16 },
+    sectionLabel: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.textSecondary,
+      letterSpacing: 0.8,
+      marginBottom: 8,
+      marginTop: 4,
+    },
+    warningBanner: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: "rgba(245,158,11,0.1)",
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 10,
+      borderWidth: 0.5,
+      borderColor: "rgba(245,158,11,0.25)",
+    },
+    warningText: { fontSize: 13, color: colors.accentAmber, flex: 1 },
+    rideCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 12,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    rideCardTop: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10,
+    },
+    rideCardTopLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      flex: 1,
+    },
+    typeBadge: {
+      backgroundColor: "rgba(232,80,10,0.15)",
+      borderRadius: 20,
+      paddingVertical: 3,
+      paddingHorizontal: 10,
+      borderWidth: 0.5,
+      borderColor: "rgba(232,80,10,0.3)",
+    },
+    typeBadgeScheduled: {
+      backgroundColor: "rgba(168,85,247,0.15)",
+      borderColor: "rgba(168,85,247,0.3)",
+    },
+    typeBadgeText: { fontSize: 11, fontWeight: "600", color: colors.accentOrange },
+    typeBadgeTextScheduled: { color: colors.accentPurple },
+    confirmedBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: "rgba(29,158,117,0.12)",
+      borderRadius: 20,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.3)",
+    },
+    confirmedBadgeText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.accentGreen,
+    },
+    callBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: colors.surfaceAlt,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+    },
+    scheduledRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginBottom: 8,
+    },
+    scheduledText: {
+      fontSize: 12,
+      color: colors.accentPurple,
+      fontWeight: "500",
+    },
+    countdownPill: {
+      borderRadius: 20,
+      paddingVertical: 2,
+      paddingHorizontal: 8,
+      borderWidth: 0.5,
+      marginLeft: 4,
+    },
+    countdownText: { fontSize: 11, fontWeight: "700" },
+    passengerName: {
+      fontSize: 15,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      marginBottom: 10,
+    },
+    route: { marginBottom: 10 },
+    routeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    dot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+    routeText: { fontSize: 13, color: colors.textOnSurfaceLight, flex: 1 },
+    routeLineWrap: { paddingLeft: 3, paddingVertical: 2 },
+    routeLine: {
+      width: 1.5,
+      height: 12,
+      backgroundColor: colors.borderStrong,
+      marginLeft: 3,
+    },
+    fareText: { fontSize: 13, color: colors.textSecondary, marginBottom: 12 },
+    actions: { flexDirection: "row", gap: 10 },
+    declineBtn: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 13,
+      borderRadius: 12,
+      backgroundColor: "rgba(248,113,113,0.1)",
+      borderWidth: 0.5,
+      borderColor: "rgba(248,113,113,0.25)",
+    },
+    declineBtnText: {
+      color: colors.accentRed,
+      fontSize: 14,
+      fontWeight: "600",
+    },
+    acceptBtn: {
+      flex: 2,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 13,
+      borderRadius: 12,
+      backgroundColor: colors.accentGreen,
+    },
+    acceptBtnConfirmed: {
+      backgroundColor: "rgba(29,158,117,0.15)",
+      borderWidth: 0.5,
+      borderColor: "rgba(29,158,117,0.3)",
+    },
+    acceptBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  });

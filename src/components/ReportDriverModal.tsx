@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
+import { useTheme } from "../theme/ThemeContext";
+import type { Colors } from "../theme/colors";
 
 interface Props {
   visible: boolean;
@@ -44,6 +46,8 @@ export default function ReportDriverModal({
   onDismiss,
 }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [selectedReason, setSelectedReason] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -114,7 +118,7 @@ export default function ReportDriverModal({
           {submitted ? (
             <View style={styles.successWrap}>
               <View style={styles.successIcon}>
-                <Ionicons name="checkmark" size={32} color="#1D9E75" />
+                <Ionicons name="checkmark" size={32} color={colors.accentGreen} />
               </View>
               <Text style={styles.successTitle}>Report submitted</Text>
               <Text style={styles.successSubtitle}>
@@ -151,7 +155,7 @@ export default function ReportDriverModal({
                       <Ionicons
                         name={selected ? "radio-button-on" : "radio-button-off"}
                         size={20}
-                        color={selected ? "#E8500A" : "#374151"}
+                        color={selected ? colors.accentOrange : colors.textFaint}
                       />
                       <Text
                         style={[
@@ -172,7 +176,7 @@ export default function ReportDriverModal({
                       ? "Please describe what happened (required)"
                       : "Add any details that might help us look into this (optional)"
                   }
-                  placeholderTextColor="#4B5563"
+                  placeholderTextColor={colors.textMuted}
                   value={comment}
                   onChangeText={setComment}
                   multiline
@@ -213,19 +217,19 @@ export default function ReportDriverModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Colors) => StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: colors.modalOverlay,
     justifyContent: "flex-end",
   },
   sheet: {
-    backgroundColor: "#111827",
+    backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: Platform.OS === "ios" ? 40 : 28,
     borderTopWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     maxHeight: "85%",
   },
   header: {
@@ -238,11 +242,11 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#374151",
+    backgroundColor: colors.textFaint,
     marginBottom: 20,
   },
-  title: { fontSize: 20, fontWeight: "700", color: "#F1F5F9", marginBottom: 6 },
-  subtitle: { fontSize: 14, color: "#6B7280", textAlign: "center" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary, marginBottom: 6 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, textAlign: "center" },
   scroll: { paddingHorizontal: 20 },
   scrollContent: { paddingTop: 16, paddingBottom: 8 },
   reasonRow: {
@@ -252,23 +256,23 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 12,
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
     marginBottom: 8,
   },
   reasonRowSelected: {
-    borderColor: "#E8500A",
+    borderColor: colors.accentOrange,
     backgroundColor: "rgba(232,80,10,0.08)",
   },
-  reasonText: { fontSize: 14, color: "#9CA3AF", flex: 1 },
-  reasonTextSelected: { color: "#F1F5F9", fontWeight: "600" },
+  reasonText: { fontSize: 14, color: colors.textTertiary, flex: 1 },
+  reasonTextSelected: { color: colors.textPrimary, fontWeight: "600" },
   commentInput: {
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
-    color: "#F1F5F9",
+    borderColor: colors.border,
+    color: colors.textPrimary,
     fontSize: 14,
     padding: 14,
     minHeight: 90,
@@ -276,7 +280,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 4,
   },
-  errorText: { color: "#F87171", fontSize: 13, marginTop: 8 },
+  errorText: { color: colors.accentRed, fontSize: 13, marginTop: 8 },
   actions: {
     flexDirection: "row",
     gap: 12,
@@ -288,17 +292,17 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 14,
     alignItems: "center",
-    backgroundColor: "#1E2A3A",
+    backgroundColor: colors.surface,
     borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.border,
   },
-  cancelText: { color: "#6B7280", fontSize: 15, fontWeight: "600" },
+  cancelText: { color: colors.textSecondary, fontSize: 15, fontWeight: "600" },
   submitBtn: {
     flex: 2,
     paddingVertical: 15,
     borderRadius: 14,
     alignItems: "center",
-    backgroundColor: "#E8500A",
+    backgroundColor: colors.accentOrange,
   },
   submitBtnDisabled: { opacity: 0.4 },
   submitText: { color: "#fff", fontSize: 15, fontWeight: "700" },
@@ -318,6 +322,6 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "rgba(29,158,117,0.4)",
   },
-  successTitle: { fontSize: 18, fontWeight: "700", color: "#F1F5F9" },
-  successSubtitle: { fontSize: 13, color: "#6B7280", textAlign: "center" },
+  successTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+  successSubtitle: { fontSize: 13, color: colors.textSecondary, textAlign: "center" },
 });
