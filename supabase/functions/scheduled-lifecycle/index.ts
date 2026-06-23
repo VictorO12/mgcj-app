@@ -43,6 +43,13 @@ Deno.serve(async () => {
 async function handleClaimed(ride: any, now: Date) {
   const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60000
 
+  // Stripe card holds only last ~7 days, so card PaymentIntents for
+  // scheduled rides are created here (within the 65-min processing
+  // window) rather than at booking time, which can be up to 60 days out.
+  if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id && ride.payment_status !== 'failed') {
+    await createScheduledPaymentIntent(ride)
+  }
+
   const { data: driver } = await supabase.from('drivers')
     .select('push_token, current_lat, current_lng').eq('id', ride.driver_id).maybeSingle()
   const { data: driverProfile } = await supabase.from('profiles')
@@ -52,7 +59,27 @@ async function handleClaimed(ride: any, now: Date) {
 
   let travelMins = 0
   if (driver?.current_lat && driver?.current_lng) {
-    travelMins = await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)
+    travelMins = (await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)) ?? 0
+  }
+
+  // Re-validate the claimed driver is still a live commitment, not just a
+  // claim made days ago. A claim is intent, not a guarantee — the driver
+  // may have gone offline, picked up another fare, or gone home since.
+  // This is the same "is the driver viable" question regardless of fleet
+  // size, so it's written as a standalone check rather than folded into
+  // the 30-min reminder — only the response (reuse the existing
+  // re-broadcast/escalation path) is sized for the current single-
+  // dispatcher scale.
+  if (minsUntil <= 30) {
+    const viable = await isDriverViableForRide(ride, driver)
+    if (!viable) {
+      console.log(`[ride ${ride.id}] claimed driver no longer viable — releasing and re-escalating`)
+      await supabase.from('rides')
+        .update({ driver_id: null, confirmed_by_driver: false, escalated: true })
+        .eq('id', ride.id)
+      await reBroadcastAndAlertAdmins(ride, 'driver_dropped')
+      return
+    }
   }
 
   if (!ride.notified_30min && minsUntil <= 30 && minsUntil > 15) {
@@ -93,6 +120,15 @@ async function handleUnclaimed(ride: any, now: Date) {
 
   await supabase.from('rides').update({ escalated: true }).eq('id', ride.id)
   console.log(`[ride ${ride.id}] escalating — ${minsUntil.toFixed(0)} min out, unclaimed`)
+  await reBroadcastAndAlertAdmins(ride, 'unclaimed')
+}
+
+// ── Re-offer a ride to company drivers + alert dispatch ─────────
+// Shared by the unclaimed-at-60-min path and the claimed-driver-
+// went-dark path — both boil down to "this ride needs a new driver,
+// surface it to the fleet and to dispatch."
+async function reBroadcastAndAlertAdmins(ride: any, reason: 'unclaimed' | 'driver_dropped') {
+  if (!ride.company_id) return
   const when = new Date(ride.scheduled_at).toLocaleString('en-CA', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax' })
 
   const { data: drivers } = await supabase.from('drivers')
@@ -104,19 +140,120 @@ async function handleUnclaimed(ride: any, now: Date) {
 
   const { data: admins } = await supabase.from('profiles')
     .select('push_token').eq('role', 'admin').eq('company_id', ride.company_id).not('push_token', 'is', null)
+  const adminBody = reason === 'driver_dropped'
+    ? `${when} pickup at ${ride.pickup_address} — assigned driver is no longer available`
+    : `${when} pickup at ${ride.pickup_address} — no driver yet`
   for (const a of admins ?? []) {
-    await sendPush(a.push_token, '⚠️ Scheduled ride needs a driver', `${when} pickup at ${ride.pickup_address} — no driver yet`,
+    await sendPush(a.push_token, '⚠️ Scheduled ride needs a driver', adminBody,
       { rideId: ride.id, type: 'dispatch_escalation' })
   }
 }
 
-async function getDriveMins(fromLat: number, fromLng: number, toLat: number, toLng: number) {
-  if (!MAPS_KEY) return 0
+// ── Is the committed driver still a live commitment? ────────────
+// A claim made days ago is intent, not a guarantee. This question is
+// the same at 2 companies or 200 — only what happens on "no" should
+// stay scaled to current size.
+async function isDriverViableForRide(ride: any, driver: { current_lat?: number; current_lng?: number } | null) {
+  const { data: d } = await supabase.from('drivers')
+    .select('is_active').eq('id', ride.driver_id).maybeSingle()
+  if (!d?.is_active) return false
+
+  const { data: busyRides } = await supabase.from('rides')
+    .select('id').eq('driver_id', ride.driver_id)
+    .in('status', ['assigned', 'driver_arriving', 'in_progress'])
+    .neq('id', ride.id)
+  if ((busyRides ?? []).length > 0) return false
+
+  if (driver?.current_lat && driver?.current_lng) {
+    const travelMins = await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)
+    // null means the Distance Matrix lookup failed (no key, network error,
+    // non-OK status) — fail closed rather than treating an unknown ETA as
+    // "0 minutes away, always in range".
+    if (travelMins === null) return false
+    const minsUntil = (new Date(ride.scheduled_at).getTime() - Date.now()) / 60000
+    if (travelMins > minsUntil + 20) return false
+  }
+
+  return true
+}
+
+// ── Create the deferred card PaymentIntent for a scheduled ride ─
+const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? ''
+async function stripePost(path: string, body: Record<string, string> = {}) {
+  const res = await fetch(`https://api.stripe.com/v1${path}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(body).toString(),
+  })
+  return res.json()
+}
+
+async function createScheduledPaymentIntent(ride: any) {
+  const { data: pax } = await supabase.from('profiles')
+    .select('stripe_customer_id, push_token').eq('id', ride.passenger_id).maybeSingle()
+
+  let stripePaymentMethodId: string | null = null
+  if (ride.payment_method_id) {
+    const { data: pm } = await supabase.from('payment_methods')
+      .select('stripe_payment_method_id').eq('id', ride.payment_method_id).maybeSingle()
+    stripePaymentMethodId = pm?.stripe_payment_method_id ?? null
+  }
+  if (!stripePaymentMethodId) {
+    const { data: pm } = await supabase.from('payment_methods')
+      .select('stripe_payment_method_id').eq('passenger_id', ride.passenger_id).eq('is_default', true).maybeSingle()
+    stripePaymentMethodId = pm?.stripe_payment_method_id ?? null
+  }
+
+  if (!pax?.stripe_customer_id || !stripePaymentMethodId) {
+    console.error(`[ride ${ride.id}] no saved card found for deferred PaymentIntent`)
+    await supabase.from('rides').update({ payment_status: 'failed' }).eq('id', ride.id)
+    await sendPush(pax?.push_token, '⚠️ Payment method needed', 'Please add a card or your ride will need to be paid by cash.', { rideId: ride.id })
+    return
+  }
+
+  const totalCents = Math.round((ride.fare_estimate ?? 0) * 100)
+  const intent = await stripePost('/payment_intents', {
+    amount: totalCents.toString(),
+    currency: 'cad',
+    customer: pax.stripe_customer_id,
+    payment_method: stripePaymentMethodId,
+    capture_method: 'manual',
+    confirm: 'true',
+    'automatic_payment_methods[enabled]': 'true',
+    'automatic_payment_methods[allow_redirects]': 'never',
+    'metadata[passenger_id]': ride.passenger_id,
+    'metadata[ride_id]': ride.id,
+  })
+
+  if (intent.error) {
+    console.error(`[ride ${ride.id}] deferred PaymentIntent failed:`, JSON.stringify(intent.error))
+    await supabase.from('rides').update({ payment_status: 'failed' }).eq('id', ride.id)
+    await sendPush(pax?.push_token, '⚠️ Card payment failed', 'Your saved card was declined. Please update your payment method or pay with cash.', { rideId: ride.id })
+    return
+  }
+
+  await supabase.from('rides').update({ stripe_payment_intent_id: intent.id }).eq('id', ride.id)
+  console.log(`[ride ${ride.id}] deferred PaymentIntent created: ${intent.id}`)
+}
+
+// Returns the drive time in minutes, or null if the lookup failed/errored
+// (no key, network error, non-OK API/element status) — callers must not
+// treat null as "0 minutes away".
+async function getDriveMins(fromLat: number, fromLng: number, toLat: number, toLng: number): Promise<number | null> {
+  if (!MAPS_KEY) { console.error('[drive] no MAPS_KEY configured'); return null }
   try {
     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${fromLat},${fromLng}&destinations=${toLat},${toLng}&mode=driving&key=${MAPS_KEY}`
     const j = await (await fetch(url)).json()
-    return Math.ceil((j.rows?.[0]?.elements?.[0]?.duration?.value ?? 0) / 60)
-  } catch (e) { console.error('[drive]', e); return 0 }
+    const element = j.rows?.[0]?.elements?.[0]
+    if (j.status !== 'OK' || element?.status !== 'OK' || typeof element?.duration?.value !== 'number') {
+      console.error('[drive] distance matrix lookup failed:', JSON.stringify({ status: j.status, elementStatus: element?.status }))
+      return null
+    }
+    return Math.ceil(element.duration.value / 60)
+  } catch (e) { console.error('[drive]', e); return null }
 }
 async function sendPush(token: string | null | undefined, title: string, body: string, data: Record<string, unknown>) {
   if (!token) return

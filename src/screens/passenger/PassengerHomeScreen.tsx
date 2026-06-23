@@ -569,32 +569,42 @@ export default function PassengerHomeScreen() {
           );
           return;
         }
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("No session");
-        const res = await fetch(
-          `${SUPABASE_URL}/functions/v1/create-payment-intent`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-              apikey: SUPABASE_ANON_KEY,
+
+        // Stripe card holds only last ~7 days, but rides can be scheduled up
+        // to 60 days out — so for scheduled rides we defer creating the
+        // PaymentIntent until shortly before pickup (scheduled-lifecycle
+        // cron) instead of authorizing the card at booking time.
+        let paymentIntentId: string | null = null;
+        if (!scheduledAt) {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) throw new Error("No session");
+          const res = await fetch(
+            `${SUPABASE_URL}/functions/v1/create-payment-intent`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+                apikey: SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({ fare_amount: fareEstimate }),
             },
-            body: JSON.stringify({ fare_amount: fareEstimate }),
-          },
-        );
-        const intentData = await res.json();
-        if (!res.ok) {
-          setBookingLoading(false);
-          Alert.alert(
-            "Payment failed",
-            intentData.message ??
-              "Could not process payment. Please try a different card or pay with cash.",
           );
-          return;
+          const intentData = await res.json();
+          if (!res.ok) {
+            setBookingLoading(false);
+            Alert.alert(
+              "Payment failed",
+              intentData.message ??
+                "Could not process payment. Please try a different card or pay with cash.",
+            );
+            return;
+          }
+          paymentIntentId = intentData.payment_intent_id;
         }
+
         const { error: rideError } = await supabase.from("rides").insert({
           passenger_id: profile.id,
           company_id: profile.company_id,
@@ -608,7 +618,7 @@ export default function PassengerHomeScreen() {
           fare_estimate: fareEstimate,
           payment_method: "card",
           payment_method_id: paymentCard?.id ?? null,
-          stripe_payment_intent_id: intentData.payment_intent_id,
+          stripe_payment_intent_id: paymentIntentId,
           payment_status: "pending",
           scheduled_at: scheduledAt,
         });

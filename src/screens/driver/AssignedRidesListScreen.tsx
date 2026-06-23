@@ -43,11 +43,14 @@ export default function AssignedRidesListScreen({
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [rides, setRides] = useState<AssignedRide[]>([]);
+  const [openRides, setOpenRides] = useState<AssignedRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [tab, setTab] = useState<"mine" | "open">("mine");
 
   useEffect(() => {
     fetchAssignedRides();
+    fetchOpenRides();
   }, [profile]);
 
   // Realtime: keep this list live while it's open (cancellations,
@@ -79,6 +82,96 @@ export default function AssignedRidesListScreen({
       supabase.removeChannel(channel);
     };
   }, [profile]);
+
+  // Pull-based fallback for the push-broadcast offer: a driver who missed
+  // or ignored the scheduled-ride notification (offline, stale token, OS
+  // killed the app) can still discover and claim it from here. No
+  // server-side filter for the same reason as above — claims/escalations
+  // change driver_id, so we just refetch on any company-relevant change.
+  useEffect(() => {
+    if (!profile?.company_id) return;
+    const channel = supabase
+      .channel("open-scheduled-rides-" + profile.id)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rides" },
+        (payload) => {
+          const oldRow = payload.old as any;
+          const newRow = payload.new as any;
+          if (
+            oldRow?.company_id === profile.company_id ||
+            newRow?.company_id === profile.company_id
+          ) {
+            fetchOpenRides();
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
+  async function fetchOpenRides() {
+    if (!profile?.company_id) return;
+
+    const { data } = await supabase
+      .from("rides")
+      .select("*")
+      .eq("company_id", profile.company_id)
+      .eq("status", "scheduled")
+      .is("driver_id", null)
+      .gte("scheduled_at", new Date().toISOString())
+      .order("scheduled_at", { ascending: true });
+
+    if (!data) return;
+
+    const enriched = await Promise.all(
+      data.map(async (ride) => {
+        const { data: p } = await supabase
+          .from("profiles")
+          .select("name, phone")
+          .eq("id", ride.passenger_id)
+          .single();
+        return {
+          ...ride,
+          passenger_name: p?.name ?? null,
+          passenger_phone: p?.phone ?? null,
+        };
+      }),
+    );
+    setOpenRides(enriched);
+  }
+
+  async function claimOpenRide(ride: AssignedRide) {
+    if (!profile) return;
+    setActionLoading(ride.id);
+    const { data, error } = await supabase
+      .from("rides")
+      .update({ driver_id: profile.id, confirmed_by_driver: true })
+      .eq("id", ride.id)
+      .is("driver_id", null) // race-safe — same guard as the push-claim path
+      .eq("status", "scheduled")
+      .select("id");
+    setActionLoading(null);
+
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      Alert.alert("Already claimed", "Another driver already took this ride.");
+      fetchOpenRides();
+      return;
+    }
+
+    setOpenRides((prev) => prev.filter((r) => r.id !== ride.id));
+    fetchAssignedRides();
+    Alert.alert(
+      "Claimed!",
+      "Scheduled ride added to your assigned rides. You'll be notified when it's time to head to pickup.",
+    );
+  }
 
   async function fetchAssignedRides() {
     if (!profile) return;
@@ -209,11 +302,32 @@ export default function AssignedRidesListScreen({
         <View style={{ width: 36 }} />
       </View>
 
+      <View style={styles.tabBar}>
+        <TouchableOpacity
+          style={[styles.tabBtn, tab === "mine" && styles.tabBtnActive]}
+          onPress={() => setTab("mine")}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.tabBtnText, tab === "mine" && styles.tabBtnTextActive]}>
+            My rides{rides.length > 0 ? ` (${rides.length})` : ""}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabBtn, tab === "open" && styles.tabBtnActive]}
+          onPress={() => setTab("open")}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.tabBtnText, tab === "open" && styles.tabBtnTextActive]}>
+            Available{openRides.length > 0 ? ` (${openRides.length})` : ""}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {loading ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
-      ) : rides.length === 0 ? (
+      ) : tab === "mine" && rides.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Ionicons name="car-outline" size={48} color={colors.textFaint} />
           <Text style={styles.emptyTitle}>No assigned rides</Text>
@@ -221,7 +335,15 @@ export default function AssignedRidesListScreen({
             Dispatch will notify you when a ride is assigned.
           </Text>
         </View>
-      ) : (
+      ) : tab === "open" && openRides.length === 0 ? (
+        <View style={styles.emptyWrap}>
+          <Ionicons name="calendar-outline" size={48} color={colors.textFaint} />
+          <Text style={styles.emptyTitle}>No open scheduled rides</Text>
+          <Text style={styles.emptySub}>
+            Everything in the schedule is already claimed.
+          </Text>
+        </View>
+      ) : tab === "mine" ? (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
           {immediateRides.length > 0 && (
             <>
@@ -280,6 +402,31 @@ export default function AssignedRidesListScreen({
 
           <View style={{ height: 40 }} />
         </ScrollView>
+      ) : (
+        <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+          <Text style={styles.sectionSub}>
+            Nobody's claimed these yet — first to tap wins.
+          </Text>
+          {openRides.map((ride) => (
+            <RideCard
+              key={ride.id}
+              ride={ride}
+              isImmediate={false}
+              blocked={false}
+              open
+              actionLoading={actionLoading}
+              countdownLabel={
+                ride.scheduled_at ? countdownLabel(ride.scheduled_at) : null
+              }
+              onAccept={() => claimOpenRide(ride)}
+              onDecline={() => {}}
+              onCall={() =>
+                ride.passenger_phone && callPassenger(ride.passenger_phone)
+              }
+            />
+          ))}
+          <View style={{ height: 40 }} />
+        </ScrollView>
       )}
     </View>
   );
@@ -289,6 +436,7 @@ function RideCard({
   ride,
   isImmediate,
   blocked,
+  open = false,
   actionLoading,
   countdownLabel,
   onAccept,
@@ -298,6 +446,7 @@ function RideCard({
   ride: AssignedRide;
   isImmediate: boolean;
   blocked: boolean;
+  open?: boolean;
   actionLoading: string | null;
   countdownLabel: string | null;
   onAccept: () => void;
@@ -430,8 +579,9 @@ function RideCard({
 
       {/* Actions */}
       <View style={styles.actions}>
-        {/* Only show Decline on unconfirmed rides */}
-        {!ride.confirmed_by_driver && (
+        {/* Only show Decline on unconfirmed, already-assigned rides — an
+            open-board card has nothing assigned to decline */}
+        {!open && !ride.confirmed_by_driver && (
           <TouchableOpacity
             style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
             onPress={onDecline}
@@ -464,7 +614,9 @@ function RideCard({
                 ? "Ride in progress"
                 : ride.confirmed_by_driver
                   ? "✓ Confirmed"
-                  : "Accept"}
+                  : open
+                    ? "Claim"
+                    : "Accept"}
             </Text>
           )}
         </TouchableOpacity>
@@ -498,6 +650,27 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "center",
     },
     headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+    tabBar: {
+      flexDirection: "row",
+      gap: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 14,
+    },
+    tabBtn: {
+      flex: 1,
+      alignItems: "center",
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    tabBtnActive: {
+      backgroundColor: "rgba(232,80,10,0.15)",
+      borderColor: "rgba(232,80,10,0.35)",
+    },
+    tabBtnText: { fontSize: 13, fontWeight: "600", color: colors.textSecondary },
+    tabBtnTextActive: { color: colors.accentOrange },
     loadingWrap: { paddingTop: 60, alignItems: "center" },
     emptyWrap: { paddingTop: 60, alignItems: "center", gap: 10 },
     emptyTitle: { fontSize: 18, fontWeight: "600", color: colors.textMuted },
@@ -515,6 +688,12 @@ const makeStyles = (colors: Colors) =>
       letterSpacing: 0.8,
       marginBottom: 8,
       marginTop: 4,
+    },
+    sectionSub: {
+      fontSize: 12,
+      color: colors.textFaint,
+      marginBottom: 10,
+      marginTop: -4,
     },
     warningBanner: {
       flexDirection: "row",
