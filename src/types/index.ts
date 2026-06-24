@@ -9,6 +9,10 @@ export interface Profile {
   avatar_url: string | null
   deleted_at: string | null
   created_at: string
+  student_verified: boolean
+  student_email: string | null
+  student_institution_id: string | null
+  student_verified_at: string | null
 }
 
 export type RootStackParamList = {

@@ -473,3 +473,11 @@ entrypoint = "./functions/assign-ride/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/reassign-stale-rides/index.ts"
+
+[functions.request-student-verification]
+enabled = true
+verify_jwt = true
+
+[functions.confirm-student-verification]
+enabled = true
+verify_jwt = false

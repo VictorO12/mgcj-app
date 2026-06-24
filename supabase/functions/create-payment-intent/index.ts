@@ -64,7 +64,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    const { fare_amount } = await req.json()
+    const { fare_amount, discount_code } = await req.json()
 
     if (!fare_amount || fare_amount <= 0) {
       return new Response(JSON.stringify({ error: 'Invalid fare amount' }), {
@@ -77,10 +77,10 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     )
 
-    // Fetch passenger Stripe customer ID
+    // Fetch passenger Stripe customer ID + company (for discount eligibility)
     const { data: passenger } = await serviceClient
       .from('profiles')
-      .select('stripe_customer_id')
+      .select('stripe_customer_id, company_id')
       .eq('id', user.id)
       .single()
 
@@ -104,9 +104,34 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Use platform fee default — company assigned when driver accepts
+    // Apply student discount (always wins) or a discount code, if eligible —
+    // see compute_discount_for_booking for the priority rules.
+    let discountedFare = fare_amount
+    let discountAmount = 0
+    let discountType: string | null = null
+    let discountCodeId: string | null = null
+    if (passenger.company_id) {
+      const { data: discount } = await serviceClient
+        .rpc('compute_discount_for_booking', {
+          p_user_id:    user.id,
+          p_company_id: passenger.company_id,
+          p_fare:       fare_amount,
+          p_code:       discount_code ?? null,
+        })
+        .maybeSingle()
+
+      if (discount) {
+        discountedFare = discount.discounted_fare ?? fare_amount
+        discountAmount = discount.discount_amount ?? 0
+        discountType = discount.discount_type ?? null
+        discountCodeId = discount.code_id ?? null
+      }
+    }
+
+    // Use platform fee default — actual fee % recalculated against the
+    // company at capture time in capture-payment, off the discounted fare.
     const platformFeePercent = 10.0
-    const totalCents         = Math.round(fare_amount * 100)
+    const totalCents         = Math.round(discountedFare * 100)
     const feeCents           = Math.round(totalCents * (platformFeePercent / 100))
 
     // Create PaymentIntent with manual capture (hold only)
@@ -121,6 +146,8 @@ Deno.serve(async (req) => {
       'automatic_payment_methods[allow_redirects]': 'never',
       'metadata[passenger_id]':                     user.id,
       'metadata[platform_fee_cents]':               feeCents.toString(),
+      'metadata[pre_discount_fare]':                fare_amount.toString(),
+      'metadata[discount_amount]':                  discountAmount.toString(),
     })
 
     if (intent.error) {
@@ -136,14 +163,19 @@ Deno.serve(async (req) => {
       )
     }
 
-    console.log(`Payment intent created: ${intent.id} — ${totalCents}c CAD (hold)`)
+    console.log(`Payment intent created: ${intent.id} — ${totalCents}c CAD (hold)${discountAmount > 0 ? ` [${discountType} discount -$${discountAmount}]` : ''}`)
 
     return new Response(
       JSON.stringify({
-        success:           true,
-        payment_intent_id: intent.id,
-        amount_cents:      totalCents,
-        fee_cents:         feeCents,
+        success:             true,
+        payment_intent_id:   intent.id,
+        amount_cents:        totalCents,
+        fee_cents:           feeCents,
+        discounted_fare:     discountedFare,
+        pre_discount_fare:   fare_amount,
+        discount_amount:     discountAmount,
+        discount_type:       discountType,
+        discount_code_id:    discountCodeId,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

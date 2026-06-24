@@ -26,6 +26,7 @@ interface Props {
   onOpenProfile?: () => void;
   onOpenNotifications?: () => void;
   onOpenPaymentMethods?: () => void;
+  onOpenDiscounts?: () => void;
   hasAssignedRide?: boolean;
   onOpenAssigned?: () => void;
 }
@@ -41,6 +42,7 @@ export default function ProfileMenu({
   onOpenProfile,
   onOpenNotifications,
   onOpenPaymentMethods,
+  onOpenDiscounts,
   hasAssignedRide,
   onOpenAssigned,
 }: Props) {
@@ -183,6 +185,15 @@ export default function ProfileMenu({
           onPress: () => {
             onClose();
             onOpenPaymentMethods?.();
+          },
+        },
+        {
+          icon: "pricetag-outline",
+          label: "Discounts",
+          sublabel: "Student discount verification",
+          onPress: () => {
+            onClose();
+            onOpenDiscounts?.();
           },
         },
         {

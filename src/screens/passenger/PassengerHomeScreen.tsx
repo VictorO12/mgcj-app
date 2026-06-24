@@ -28,6 +28,7 @@ import Constants from "expo-constants";
 import { useNotifications } from "../../hooks/useNotifications";
 import RideReviewModal from "../../components/RideReviewModal";
 import ProfileScreen from "./ProfileScreen";
+import DiscountsScreen from "./DiscountsScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
@@ -101,6 +102,15 @@ export default function PassengerHomeScreen() {
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [fareDiscountAmount, setFareDiscountAmount] = useState(0);
+  const [fareDiscountType, setFareDiscountType] = useState<"student" | "code" | null>(
+    null,
+  );
+  const [discountCodeInput, setDiscountCodeInput] = useState("");
+  const [discountCodeStatus, setDiscountCodeStatus] = useState<string | null>(
+    null,
+  );
+  const [checkingDiscountCode, setCheckingDiscountCode] = useState(false);
   const [fareLoading, setFareLoading] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [sheet, setSheet] = useState<"search" | "confirm" | null>(null);
@@ -112,6 +122,7 @@ export default function PassengerHomeScreen() {
   const [historyVisible, setHistoryVisible] = useState(false);
   const [scheduledVisible, setScheduledVisible] = useState(false);
   const [paymentVisible, setPaymentVisible] = useState(false);
+  const [discountsVisible, setDiscountsVisible] = useState(false);
   const [profileVisible, setProfileVisible] = useState(false);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
@@ -527,11 +538,87 @@ export default function PassengerHomeScreen() {
       );
       const metres =
         (await res.json()).routes?.[0]?.legs?.[0]?.distance?.value ?? 0;
-      setFareEstimate(Math.round((4 + (metres / 1000) * 1.8) * 100) / 100);
+      const baseFare = Math.round((4 + (metres / 1000) * 1.8) * 100) / 100;
+      setFareEstimate(baseFare);
+      const discount = await getDiscount(baseFare);
+      setFareDiscountAmount(discount.discountAmount);
+      setFareDiscountType(discount.discountType);
     } catch (e) {
       console.error(e);
     }
     setFareLoading(false);
+  }
+
+  async function getDiscount(fare: number, code?: string) {
+    const fallback = {
+      discountedFare: fare,
+      discountAmount: 0,
+      discountType: null as "student" | "code" | null,
+      codeId: null as string | null,
+      codeStatus: "none" as string,
+    };
+    if (!profile?.company_id) return fallback;
+    try {
+      const { data, error } = await supabase
+        .rpc("compute_discount_for_booking", {
+          p_user_id: profile.id,
+          p_company_id: profile.company_id,
+          p_fare: fare,
+          p_code: code?.trim() || null,
+        })
+        .maybeSingle();
+      if (error || !data) return fallback;
+      const result = data as {
+        discounted_fare: number;
+        discount_amount: number;
+        discount_type: "student" | "code" | null;
+        code_id: string | null;
+        code_status: string;
+      };
+      return {
+        discountedFare: result.discounted_fare ?? fare,
+        discountAmount: result.discount_amount ?? 0,
+        discountType: result.discount_type ?? null,
+        codeId: result.code_id ?? null,
+        codeStatus: result.code_status ?? "none",
+      };
+    } catch (e) {
+      console.error("Discount check failed:", e);
+      return fallback;
+    }
+  }
+
+  const DISCOUNT_CODE_ERRORS: Record<string, string> = {
+    not_found: "Code not found.",
+    inactive: "This code is no longer active.",
+    not_started: "This code isn't active yet.",
+    expired: "This code has expired.",
+    maxed: "This code has reached its usage limit.",
+    already_used: "You've already used this code.",
+  };
+
+  async function applyDiscountCode() {
+    if (!fareEstimate) return;
+    if (!discountCodeInput.trim()) {
+      setDiscountCodeStatus(null);
+      setFareDiscountAmount(0);
+      setFareDiscountType(null);
+      return;
+    }
+    setCheckingDiscountCode(true);
+    const discount = await getDiscount(fareEstimate, discountCodeInput);
+    setCheckingDiscountCode(false);
+    if (discount.codeStatus === "ok") {
+      setFareDiscountAmount(discount.discountAmount);
+      setFareDiscountType(discount.discountType);
+      setDiscountCodeStatus("ok");
+    } else {
+      setFareDiscountAmount(0);
+      setFareDiscountType(null);
+      setDiscountCodeStatus(
+        DISCOUNT_CODE_ERRORS[discount.codeStatus] ?? "Couldn't apply that code.",
+      );
+    }
   }
 
   async function confirmBooking() {
@@ -575,6 +662,10 @@ export default function PassengerHomeScreen() {
         // PaymentIntent until shortly before pickup (scheduled-lifecycle
         // cron) instead of authorizing the card at booking time.
         let paymentIntentId: string | null = null;
+        let discountedFare = fareEstimate;
+        let discountAmount = 0;
+        let discountType: "student" | "code" | null = null;
+        let discountCodeId: string | null = null;
         if (!scheduledAt) {
           const {
             data: { session },
@@ -589,7 +680,10 @@ export default function PassengerHomeScreen() {
                 Authorization: `Bearer ${session.access_token}`,
                 apikey: SUPABASE_ANON_KEY,
               },
-              body: JSON.stringify({ fare_amount: fareEstimate }),
+              body: JSON.stringify({
+                fare_amount: fareEstimate,
+                discount_code: discountCodeInput.trim() || null,
+              }),
             },
           );
           const intentData = await res.json();
@@ -603,6 +697,18 @@ export default function PassengerHomeScreen() {
             return;
           }
           paymentIntentId = intentData.payment_intent_id;
+          discountedFare = intentData.discounted_fare ?? fareEstimate;
+          discountAmount = intentData.discount_amount ?? 0;
+          discountType = intentData.discount_type ?? null;
+          discountCodeId = intentData.discount_code_id ?? null;
+        } else {
+          // Scheduled rides defer PaymentIntent creation, so compute the
+          // discount client-side now to show/store the correct fare.
+          const discount = await getDiscount(fareEstimate, discountCodeInput);
+          discountedFare = discount.discountedFare;
+          discountAmount = discount.discountAmount;
+          discountType = discount.discountType;
+          discountCodeId = discount.codeId;
         }
 
         const { error: rideError } = await supabase.from("rides").insert({
@@ -615,7 +721,11 @@ export default function PassengerHomeScreen() {
           dropoff_address: dropoffText,
           dropoff_lat: dropoffCoords.latitude,
           dropoff_lng: dropoffCoords.longitude,
-          fare_estimate: fareEstimate,
+          fare_estimate: discountedFare,
+          pre_discount_fare: fareEstimate,
+          discount_amount: discountAmount,
+          discount_type: discountType,
+          discount_code_id: discountCodeId,
           payment_method: "card",
           payment_method_id: paymentCard?.id ?? null,
           stripe_payment_intent_id: paymentIntentId,
@@ -643,6 +753,8 @@ export default function PassengerHomeScreen() {
       }
     }
 
+    const cashDiscount = await getDiscount(fareEstimate ?? 0, discountCodeInput);
+
     const { error: rideError } = await supabase.from("rides").insert({
       passenger_id: profile.id,
       company_id: profile.company_id,
@@ -653,7 +765,11 @@ export default function PassengerHomeScreen() {
       dropoff_address: dropoffText,
       dropoff_lat: dropoffCoords.latitude,
       dropoff_lng: dropoffCoords.longitude,
-      fare_estimate: fareEstimate,
+      fare_estimate: cashDiscount.discountedFare,
+      pre_discount_fare: fareEstimate,
+      discount_amount: cashDiscount.discountAmount,
+      discount_type: cashDiscount.discountType,
+      discount_code_id: cashDiscount.codeId,
       payment_method: "cash",
       scheduled_at: scheduledAt,
     });
@@ -683,6 +799,10 @@ export default function PassengerHomeScreen() {
     setDropoffText("");
     setDropoffCoords(null);
     setFareEstimate(null);
+    setFareDiscountAmount(0);
+    setFareDiscountType(null);
+    setDiscountCodeInput("");
+    setDiscountCodeStatus(null);
     setSheet(null);
     setPredictions([]);
     setActiveField(null);
@@ -1356,6 +1476,45 @@ export default function PassengerHomeScreen() {
                   </View>
                 </View>
 
+                {/* Discount code — hidden once a verified student discount
+                    is already auto-applied, since it always wins over a code */}
+                {fareDiscountType !== "student" && (
+                  <View style={styles.discountCodeRow}>
+                    <TextInput
+                      style={styles.discountCodeInput}
+                      value={discountCodeInput}
+                      onChangeText={(t) => {
+                        setDiscountCodeInput(t);
+                        setDiscountCodeStatus(null);
+                      }}
+                      placeholder="Discount code (optional)"
+                      placeholderTextColor={colors.textMuted}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      returnKeyType="done"
+                      onSubmitEditing={applyDiscountCode}
+                    />
+                    <TouchableOpacity
+                      style={styles.discountCodeBtn}
+                      onPress={applyDiscountCode}
+                      disabled={checkingDiscountCode}
+                      activeOpacity={0.8}
+                    >
+                      {checkingDiscountCode ? (
+                        <ActivityIndicator size="small" color={colors.accentOrange} />
+                      ) : (
+                        <Text style={styles.discountCodeBtnText}>Apply</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {discountCodeStatus && discountCodeStatus !== "ok" && (
+                  <Text style={styles.discountCodeError}>{discountCodeStatus}</Text>
+                )}
+                {discountCodeStatus === "ok" && (
+                  <Text style={styles.discountCodeSuccess}>Code applied</Text>
+                )}
+
                 {/* Fare */}
                 <View style={styles.fareRow}>
                   <View>
@@ -1367,6 +1526,20 @@ export default function PassengerHomeScreen() {
                   </View>
                   {fareLoading ? (
                     <ActivityIndicator color={colors.accentOrange} />
+                  ) : fareDiscountAmount > 0 && fareEstimate != null ? (
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={styles.fareStrikethrough}>
+                        ${fareEstimate.toFixed(2)}
+                      </Text>
+                      <Text style={styles.fareAmount}>
+                        ${(fareEstimate - fareDiscountAmount).toFixed(2)}
+                      </Text>
+                      <Text style={styles.fareDiscountBadge}>
+                        {fareDiscountType === "student"
+                          ? "Student discount"
+                          : "Discount code applied"}
+                      </Text>
+                    </View>
                   ) : (
                     <Text style={styles.fareAmount}>
                       ${fareEstimate?.toFixed(2) ?? "--"}
@@ -1459,6 +1632,11 @@ export default function PassengerHomeScreen() {
           />
         </View>
       )}
+      {discountsVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <DiscountsScreen onClose={() => setDiscountsVisible(false)} />
+        </View>
+      )}
 
       <ProfileMenu
         profile={profile}
@@ -1469,6 +1647,7 @@ export default function PassengerHomeScreen() {
         onOpenHistory={() => setHistoryVisible(true)}
         onOpenProfile={() => setProfileVisible(true)}
         onOpenNotifications={() => setNotificationsVisible(true)}
+        onOpenDiscounts={() => setDiscountsVisible(true)}
         onOpenHelp={() => setHelpVisible(true)}
       />
 
@@ -1967,6 +2146,39 @@ const makeStyles = (colors: Colors) =>
     fareLabel: { fontSize: 14, color: colors.textTertiary, marginBottom: 3 },
     fareNote: { fontSize: 11, color: colors.textMuted },
     fareAmount: { fontSize: 28, fontWeight: "700", color: colors.textPrimary },
+    fareStrikethrough: {
+      fontSize: 14,
+      color: colors.textMuted,
+      textDecorationLine: "line-through",
+    },
+    fareDiscountBadge: { fontSize: 11, color: "#A855F7", fontWeight: "600" },
+    discountCodeRow: {
+      flexDirection: "row",
+      gap: 8,
+      marginBottom: 6,
+    },
+    discountCodeInput: {
+      flex: 1,
+      fontSize: 14,
+      color: colors.textPrimary,
+      backgroundColor: colors.surfaceAlt,
+      borderRadius: 10,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    discountCodeBtn: {
+      paddingHorizontal: 16,
+      borderRadius: 10,
+      borderWidth: 0.5,
+      borderColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    discountCodeBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentOrange },
+    discountCodeError: { fontSize: 12, color: colors.accentRed, marginBottom: 8 },
+    discountCodeSuccess: { fontSize: 12, color: "#1D9E75", marginBottom: 8 },
     confirmBtns: { flexDirection: "row", gap: 12 },
     editBtn: {
       flex: 1,
