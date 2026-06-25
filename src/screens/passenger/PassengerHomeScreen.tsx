@@ -533,12 +533,19 @@ export default function PassengerHomeScreen() {
   async function getFareEstimate(pickup: LatLng, dropoff: LatLng) {
     setFareLoading(true);
     try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.latitude},${pickup.longitude}&destination=${dropoff.latitude},${dropoff.longitude}&key=${MAPS_KEY}`,
-      );
-      const metres =
-        (await res.json()).routes?.[0]?.legs?.[0]?.distance?.value ?? 0;
-      const baseFare = Math.round((4 + (metres / 1000) * 1.8) * 100) / 100;
+      const [directionsRes, pricingRes] = await Promise.all([
+        fetch(
+          `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.latitude},${pickup.longitude}&destination=${dropoff.latitude},${dropoff.longitude}&key=${MAPS_KEY}`,
+        ),
+        profile?.company_id
+          ? supabase.from("companies").select("base_fare, rate_per_km").eq("id", profile.company_id).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+      const metres = (await directionsRes.json()).routes?.[0]?.legs?.[0]?.distance?.value ?? 0;
+      const pricing = (pricingRes as any).data;
+      const baseFareRate = pricing?.base_fare ?? 4;
+      const ratePerKm = pricing?.rate_per_km ?? 1.8;
+      const baseFare = Math.round((baseFareRate + (metres / 1000) * ratePerKm) * 100) / 100;
       setFareEstimate(baseFare);
       const discount = await getDiscount(baseFare);
       setFareDiscountAmount(discount.discountAmount);
