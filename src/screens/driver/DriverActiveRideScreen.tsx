@@ -23,6 +23,9 @@ import type { Colors } from "../../theme/colors";
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
+// Max a driver can report above the estimated fare for a cash ride —
+// prevents under/over-reporting cash collected relative to the platform fee owed.
+const CASH_FARE_MAX_OVERAGE = 5;
 
 // ── Polyline decoder ──────────────────────────────────────────────────────
 function decodePolyline(encoded: string): LatLng[] {
@@ -457,6 +460,15 @@ export default function DriverActiveRideScreen({
       Alert.alert("Invalid fare", "Please enter a valid fare amount.");
       return;
     }
+    const minFare = ride.fare_estimate ?? 0;
+    const maxFare = minFare + CASH_FARE_MAX_OVERAGE;
+    if (fareValue < minFare || fareValue > maxFare) {
+      Alert.alert(
+        "Fare out of range",
+        `Cash fare must be between $${minFare.toFixed(2)} and $${maxFare.toFixed(2)}.`,
+      );
+      return;
+    }
     setCompleting(true);
     // Cash fares round up to the nearest dollar so passengers don't need exact change.
     const { error } = await supabase
@@ -753,14 +765,20 @@ export default function DriverActiveRideScreen({
             </View>
 
             {ride.fare_estimate && (
-              <TouchableOpacity
-                style={styles.estimateHint}
-                onPress={() => setFareInput(ride.fare_estimate!.toFixed(2))}
-              >
-                <Text style={styles.estimateHintText}>
-                  Use estimate: ${ride.fare_estimate.toFixed(2)}
+              <>
+                <TouchableOpacity
+                  style={styles.estimateHint}
+                  onPress={() => setFareInput(ride.fare_estimate!.toFixed(2))}
+                >
+                  <Text style={styles.estimateHintText}>
+                    Use estimate: ${ride.fare_estimate.toFixed(2)}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.fareModalSub}>
+                  Must be between ${ride.fare_estimate.toFixed(2)} and $
+                  {(ride.fare_estimate + CASH_FARE_MAX_OVERAGE).toFixed(2)}
                 </Text>
-              </TouchableOpacity>
+              </>
             )}
 
             <View style={styles.fareModalBtns}>
