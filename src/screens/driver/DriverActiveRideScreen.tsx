@@ -458,9 +458,10 @@ export default function DriverActiveRideScreen({
       return;
     }
     setCompleting(true);
+    // Cash fares round up to the nearest dollar so passengers don't need exact change.
     const { error } = await supabase
       .from("rides")
-      .update({ status: "completed", fare_final: fareValue })
+      .update({ status: "completed", fare_final: Math.ceil(fareValue) })
       .eq("id", ride.id);
     setCompleting(false);
     if (error) {

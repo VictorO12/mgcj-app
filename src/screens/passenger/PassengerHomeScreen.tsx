@@ -754,6 +754,8 @@ export default function PassengerHomeScreen() {
     }
 
     const cashDiscount = await getDiscount(fareEstimate ?? 0, discountCodeInput);
+    // Cash fares round up to the nearest dollar so passengers don't need exact change.
+    const roundedCashFare = Math.ceil(cashDiscount.discountedFare);
 
     const { error: rideError } = await supabase.from("rides").insert({
       passenger_id: profile.id,
@@ -765,7 +767,7 @@ export default function PassengerHomeScreen() {
       dropoff_address: dropoffText,
       dropoff_lat: dropoffCoords.latitude,
       dropoff_lng: dropoffCoords.longitude,
-      fare_estimate: cashDiscount.discountedFare,
+      fare_estimate: roundedCashFare,
       pre_discount_fare: fareEstimate,
       discount_amount: cashDiscount.discountAmount,
       discount_type: cashDiscount.discountType,
@@ -1532,7 +1534,10 @@ export default function PassengerHomeScreen() {
                         ${fareEstimate.toFixed(2)}
                       </Text>
                       <Text style={styles.fareAmount}>
-                        ${(fareEstimate - fareDiscountAmount).toFixed(2)}
+                        $
+                        {selectedPayment === "cash"
+                          ? Math.ceil(fareEstimate - fareDiscountAmount).toFixed(2)
+                          : (fareEstimate - fareDiscountAmount).toFixed(2)}
                       </Text>
                       <Text style={styles.fareDiscountBadge}>
                         {fareDiscountType === "student"
@@ -1542,7 +1547,13 @@ export default function PassengerHomeScreen() {
                     </View>
                   ) : (
                     <Text style={styles.fareAmount}>
-                      ${fareEstimate?.toFixed(2) ?? "--"}
+                      $
+                      {fareEstimate == null
+                        ? "--"
+                        : (selectedPayment === "cash"
+                            ? Math.ceil(fareEstimate)
+                            : fareEstimate
+                          ).toFixed(2)}
                     </Text>
                   )}
                 </View>
