@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useDriverLocationBroadcast } from "../../hooks/useDriverLocationBroadcast";
 import DriverHomeScreen from "./DriverHomeScreen";
 import DriverActiveRideScreen from "./DriverActiveRideScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
@@ -80,6 +81,7 @@ function isRideNow(row: any): boolean {
 
 export default function DriverApp() {
   const { profile } = useAuth();
+  useDriverLocationBroadcast(profile?.id);
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);

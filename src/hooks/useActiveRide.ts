@@ -108,10 +108,25 @@ export function useActiveRide(passengerId: string | undefined) {
   }, [passengerId])
 
   // ── Realtime: driver location changes ───────────────────────
+  // Also polls directly every 10s as a fallback — realtime UPDATEs on
+  // `drivers` are gated by RLS, and if a passenger lacks SELECT access to
+  // another user's driver row, postgres_changes silently never delivers
+  // even though .subscribe() reports SUBSCRIBED.
   useEffect(() => {
     if (!ride?.driver?.id) return
 
     const driverId = ride.driver.id
+
+    function applyLocation(lat: number | null, lng: number | null) {
+      setRide(prev => {
+        if (!prev || !prev.driver) return prev
+        return {
+          ...prev,
+          driver: { ...prev.driver, current_lat: lat, current_lng: lng }
+        }
+      })
+    }
+
     const channel = supabase
       .channel('driver-location-' + driverId)
       .on('postgres_changes', {
@@ -122,37 +137,46 @@ export function useActiveRide(passengerId: string | undefined) {
         const row = payload.new as any
         if (row.id !== driverId) return
         console.log('[Realtime] driver location:', row.current_lat, row.current_lng)
-
-        setRide(prev => {
-          if (!prev || !prev.driver) return prev
-          return {
-            ...prev,
-            driver: {
-              ...prev.driver,
-              current_lat: row.current_lat,
-              current_lng: row.current_lng,
-            }
-          }
-        })
+        applyLocation(row.current_lat, row.current_lng)
       })
       .subscribe((status) => {
         console.log('[Realtime] driver channel:', status)
       })
 
-    return () => { supabase.removeChannel(channel) }
+    const poll = setInterval(async () => {
+      const { data } = await supabase
+        .from('drivers')
+        .select('current_lat, current_lng')
+        .eq('id', driverId)
+        .maybeSingle()
+      if (data) applyLocation(data.current_lat, data.current_lng)
+    }, 10000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(poll)
+    }
   }, [ride?.driver?.id])
 
-  // ── Recalculate ETA when driver moves ───────────────────────
+  // ── Recalculate ETA ──────────────────────────────────────────
+  // Keyed only on driver.id/status (not lat/lng) so the 30s cadence is
+  // stable instead of being torn down and rebuilt on every location tick;
+  // a ref holds the latest ride so the interval callback never reads stale data.
+  const rideRef = useRef<ActiveRide | null>(null)
+  useEffect(() => { rideRef.current = ride }, [ride])
+
   useEffect(() => {
     if (etaInterval.current) clearInterval(etaInterval.current)
-    if (!ride?.driver?.current_lat) return
+    if (!ride?.driver?.id) return
 
-    calculateEta(ride)
-    etaInterval.current = setInterval(() => calculateEta(ride), 30000)
+    calculateEta(rideRef.current!)
+    etaInterval.current = setInterval(() => {
+      if (rideRef.current) calculateEta(rideRef.current)
+    }, 30000)
     return () => {
       if (etaInterval.current) clearInterval(etaInterval.current)
     }
-  }, [ride?.driver?.current_lat, ride?.driver?.current_lng])
+  }, [ride?.driver?.id, ride?.status])
 
   // ── Fetch active ride ───────────────────────────────────────
   async function fetchActiveRide(pid: string) {
@@ -225,7 +249,10 @@ export function useActiveRide(passengerId: string | undefined) {
 
   // ── ETA calculation ─────────────────────────────────────────
   async function calculateEta(currentRide: ActiveRide) {
-    if (!currentRide.driver?.current_lat || !currentRide.driver?.current_lng) return
+    if (!currentRide.driver?.current_lat || !currentRide.driver?.current_lng) {
+      console.log('[ETA] skipped — no driver location yet for status:', currentRide.status)
+      return
+    }
 
     const target = currentRide.status === 'in_progress'
       ? { lat: currentRide.dropoff_lat, lng: currentRide.dropoff_lng }
@@ -241,7 +268,8 @@ export function useActiveRide(passengerId: string | undefined) {
       const res = await fetch(url)
       const json = await res.json()
       const seconds = json.routes?.[0]?.legs?.[0]?.duration?.value
-      setEta(seconds ? Math.ceil(seconds / 60) : null)
+      console.log('[ETA] status:', currentRide.status, '| status_code:', json.status, '| seconds:', seconds)
+      setEta(seconds != null ? Math.max(1, Math.ceil(seconds / 60)) : null)
     } catch (e) {
       console.error('[ETA] fetch error:', e)
     }

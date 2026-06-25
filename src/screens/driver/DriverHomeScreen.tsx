@@ -87,7 +87,6 @@ export default function DriverHomeScreen({
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
-  const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const CARD_WIDTH = Dimensions.get("window").width - 32;
   const [activeCard, setActiveCard] = useState(0);
   const [editProfileVisible, setEditProfileVisible] = useState(false);
@@ -168,31 +167,9 @@ export default function DriverHomeScreen({
       });
   }, [profile]);
 
-  useEffect(() => {
-    if (locationInterval.current) clearInterval(locationInterval.current);
-    if (!isOnline || !profile) return;
-    locationInterval.current = setInterval(async () => {
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const coords = {
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-      };
-      setLocation(coords);
-      await supabase
-        .from("drivers")
-        .update({
-          current_lat: coords.latitude,
-          current_lng: coords.longitude,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", profile.id);
-    }, 10000);
-    return () => {
-      if (locationInterval.current) clearInterval(locationInterval.current);
-    };
-  }, [isOnline, profile]);
+  // Location is broadcast to the `drivers` table by useDriverLocationBroadcast
+  // in DriverApp, which keeps running regardless of which driver screen is
+  // mounted (this screen unmounts during assigned/active-ride flows).
 
   async function toggleOnline() {
     if (!profile) return;
