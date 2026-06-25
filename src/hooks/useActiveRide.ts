@@ -167,7 +167,12 @@ export function useActiveRide(passengerId: string | undefined) {
 
   useEffect(() => {
     if (etaInterval.current) clearInterval(etaInterval.current)
-    if (!ride?.driver?.id) return
+    if (!ride?.driver?.id) {
+      // No confirmed driver yet (e.g. still 'offered', or reset by a
+      // decline/reassignment) — never leave a stale ETA on screen.
+      setEta(null)
+      return
+    }
 
     calculateEta(rideRef.current!)
     etaInterval.current = setInterval(() => {
@@ -244,6 +249,7 @@ export function useActiveRide(passengerId: string | undefined) {
     }
 
     console.log('[fetchActiveRide] assembled ride:', assembled.status, '| driver:', driver?.name)
+    if (!driver) setEta(null)
     setRide(assembled)
   }
 
