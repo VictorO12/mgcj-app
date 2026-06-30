@@ -1,13 +1,14 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const VERIFY_BASE_URL = "https://mgcj-dashboard.vercel.app/verify.html";
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const token = url.searchParams.get("token");
 
   if (!token) {
-    return htmlResponse("Missing confirmation link.", 400);
+    return redirect("This confirmation link is invalid.");
   }
 
   const serviceClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -19,15 +20,24 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   if (tokenError || !tokenRow) {
-    return htmlResponse("This confirmation link is invalid.", 400);
+    return redirect("This confirmation link is invalid.");
   }
 
   if (tokenRow.consumed_at) {
-    return htmlResponse("This confirmation link has already been used.", 400);
+    // Email clients pre-fetch links — if the profile is already verified, show success
+    const { data: profile } = await serviceClient
+      .from("profiles")
+      .select("student_verified")
+      .eq("id", tokenRow.user_id)
+      .maybeSingle();
+    if (profile?.student_verified) {
+      return redirect("Your student discount is now active. You can close this page and return to the app.", true);
+    }
+    return redirect("This confirmation link has already been used.");
   }
 
   if (new Date(tokenRow.expires_at) < new Date()) {
-    return htmlResponse("This confirmation link has expired. Please request a new one in the app.", 400);
+    return redirect("This confirmation link has expired. Please request a new one in the app.");
   }
 
   // Re-check email uniqueness at confirm time in case of a race
@@ -39,7 +49,7 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   if (existing) {
-    return htmlResponse("This email is already verified on another account.", 409);
+    return redirect("This email is already verified on another account.");
   }
 
   const { error: updateError } = await serviceClient
@@ -54,7 +64,7 @@ Deno.serve(async (req) => {
 
   if (updateError) {
     console.error("[confirm-student-verification] profile update error:", updateError);
-    return htmlResponse("Something went wrong confirming your student status. Please try again.", 500);
+    return redirect("Something went wrong confirming your student status. Please try again.");
   }
 
   await serviceClient
@@ -62,24 +72,18 @@ Deno.serve(async (req) => {
     .update({ consumed_at: new Date().toISOString() })
     .eq("id", tokenRow.id);
 
-  return htmlResponse("Your student discount is now active. You can close this page and return to the app.", 200, true);
+  return redirect("Your student discount is now active. You can close this page and return to the app.", true);
 });
 
-function htmlResponse(message: string, status: number, success = false) {
-  const html = `
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>M&amp;G C&amp;J — Student Verification</title>
-  </head>
-  <body style="font-family: -apple-system, Helvetica, Arial, sans-serif; background: #111827; color: white; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh;">
-    <div style="max-width: 360px; text-align: center; padding: 32px;">
-      <h1 style="font-size: 20px; color: #E8500A; margin: 0 0 16px;">M&amp;G C&amp;J</h1>
-      <p style="font-size: 16px; color: ${success ? "#1D9E75" : "#F87171"};">${message}</p>
-    </div>
-  </body>
-  </html>
-  `;
-  return new Response(html, { status, headers: { "Content-Type": "text/html" } });
+function redirect(message: string, success = false) {
+  const url = new URL(VERIFY_BASE_URL);
+  url.searchParams.set("success", success ? "1" : "0");
+  url.searchParams.set("message", message);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Location": url.toString(),
+      "Cache-Control": "no-store, no-cache",
+    },
+  });
 }

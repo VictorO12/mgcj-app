@@ -1,7 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
-const FROM_ADDRESS = "M&G C&J <onboarding@resend.dev>";
+const FROM_ADDRESS = "no-reply@vellon.ca";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 
 const corsHeaders = {
@@ -100,14 +100,30 @@ Deno.serve(async (req) => {
 
     const confirmUrl = `${SUPABASE_URL}/functions/v1/confirm-student-verification?token=${token}`;
 
+    // Look up company name from the passenger's profile
+    let companyName = "Vellon";
+    const { data: profile } = await serviceClient
+      .from("profiles")
+      .select("company_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profile?.company_id) {
+      const { data: company } = await serviceClient
+        .from("companies")
+        .select("name")
+        .eq("id", profile.company_id)
+        .maybeSingle();
+      if (company?.name) companyName = company.name;
+    }
+
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: FROM_ADDRESS,
         to: normalizedEmail,
-        subject: "Confirm your student discount — M&G C&J",
-        html: buildEmailHtml(institution.name, confirmUrl),
+        subject: `Confirm your student discount — ${companyName}`,
+        html: buildEmailHtml(institution.name, confirmUrl, companyName),
       }),
     });
 
@@ -130,11 +146,11 @@ Deno.serve(async (req) => {
   }
 });
 
-function buildEmailHtml(institutionName: string, confirmUrl: string) {
+function buildEmailHtml(institutionName: string, confirmUrl: string, companyName: string) {
   return `
   <div style="font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
     <div style="text-align: center; padding: 24px 0;">
-      <h1 style="font-size: 20px; margin: 0; color: #E8500A;">M&amp;G C&amp;J</h1>
+      <h1 style="font-size: 20px; margin: 0; color: #1a1a1a;">${companyName}</h1>
       <p style="color: #6B7280; font-size: 13px; margin-top: 4px;">Student Discount Verification</p>
     </div>
     <p style="font-size: 14px;">Confirm your ${institutionName} email to activate your student discount.</p>

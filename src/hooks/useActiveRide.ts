@@ -125,6 +125,12 @@ export function useActiveRide(passengerId: string | undefined) {
           driver: { ...prev.driver, current_lat: lat, current_lng: lng }
         }
       })
+      // Recalculate ETA immediately on driver location update rather than
+      // waiting for the 30s interval — makes reroutes visible within seconds.
+      const current = rideRef.current
+      if (current?.driver && lat !== null && lng !== null) {
+        calculateEta({ ...current, driver: { ...current.driver, current_lat: lat, current_lng: lng } })
+      }
     }
 
     const channel = supabase
