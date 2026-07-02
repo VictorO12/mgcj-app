@@ -1,0 +1,69 @@
+import { createClient } from 'jsr:@supabase/supabase-js@2'
+
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL')!,
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+)
+
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+
+Deno.serve(async (req) => {
+  try {
+    const body = await req.json()
+
+    // Fired by the driver_chat_messages INSERT webhook
+    if (body.type !== 'INSERT' || body.table !== 'driver_chat_messages') {
+      return new Response('Not a driver chat insert', { status: 200 })
+    }
+
+    const chatMessage = body.record
+
+    // Only dispatch -> driver sends push. A driver's reply shows up on the
+    // dashboard, which dispatch is assumed to be watching (same assumption
+    // ReportsPage's badge count makes — no push behind it either).
+    if (chatMessage.sender_role !== 'admin') {
+      return new Response('Driver-sent — no push', { status: 200 })
+    }
+
+    const { data: driver, error: driverError } = await supabase
+      .from('profiles')
+      .select('push_token')
+      .eq('id', chatMessage.driver_id)
+      .maybeSingle()
+
+    if (driverError) {
+      console.error('[send-driver-chat-push] driver lookup error:', JSON.stringify(driverError))
+      return new Response('driver lookup error', { status: 500 })
+    }
+    if (!driver?.push_token) {
+      console.log('[send-driver-chat-push] no push token for driver', chatMessage.driver_id)
+      return new Response('No push token', { status: 200 })
+    }
+
+    const notification = {
+      to: driver.push_token,
+      title: '💬 Message from dispatch',
+      body: chatMessage.body,
+      data: { type: 'driver_chat', driverId: chatMessage.driver_id },
+      sound: 'default',
+      priority: 'high',
+    }
+
+    const res = await fetch(EXPO_PUSH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(notification),
+    })
+    const result = await res.json()
+    console.log('[send-driver-chat-push] push result:', JSON.stringify(result))
+
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  } catch (err) {
+    console.error('[send-driver-chat-push] fatal:', err)
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    })
+  }
+})

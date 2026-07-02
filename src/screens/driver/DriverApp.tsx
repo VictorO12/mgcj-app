@@ -89,6 +89,10 @@ export default function DriverApp() {
   const [loadingDriver, setLoadingDriver] = useState(true);
   const [showAssigned, setShowAssigned] = useState(false);
   const [showAssignedList, setShowAssignedList] = useState(false);
+  // Bumped by the notification-tap handler below to tell DriverHomeScreen to
+  // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
+  const [openInboxSignal, setOpenInboxSignal] = useState(0);
+  const [openChatSignal, setOpenChatSignal] = useState(0);
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
@@ -208,6 +212,16 @@ export default function DriverApp() {
       async (response) => {
         const action = response.actionIdentifier;
         const data = response.notification.request.content.data ?? {};
+
+        if (data.type === "dispatch_message") {
+          setOpenInboxSignal((s) => s + 1);
+          return;
+        }
+        if (data.type === "driver_chat") {
+          setOpenChatSignal((s) => s + 1);
+          return;
+        }
+
         const rideId = data.rideId;
         if (!rideId || !profile) return;
 
@@ -562,6 +576,8 @@ export default function DriverApp() {
         onOpenAssigned={() => setShowAssignedList(true)}
         confirmedScheduledRides={confirmedScheduledRides}
         onRideAccepted={fetchActiveRide}
+        openInboxSignal={openInboxSignal}
+        openChatSignal={openChatSignal}
       />
       {pendingRide && (
         <RideRequestSheet

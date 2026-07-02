@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
 import { useActiveRide } from "../../hooks/useActiveRide";
@@ -31,6 +32,10 @@ import ProfileScreen from "./ProfileScreen";
 import DiscountsScreen from "./DiscountsScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import HelpSupportScreen from "./HelpSupportScreen";
+import InboxScreen from "../shared/InboxScreen";
+import { useInboxUnreadCount } from "../../hooks/useInboxUnreadCount";
+import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
+import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
@@ -120,6 +125,19 @@ export default function PassengerHomeScreen() {
   );
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const [inboxVisible, setInboxVisible] = useState(false);
+  const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } = useInboxUnreadCount();
+
+  // Tapping a "dispatch_message" push opens straight into the inbox rather than
+  // just landing on the home screen — PassengerHomeScreen never unmounts (unlike
+  // DriverApp's screen-swapping router), so no cross-component signal is needed.
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data ?? {};
+      if (data.type === "dispatch_message") setInboxVisible(true);
+    });
+    return () => sub.remove();
+  }, []);
   const [scheduledVisible, setScheduledVisible] = useState(false);
   const [paymentVisible, setPaymentVisible] = useState(false);
   const [discountsVisible, setDiscountsVisible] = useState(false);
@@ -827,6 +845,22 @@ export default function PassengerHomeScreen() {
   }
 
   const hasActiveRide = !!ride;
+  const interstitialGateOpen =
+    !hasActiveRide &&
+    sheet === null &&
+    !reviewTarget &&
+    !menuVisible &&
+    !historyVisible &&
+    !inboxVisible &&
+    !scheduledVisible &&
+    !paymentVisible &&
+    !discountsVisible &&
+    !profileVisible &&
+    !notificationsVisible &&
+    !helpVisible &&
+    !driverProfileVisible;
+  const { current: interstitialMessage, dismiss: dismissInterstitial } =
+    useInterstitialQueue(interstitialGateOpen);
   const noDriversForImmediate = !isScheduled && activeDrivers.length === 0;
   const hasDriver = !!ride?.driver?.current_lat && !!ride?.driver?.current_lng;
   const driverCoords: LatLng | null = hasDriver
@@ -936,6 +970,19 @@ export default function PassengerHomeScreen() {
               <Ionicons name="calendar-outline" size={20} color={colors.accentPurple} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={styles.inboxBtn}
+            onPress={() => setInboxVisible(true)}
+          >
+            <Ionicons name="mail-outline" size={19} color={colors.accentBlue} />
+            {inboxUnreadCount > 0 && (
+              <View style={styles.inboxBadge}>
+                <Text style={styles.inboxBadgeText}>
+                  {inboxUnreadCount > 9 ? "9+" : inboxUnreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.avatarBtn}
             onPress={() => setMenuVisible(true)}
@@ -1617,6 +1664,16 @@ export default function PassengerHomeScreen() {
           <RideHistoryScreen onClose={() => setHistoryVisible(false)} />
         </View>
       )}
+      {inboxVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <InboxScreen
+            onClose={() => {
+              setInboxVisible(false);
+              refetchInboxUnread();
+            }}
+          />
+        </View>
+      )}
       {profileVisible && (
         <View style={StyleSheet.absoluteFill}>
           <ProfileScreen
@@ -1676,6 +1733,16 @@ export default function PassengerHomeScreen() {
           driverId={reviewTarget.driverId}
           driverName={reviewTarget.driverName}
           onDismiss={() => setReviewTarget(null)}
+        />
+      )}
+
+      {interstitialMessage && (
+        <InterstitialMessageCard
+          message={interstitialMessage}
+          onDismiss={() => {
+            dismissInterstitial();
+            refetchInboxUnread();
+          }}
         />
       )}
 
@@ -1767,6 +1834,31 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "center",
     },
     avatarBtn: { padding: 4 },
+    inboxBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: "rgba(74,158,255,0.12)",
+      borderWidth: 0.5,
+      borderColor: "rgba(74,158,255,0.3)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    inboxBadge: {
+      position: "absolute",
+      top: -4,
+      right: -4,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      paddingHorizontal: 3,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.background,
+    },
+    inboxBadgeText: { fontSize: 9, fontWeight: "700", color: "#fff" },
     driversPill: {
       position: "absolute",
       top: Platform.OS === "ios" ? 110 : 96,

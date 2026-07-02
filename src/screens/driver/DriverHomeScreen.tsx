@@ -22,6 +22,12 @@ import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
 import DriverEditProfileScreen from "./DriverEditProfileScreen";
 import HelpSupportScreen from "../shared/HelpSupportScreen";
+import InboxScreen from "../shared/InboxScreen";
+import DriverChatScreen from "./DriverChatScreen";
+import { useInboxUnreadCount } from "../../hooks/useInboxUnreadCount";
+import { useDriverChatUnread } from "../../hooks/useDriverChatUnread";
+import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
+import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 
@@ -58,6 +64,8 @@ interface Props {
   onOpenAssigned: () => void;
   confirmedScheduledRides: ConfirmedScheduledRide[];
   onRideAccepted: () => void;
+  openInboxSignal?: number;
+  openChatSignal?: number;
 }
 
 const VALLEY_REGION = {
@@ -72,6 +80,8 @@ export default function DriverHomeScreen({
   onOpenAssigned,
   confirmedScheduledRides,
   onRideAccepted,
+  openInboxSignal,
+  openChatSignal,
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
@@ -91,6 +101,19 @@ export default function DriverHomeScreen({
   const [activeCard, setActiveCard] = useState(0);
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
+  const [inboxVisible, setInboxVisible] = useState(false);
+  const [chatVisible, setChatVisible] = useState(false);
+  const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } = useInboxUnreadCount();
+  const { hasUnread: hasChatUnread, refetch: refetchChatUnread } = useDriverChatUnread();
+
+  // Opened via a tapped push notification (see DriverApp's notification listener) —
+  // signals are counters, not booleans, so a repeat tap re-fires even if already open.
+  useEffect(() => {
+    if (openInboxSignal) setInboxVisible(true);
+  }, [openInboxSignal]);
+  useEffect(() => {
+    if (openChatSignal) setChatVisible(true);
+  }, [openChatSignal]);
 
   useEffect(() => {
     if (!isOnline) return;
@@ -203,6 +226,19 @@ export default function DriverHomeScreen({
   }
 
   const hasAssignedRide = !!assignedRide;
+  // DriverApp unmounts this whole screen while on an active/assigned ride
+  // (single conditional-return router, not an overlay stack), so the only
+  // "not idle" states left to check are pending assignment + local overlays.
+  const interstitialGateOpen =
+    !hasAssignedRide &&
+    !menuVisible &&
+    !historyVisible &&
+    !editProfileVisible &&
+    !helpVisible &&
+    !inboxVisible &&
+    !chatVisible;
+  const { current: interstitialMessage, dismiss: dismissInterstitial } =
+    useInterstitialQueue(interstitialGateOpen);
 
   return (
     <View style={styles.container}>
@@ -250,10 +286,31 @@ export default function DriverHomeScreen({
             </View>
           )}
         </View>
-        <TouchableOpacity
-          style={styles.avatarWrap}
-          onPress={() => setMenuVisible(true)}
-        >
+        <View style={styles.topActions}>
+          <TouchableOpacity
+            style={styles.inboxBtn}
+            onPress={() => setInboxVisible(true)}
+          >
+            <Ionicons name="mail-outline" size={18} color={colors.accentBlue} />
+            {inboxUnreadCount > 0 && (
+              <View style={styles.inboxBadge}>
+                <Text style={styles.inboxBadgeText}>
+                  {inboxUnreadCount > 9 ? "9+" : inboxUnreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.chatBtn}
+            onPress={() => setChatVisible(true)}
+          >
+            <Ionicons name="chatbubble-outline" size={17} color={colors.accentPurple} />
+            {hasChatUnread && <View style={styles.chatDot} />}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.avatarWrap}
+            onPress={() => setMenuVisible(true)}
+          >
           {profile?.avatar_url ? (
             <Image
               source={{ uri: profile.avatar_url }}
@@ -280,7 +337,8 @@ export default function DriverHomeScreen({
               <Text style={styles.badgeText}>1</Text>
             </Animated.View>
           )}
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Assigned ride banner — dispatch-assigned rides only */}
@@ -492,6 +550,35 @@ export default function DriverHomeScreen({
           <HelpSupportScreen onClose={() => setHelpVisible(false)} />
         </View>
       )}
+      {inboxVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <InboxScreen
+            onClose={() => {
+              setInboxVisible(false);
+              refetchInboxUnread();
+            }}
+          />
+        </View>
+      )}
+      {chatVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <DriverChatScreen
+            onClose={() => {
+              setChatVisible(false);
+              refetchChatUnread();
+            }}
+          />
+        </View>
+      )}
+      {interstitialMessage && (
+        <InterstitialMessageCard
+          message={interstitialMessage}
+          onDismiss={() => {
+            dismissInterstitial();
+            refetchInboxUnread();
+          }}
+        />
+      )}
 
       <ProfileMenu
         profile={profile}
@@ -551,6 +638,53 @@ const makeStyles = (colors: Colors) =>
     ratingCount: { fontSize: 12, color: colors.textSecondary },
     statusDot: { width: 8, height: 8, borderRadius: 4 },
     statusText: { fontSize: 12, color: colors.textSecondary },
+    topActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+    inboxBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: "rgba(74,158,255,0.12)",
+      borderWidth: 0.5,
+      borderColor: "rgba(74,158,255,0.3)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    inboxBadge: {
+      position: "absolute",
+      top: -4,
+      right: -4,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      paddingHorizontal: 3,
+      backgroundColor: colors.accentOrange,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1.5,
+      borderColor: colors.background,
+    },
+    inboxBadgeText: { fontSize: 9, fontWeight: "700", color: "#fff" },
+    chatBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: "rgba(168,85,247,0.12)",
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.3)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    chatDot: {
+      position: "absolute",
+      top: 4,
+      right: 4,
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.accentOrange,
+      borderWidth: 1.5,
+      borderColor: colors.background,
+    },
     avatarWrap: { position: "relative", padding: 4 },
     topAvatar: {
       width: 36,
