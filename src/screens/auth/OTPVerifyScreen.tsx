@@ -177,29 +177,25 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       console.log("[OTP] guest profile by phone:", guestProfile);
 
       if (guestProfile && guestProfile.id !== userId) {
-        // Guest profile exists from a dispatch booking — merge it
-        // Update the profile's id to the new real auth user's id
         console.log(
           "[OTP] merging guest profile:",
           guestProfile.id,
           "→",
           userId,
         );
-        const { error: mergeError } = await supabase
-          .from("profiles")
-          .update({ id: userId, name: name ?? guestProfile.name })
-          .eq("id", guestProfile.id);
+        const { error: mergeError } = await supabase.rpc(
+          "merge_guest_profile",
+          {
+            p_old_id: guestProfile.id,
+            p_new_id: userId,
+            p_new_name: name ?? "",
+          },
+        );
 
         if (mergeError) {
           console.log("[OTP] merge error:", mergeError);
-          // Merge failed (likely FK constraint) — fall through to normal upsert
+          // Fall through to normal upsert — passenger won't see prior ride history
         } else {
-          // Also update rides that reference the old guest profile id
-          await supabase
-            .from("rides")
-            .update({ passenger_id: userId })
-            .eq("passenger_id", guestProfile.id);
-
           console.log("[OTP] guest merge complete");
           await refetch();
           setLoading(false);
