@@ -15,6 +15,10 @@ interface AuthContextType {
   loading: boolean;
   signOut: () => Promise<void>;
   refetch: () => Promise<void>;
+  // Driver registration uses these to prevent the home screen from flashing
+  // while the invite code is being validated after OTP verification.
+  holdLoading: () => void;
+  releaseLoading: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -25,6 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const sessionRef = useRef<Session | null>(null);
   const fetchingForRef = useRef<string | null>(null);
+  const loadingHeldRef = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -52,6 +57,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Realtime: push profile changes (deactivation, deletion) to state immediately
+  useEffect(() => {
+    const userId = sessionRef.current?.user?.id;
+    if (!userId) return;
+    const channel = supabase
+      .channel('profile-self-' + userId)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
+        (payload) => {
+          setProfile(payload.new as Profile);
+        },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session?.user?.id]);
+
   async function fetchProfile(userId: string, retries = 10) {
     fetchingForRef.current = userId;
 
@@ -76,7 +98,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     fetchingForRef.current = null;
     console.log("[Auth] profile settled:", data?.role ?? "none");
     setProfile(data ?? null);
-    setLoading(false);
+    if (!loadingHeldRef.current) {
+      setLoading(false);
+    }
   }
 
   async function refetch() {
@@ -94,15 +118,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    loadingHeldRef.current = false;
     await supabase.auth.signOut();
     setProfile(null);
     sessionRef.current = null;
     fetchingForRef.current = null;
   }
 
+  function holdLoading() {
+    loadingHeldRef.current = true;
+    setLoading(true);
+  }
+
+  function releaseLoading() {
+    loadingHeldRef.current = false;
+  }
+
   return (
     <AuthContext.Provider
-      value={{ session, profile, loading, signOut, refetch }}
+      value={{ session, profile, loading, signOut, refetch, holdLoading, releaseLoading }}
     >
       {children}
     </AuthContext.Provider>

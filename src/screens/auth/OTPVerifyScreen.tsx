@@ -27,7 +27,7 @@ const CODE_LENGTH = 6;
 
 export default function OTPVerifyScreen({ navigation, route }: Props) {
   const { phone, name, isNewUser, isDriver, inviteCode } = route.params;
-  const { refetch } = useAuth();
+  const { refetch, holdLoading, releaseLoading } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
@@ -75,6 +75,10 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     console.log("[OTP] verifying code for phone:", phone);
     console.log("[OTP] isDriver:", isDriver, "inviteCode:", inviteCode);
 
+    // Hold AuthContext navigation so the home screen doesn't flash while
+    // we validate the invite code after OTP verification.
+    if (isDriver && inviteCode) holdLoading();
+
     const { data, error } = await supabase.auth.verifyOtp({
       phone,
       token: code,
@@ -82,6 +86,7 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     });
 
     if (error) {
+      if (isDriver && inviteCode) releaseLoading();
       setLoading(false);
       setDigits(Array(CODE_LENGTH).fill(""));
       inputRefs.current[0]?.focus();
@@ -113,17 +118,23 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
       const { data: invite } = await supabase
         .from("driver_invites")
-        .select("id, used")
+        .select("id, used, company_id")
         .eq("code", inviteCode)
         .single();
 
       if (!invite || invite.used) {
+        // Clean up the auto-created profile and release the navigation hold
+        // before signing out so the home screen never becomes visible.
+        await supabase.from("profiles").delete().eq("id", userId);
+        releaseLoading();
         await supabase.auth.signOut();
         setLoading(false);
         Alert.alert(
           "Invalid invite code",
-          "This invite code is no longer valid. Please contact M&G C&J dispatch.",
-          [{ text: "OK", onPress: () => navigation.navigate("Welcome") }],
+          invite?.used
+            ? "This invite code has already been used. Please contact dispatch."
+            : "That invite code wasn't recognised. Please check it and try again.",
+          [{ text: "OK", onPress: () => navigation.navigate("DriverSignUp") }],
         );
         return;
       }
@@ -131,21 +142,20 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       const { error: upsertError } = await supabase
         .from("profiles")
         .upsert(
-          { id: userId, phone, name: name ?? null, role: "driver" },
+          { id: userId, phone, name: name ?? null, role: "driver", company_id: invite.company_id ?? null },
           { onConflict: "id" },
         );
-      console.log("[OTP] driver profile upsert:", upsertError);
+      console.log("[OTP] driver profile upsert:", upsertError ?? "ok");
 
       const { error: driverError } = await supabase
         .from("drivers")
         .upsert({ id: userId, is_active: false }, { onConflict: "id" });
-      console.log("[OTP] driver record upsert:", driverError);
+      console.log("[OTP] driver record upsert:", driverError ?? "ok");
 
-      await supabase
-        .from("driver_invites")
-        .update({ used: true })
-        .eq("id", invite.id);
+      const { error: inviteError } = await supabase.rpc("mark_invite_used", { p_invite_id: invite.id });
+      console.log("[OTP] invite mark used — error:", inviteError ?? "none");
 
+      releaseLoading();
       await refetch();
       setLoading(false);
       return;

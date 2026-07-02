@@ -7,6 +7,8 @@ export interface Profile {
   role: UserRole
   company_id: string | null
   avatar_url: string | null
+  is_active: boolean
+  deactivation_pending: boolean
   deleted_at: string | null
   created_at: string
   student_verified: boolean

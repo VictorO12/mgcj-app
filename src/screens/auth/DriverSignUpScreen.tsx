@@ -56,26 +56,6 @@ export default function DriverSignUpScreen({ navigation }: Props) {
     setLoading(true)
     setCodeError('')
 
-    // Validate invite code BEFORE sending OTP
-    const { data: invite, error: inviteError } = await supabase
-      .from('driver_invites')
-      .select('id, used, phone, name')
-      .eq('code', inviteCode.trim().toUpperCase())
-      .single()
-
-    if (inviteError || !invite) {
-      setCodeError('Invalid invite code. Please check with M&G C&J dispatch.')
-      setLoading(false)
-      return
-    }
-
-    if (invite.used) {
-      setCodeError('This invite code has already been used.')
-      setLoading(false)
-      return
-    }
-
-    // Code is valid — send OTP
     const { error: otpError } = await supabase.auth.signInWithOtp({ phone: e164 })
     setLoading(false)
 

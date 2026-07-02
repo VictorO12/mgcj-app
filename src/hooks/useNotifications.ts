@@ -17,11 +17,17 @@ export function useNotifications() {
   const { profile } = useAuth()
   const notificationListener = useRef<any>()
   const responseListener = useRef<any>()
+  const registeredForRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!profile) return
+    if (!profile?.id) return
+    // Guard: only register once per user session, not on every profile update.
+    // Writing push_token to profiles triggers the realtime profile subscription
+    // which would cause an infinite re-registration loop otherwise.
+    if (registeredForRef.current === profile.id) return
+    registeredForRef.current = profile.id
     registerForPushNotifications()
-  }, [profile])
+  }, [profile?.id])
 
   async function registerForPushNotifications() {
     const { status: existing } = await Notifications.getPermissionsAsync()
