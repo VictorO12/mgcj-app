@@ -20,6 +20,16 @@ interface Props {
   onComplete: () => void;
 }
 
+// Strips non-alphanumeric, uppercases, then inserts a space after the 3rd
+// character (NS: ABC 123) or 4th character (ON: ABCD 123), auto-detected
+// by total alphanumeric length once the driver reaches 7 characters.
+function formatPlate(input: string): string {
+  const raw = input.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 7);
+  if (raw.length <= 3) return raw;
+  if (raw.length <= 6) return `${raw.slice(0, 3)} ${raw.slice(3)}`;
+  return `${raw.slice(0, 4)} ${raw.slice(4)}`;
+}
+
 const VEHICLE_MAKES = [
   "Toyota",
   "Honda",
@@ -38,6 +48,24 @@ const VEHICLE_MAKES = [
   "Other",
 ];
 
+const VEHICLE_MODELS: Record<string, string[]> = {
+  Toyota:     ["Avalon", "Camry", "Corolla", "Crown", "Highlander", "Prius", "RAV4", "Sienna", "Tacoma", "Tundra", "Venza"],
+  Honda:      ["Accord", "Civic", "CR-V", "HR-V", "Odyssey", "Passport", "Pilot", "Ridgeline"],
+  Ford:       ["Edge", "Escape", "Expedition", "Explorer", "F-150", "Fusion", "Maverick", "Taurus", "Transit"],
+  Chevrolet:  ["Blazer", "Colorado", "Equinox", "Impala", "Malibu", "Silverado 1500", "Suburban", "Tahoe", "Traverse", "Trax"],
+  Dodge:      ["Challenger", "Charger", "Durango", "Grand Caravan", "Journey"],
+  Nissan:     ["Altima", "Armada", "Frontier", "Kicks", "Maxima", "Murano", "Pathfinder", "Rogue", "Sentra", "Titan", "Versa"],
+  Hyundai:    ["Elantra", "Ioniq 5", "Ioniq 6", "Kona", "Palisade", "Santa Fe", "Sonata", "Tucson", "Venue"],
+  Kia:        ["Carnival", "EV6", "Forte", "K5", "Seltos", "Soul", "Sorento", "Sportage", "Stinger", "Telluride"],
+  Mazda:      ["CX-30", "CX-5", "CX-50", "CX-9", "Mazda3", "Mazda6", "MX-5"],
+  Subaru:     ["Ascent", "Crosstrek", "Forester", "Impreza", "Legacy", "Outback", "WRX"],
+  GMC:        ["Acadia", "Canyon", "Sierra 1500", "Sierra 2500", "Terrain", "Yukon"],
+  RAM:        ["1500", "2500", "3500", "ProMaster City"],
+  Jeep:       ["Cherokee", "Compass", "Gladiator", "Grand Cherokee", "Renegade", "Wrangler"],
+  Volkswagen: ["Atlas", "Golf", "ID.4", "Jetta", "Passat", "Tiguan"],
+  Other:      [],
+};
+
 export default function DriverSetupScreen({ onComplete }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -47,6 +75,7 @@ export default function DriverSetupScreen({ onComplete }: Props) {
   const [plateNumber, setPlateNumber] = useState("");
   const [year, setYear] = useState("");
   const [showMakePicker, setShowMakePicker] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleComplete() {
@@ -129,6 +158,10 @@ export default function DriverSetupScreen({ onComplete }: Props) {
                       vehicleMake === make && styles.pickerItemSelected,
                     ]}
                     onPress={() => {
+                      if (make !== vehicleMake) {
+                        setVehicleModel("");
+                        setShowModelPicker(false);
+                      }
                       setVehicleMake(make);
                       setShowMakePicker(false);
                     }}
@@ -150,14 +183,45 @@ export default function DriverSetupScreen({ onComplete }: Props) {
           {/* Vehicle model */}
           <View style={styles.inputWrap}>
             <Text style={styles.label}>Vehicle model</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Camry, Civic, F-150"
-              placeholderTextColor={colors.textMuted}
-              value={vehicleModel}
-              onChangeText={setVehicleModel}
-              autoCapitalize="words"
-            />
+            {vehicleMake === "Other" ? (
+              <TextInput
+                style={styles.input}
+                placeholder="Enter model"
+                placeholderTextColor={colors.textMuted}
+                value={vehicleModel}
+                onChangeText={setVehicleModel}
+                autoCapitalize="words"
+              />
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={styles.selectBtn}
+                  onPress={() => vehicleMake && setShowModelPicker((v) => !v)}
+                  activeOpacity={0.8}
+                  disabled={!vehicleMake}
+                >
+                  <Text style={[styles.selectText, !vehicleModel && styles.placeholder]}>
+                    {vehicleModel || (vehicleMake ? "Select model" : "Select a make first")}
+                  </Text>
+                  <Text style={styles.chevron}>{showModelPicker ? "▲" : "▼"}</Text>
+                </TouchableOpacity>
+                {showModelPicker && (
+                  <View style={styles.picker}>
+                    {(VEHICLE_MODELS[vehicleMake] ?? []).map((model) => (
+                      <TouchableOpacity
+                        key={model}
+                        style={[styles.pickerItem, vehicleModel === model && styles.pickerItemSelected]}
+                        onPress={() => { setVehicleModel(model); setShowModelPicker(false); }}
+                      >
+                        <Text style={[styles.pickerItemText, vehicleModel === model && styles.pickerItemTextSelected]}>
+                          {model}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
           </View>
 
           {/* Year */}
@@ -184,9 +248,9 @@ export default function DriverSetupScreen({ onComplete }: Props) {
               placeholder="ABC 123"
               placeholderTextColor={colors.textMuted}
               value={plateNumber}
-              onChangeText={(t) => setPlateNumber(t.toUpperCase())}
+              onChangeText={(t) => setPlateNumber(formatPlate(t))}
               autoCapitalize="characters"
-              maxLength={10}
+              maxLength={8}
             />
           </View>
         </View>

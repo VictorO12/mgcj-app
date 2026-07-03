@@ -10,6 +10,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Modal,
+  Image,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -143,6 +144,7 @@ interface ActiveRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  passenger_avatar_url?: string | null;
   payment_method?: string | null;
 }
 
@@ -1044,16 +1046,23 @@ export default function DriverActiveRideScreen({
         {/* Passenger card — collapsible */}
         {panelExpanded && (
           <View style={styles.passengerCard}>
-            <View style={styles.passengerAvatar}>
-              <Text style={styles.passengerInitials}>
-                {ride.passenger_name
-                  ?.split(" ")
-                  .map((n) => n[0])
-                  .join("")
-                  .slice(0, 2)
-                  .toUpperCase() ?? "?"}
-              </Text>
-            </View>
+            {ride.passenger_avatar_url ? (
+              <Image
+                source={{ uri: ride.passenger_avatar_url }}
+                style={styles.passengerAvatarImage}
+              />
+            ) : (
+              <View style={styles.passengerAvatar}>
+                <Text style={styles.passengerInitials}>
+                  {ride.passenger_name
+                    ?.split(" ")
+                    .map((n) => n[0])
+                    .join("")
+                    .slice(0, 2)
+                    .toUpperCase() ?? "?"}
+                </Text>
+              </View>
+            )}
             <View style={styles.passengerInfo}>
               <Text style={styles.passengerName}>
                 {ride.passenger_name ?? "Passenger"}
@@ -1446,6 +1455,13 @@ const makeStyles = (colors: Colors) =>
       padding: 14,
       borderWidth: 0.5,
       borderColor: colors.border,
+    },
+    passengerAvatarImage: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: "rgba(74,158,255,0.3)",
     },
     passengerAvatar: {
       width: 40,

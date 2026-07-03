@@ -23,6 +23,13 @@ interface Props {
   onClose: () => void;
 }
 
+function formatPlate(input: string): string {
+  const raw = input.replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 7);
+  if (raw.length <= 3) return raw;
+  if (raw.length <= 6) return `${raw.slice(0, 3)} ${raw.slice(3)}`;
+  return `${raw.slice(0, 4)} ${raw.slice(4)}`;
+}
+
 const VEHICLE_MAKES = [
   "Toyota",
   "Honda",
@@ -41,6 +48,24 @@ const VEHICLE_MAKES = [
   "Other",
 ];
 
+const VEHICLE_MODELS: Record<string, string[]> = {
+  Toyota:     ["Avalon", "Camry", "Corolla", "Crown", "Highlander", "Prius", "RAV4", "Sienna", "Tacoma", "Tundra", "Venza"],
+  Honda:      ["Accord", "Civic", "CR-V", "HR-V", "Odyssey", "Passport", "Pilot", "Ridgeline"],
+  Ford:       ["Edge", "Escape", "Expedition", "Explorer", "F-150", "Fusion", "Maverick", "Taurus", "Transit"],
+  Chevrolet:  ["Blazer", "Colorado", "Equinox", "Impala", "Malibu", "Silverado 1500", "Suburban", "Tahoe", "Traverse", "Trax"],
+  Dodge:      ["Challenger", "Charger", "Durango", "Grand Caravan", "Journey"],
+  Nissan:     ["Altima", "Armada", "Frontier", "Kicks", "Maxima", "Murano", "Pathfinder", "Rogue", "Sentra", "Titan", "Versa"],
+  Hyundai:    ["Elantra", "Ioniq 5", "Ioniq 6", "Kona", "Palisade", "Santa Fe", "Sonata", "Tucson", "Venue"],
+  Kia:        ["Carnival", "EV6", "Forte", "K5", "Seltos", "Soul", "Sorento", "Sportage", "Stinger", "Telluride"],
+  Mazda:      ["CX-30", "CX-5", "CX-50", "CX-9", "Mazda3", "Mazda6", "MX-5"],
+  Subaru:     ["Ascent", "Crosstrek", "Forester", "Impreza", "Legacy", "Outback", "WRX"],
+  GMC:        ["Acadia", "Canyon", "Sierra 1500", "Sierra 2500", "Terrain", "Yukon"],
+  RAM:        ["1500", "2500", "3500", "ProMaster City"],
+  Jeep:       ["Cherokee", "Compass", "Gladiator", "Grand Cherokee", "Renegade", "Wrangler"],
+  Volkswagen: ["Atlas", "Golf", "ID.4", "Jetta", "Passat", "Tiguan"],
+  Other:      [],
+};
+
 export default function DriverEditProfileScreen({ onClose }: Props) {
   const { profile, refetch } = useAuth();
   const { colors } = useTheme();
@@ -56,6 +81,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
   const [plateNumber, setPlateNumber] = useState("");
   const [year, setYear] = useState("");
   const [showMakePicker, setShowMakePicker] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
 
@@ -338,6 +364,10 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
                     vehicleMake === make && styles.pickerItemSelected,
                   ]}
                   onPress={() => {
+                    if (make !== vehicleMake) {
+                      setVehicleModel("");
+                      setShowModelPicker(false);
+                    }
                     setVehicleMake(make);
                     setShowMakePicker(false);
                   }}
@@ -362,16 +392,55 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
           <View style={styles.fieldDivider} />
 
           {/* Model */}
-          <View style={styles.fieldRow}>
-            <Text style={styles.fieldLabel}>Model</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={vehicleModel}
-              onChangeText={setVehicleModel}
-              placeholder="e.g. Camry, Civic"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="words"
-            />
+          <View>
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Model</Text>
+              {vehicleMake === "Other" ? (
+                <TextInput
+                  style={styles.fieldInput}
+                  value={vehicleModel}
+                  onChangeText={setVehicleModel}
+                  placeholder="Enter model"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="words"
+                />
+              ) : (
+                <TouchableOpacity
+                  style={styles.selectRow}
+                  onPress={() => vehicleMake && setShowModelPicker((v) => !v)}
+                  activeOpacity={0.7}
+                  disabled={!vehicleMake}
+                >
+                  <Text style={[styles.fieldInput, !vehicleModel && { color: colors.textMuted }]}>
+                    {vehicleModel || (vehicleMake ? "Select model" : "Select make first")}
+                  </Text>
+                  <Ionicons
+                    name={showModelPicker ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={colors.textSecondary}
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+            {showModelPicker && vehicleMake && vehicleMake !== "Other" && (
+              <View style={styles.picker}>
+                {(VEHICLE_MODELS[vehicleMake] ?? []).map((model) => (
+                  <TouchableOpacity
+                    key={model}
+                    style={[styles.pickerItem, vehicleModel === model && styles.pickerItemSelected]}
+                    onPress={() => { setVehicleModel(model); setShowModelPicker(false); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.pickerItemText, vehicleModel === model && styles.pickerItemTextSelected]}>
+                      {model}
+                    </Text>
+                    {vehicleModel === model && (
+                      <Ionicons name="checkmark" size={16} color={colors.accentOrange} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
           <View style={styles.fieldDivider} />
 
@@ -396,11 +465,11 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
             <TextInput
               style={[styles.fieldInput, styles.plateInput]}
               value={plateNumber}
-              onChangeText={(t) => setPlateNumber(t.toUpperCase())}
+              onChangeText={(t) => setPlateNumber(formatPlate(t))}
               placeholder="ABC 123"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="characters"
-              maxLength={10}
+              maxLength={8}
             />
           </View>
         </View>

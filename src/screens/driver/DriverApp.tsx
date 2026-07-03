@@ -24,6 +24,7 @@ interface ActiveRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  passenger_avatar_url: string | null;
   payment_method: string | null;
 }
 
@@ -53,6 +54,7 @@ interface PendingRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  passenger_avatar_url: string | null;
   scheduled_at: string | null;
 }
 
@@ -283,7 +285,7 @@ export default function DriverApp() {
   async function showRideRequestPopup(rideRow: any) {
     const { data: passenger } = await supabase
       .from("profiles")
-      .select("name, phone")
+      .select("name, phone, avatar_url")
       .eq("id", rideRow.passenger_id)
       .maybeSingle();
 
@@ -298,6 +300,7 @@ export default function DriverApp() {
       fare_estimate: rideRow.fare_estimate,
       passenger_name: passenger?.name ?? null,
       passenger_phone: passenger?.phone ?? null,
+      passenger_avatar_url: passenger?.avatar_url ?? null,
       scheduled_at: rideRow.scheduled_at ?? null,
     });
   }
@@ -409,7 +412,7 @@ export default function DriverApp() {
     const ride = rides[0];
     const { data: passenger } = await supabase
       .from("profiles")
-      .select("name, phone")
+      .select("name, phone, avatar_url")
       .eq("id", ride.passenger_id)
       .single();
     setActiveRide({
@@ -424,6 +427,7 @@ export default function DriverApp() {
       fare_estimate: ride.fare_estimate,
       passenger_name: passenger?.name ?? null,
       passenger_phone: passenger?.phone ?? null,
+      passenger_avatar_url: passenger?.avatar_url ?? null,
       payment_method: ride.payment_method ?? null,
     });
   }

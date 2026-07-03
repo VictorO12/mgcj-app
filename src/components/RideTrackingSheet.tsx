@@ -10,6 +10,7 @@ import {
   Platform,
   Linking,
   Alert,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { ActiveRide } from "../hooks/useActiveRide";
@@ -222,9 +223,16 @@ export default function RideTrackingSheet({
             onPress={() => setDriverProfileVisible(true)}
             activeOpacity={0.8}
           >
-            <View style={styles.driverAvatar}>
-              <Text style={styles.driverInitials}>{driverInitials}</Text>
-            </View>
+            {ride.driver!.avatar_url ? (
+              <Image
+                source={{ uri: ride.driver!.avatar_url }}
+                style={styles.driverAvatarImage}
+              />
+            ) : (
+              <View style={styles.driverAvatar}>
+                <Text style={styles.driverInitials}>{driverInitials}</Text>
+              </View>
+            )}
             <View style={styles.driverInfo}>
               <Text style={styles.driverName}>
                 {ride.driver!.name ?? "Your driver"}
@@ -425,6 +433,13 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     alignItems: "center",
     gap: 12,
     marginBottom: 14,
+  },
+  driverAvatarImage: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 1.5,
+    borderColor: colors.accentOrange,
   },
   driverAvatar: {
     width: 46,

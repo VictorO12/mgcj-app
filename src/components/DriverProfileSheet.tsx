@@ -24,6 +24,7 @@ interface Review {
   comment: string | null;
   created_at: string;
   passenger_name: string | null;
+  passenger_avatar_url: string | null;
 }
 
 interface DriverProfile {
@@ -177,13 +178,15 @@ export default function DriverProfileSheet({
     const enrichedReviews: Review[] = await Promise.all(
       rawReviews.map(async (r) => {
         let passengerName: string | null = null;
+        let passengerAvatarUrl: string | null = null;
         if (r.passenger_id) {
           const { data: p } = await supabase
             .from("profiles")
-            .select("name")
+            .select("name, avatar_url")
             .eq("id", r.passenger_id)
             .maybeSingle();
           passengerName = p?.name ?? null;
+          passengerAvatarUrl = p?.avatar_url ?? null;
         }
         return {
           id: r.id,
@@ -191,6 +194,7 @@ export default function DriverProfileSheet({
           comment: r.comment,
           created_at: r.created_at,
           passenger_name: passengerName,
+          passenger_avatar_url: passengerAvatarUrl,
         };
       }),
     );
@@ -383,13 +387,20 @@ export default function DriverProfileSheet({
                   {driver.reviews.map((review) => (
                     <View key={review.id} style={styles.reviewCard}>
                       <View style={styles.reviewHeader}>
-                        <View style={styles.reviewAvatar}>
-                          <Text style={styles.reviewAvatarText}>
-                            {review.passenger_name
-                              ? review.passenger_name[0].toUpperCase()
-                              : "?"}
-                          </Text>
-                        </View>
+                        {review.passenger_avatar_url ? (
+                          <Image
+                            source={{ uri: review.passenger_avatar_url }}
+                            style={styles.reviewAvatarImage}
+                          />
+                        ) : (
+                          <View style={styles.reviewAvatar}>
+                            <Text style={styles.reviewAvatarText}>
+                              {review.passenger_name
+                                ? review.passenger_name[0].toUpperCase()
+                                : "?"}
+                            </Text>
+                          </View>
+                        )}
                         <View style={styles.reviewMeta}>
                           <Text style={styles.reviewerName}>
                             {review.passenger_name ?? "Passenger"}
@@ -595,6 +606,13 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     gap: 8,
   },
   reviewHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  reviewAvatarImage: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   reviewAvatar: {
     width: 30,
     height: 30,

@@ -8,6 +8,7 @@ import {
   Dimensions,
   Vibration,
   Platform,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
@@ -26,6 +27,7 @@ interface PendingRide {
   fare_estimate: number | null;
   passenger_name: string | null;
   passenger_phone: string | null;
+  passenger_avatar_url: string | null;
   scheduled_at: string | null;
 }
 
@@ -206,21 +208,31 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
 
       {/* Passenger */}
       <View style={styles.passengerRow}>
-        <View
-          style={[
-            styles.passengerAvatar,
-            isScheduled && styles.passengerAvatarScheduled,
-          ]}
-        >
-          <Text style={styles.passengerInitials}>
-            {ride.passenger_name
-              ?.split(" ")
-              .map((n) => n[0])
-              .join("")
-              .slice(0, 2)
-              .toUpperCase() ?? "?"}
-          </Text>
-        </View>
+        {ride.passenger_avatar_url ? (
+          <Image
+            source={{ uri: ride.passenger_avatar_url }}
+            style={[
+              styles.passengerAvatarImage,
+              isScheduled && styles.passengerAvatarImageScheduled,
+            ]}
+          />
+        ) : (
+          <View
+            style={[
+              styles.passengerAvatar,
+              isScheduled && styles.passengerAvatarScheduled,
+            ]}
+          >
+            <Text style={styles.passengerInitials}>
+              {ride.passenger_name
+                ?.split(" ")
+                .map((n) => n[0])
+                .join("")
+                .slice(0, 2)
+                .toUpperCase() ?? "?"}
+            </Text>
+          </View>
+        )}
         <View>
           <Text style={styles.passengerName}>
             {ride.passenger_name ?? "Passenger"}
@@ -396,6 +408,16 @@ const makeStyles = (colors: Colors) =>
       gap: 12,
       paddingHorizontal: 20,
       marginBottom: 14,
+    },
+    passengerAvatarImage: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      borderWidth: 1.5,
+      borderColor: "rgba(74,158,255,0.3)",
+    },
+    passengerAvatarImageScheduled: {
+      borderColor: "rgba(168,85,247,0.35)",
     },
     passengerAvatar: {
       width: 46,

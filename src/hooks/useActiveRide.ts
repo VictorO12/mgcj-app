@@ -11,6 +11,7 @@ export interface Driver {
   current_lng: number | null
   name: string | null
   phone: string | null
+  avatar_url: string | null
 }
 
 export interface ActiveRide {
@@ -221,7 +222,7 @@ export function useActiveRide(passengerId: string | undefined) {
       if (driverRow) {
         const { data: profileRow, error: profileError } = await supabase
           .from('profiles')
-          .select('name, phone')
+          .select('name, phone, avatar_url')
           .eq('id', rideRow.driver_id)
           .single()
 
@@ -236,6 +237,7 @@ export function useActiveRide(passengerId: string | undefined) {
           current_lng: driverRow.current_lng,
           name: profileRow?.name ?? null,
           phone: profileRow?.phone ?? null,
+          avatar_url: profileRow?.avatar_url ?? null,
         }
       }
     }
