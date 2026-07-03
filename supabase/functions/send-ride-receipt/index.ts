@@ -140,7 +140,28 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: errText }), { status: 500 });
     }
 
-    return new Response(JSON.stringify({ sent: true }), { status: 200 });
+    const resendData = await res.json().catch(() => null);
+
+    const { error: invoiceError } = await supabase.from("invoices").insert({
+      invoice_number: invoiceNumber,
+      ride_id: ride.id,
+      company_id: ride.company_id,
+      passenger_name: passenger.name ?? null,
+      driver_name: driverName,
+      company_name: companyName,
+      hst_number: hstNumber,
+      pickup_address: ride.pickup_address,
+      dropoff_address: ride.dropoff_address,
+      fare,
+      payment_method: ride.payment_method,
+      sent_at: new Date().toISOString(),
+      resend_message_id: resendData?.id ?? null,
+    });
+    if (invoiceError) {
+      console.error("[send-ride-receipt] invoice insert error:", invoiceError.message);
+    }
+
+    return new Response(JSON.stringify({ sent: true, invoice_number: invoiceNumber }), { status: 200 });
   } catch (e) {
     console.error("[send-ride-receipt] error:", e);
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
