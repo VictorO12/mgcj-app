@@ -118,11 +118,11 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
       const { data: invite } = await supabase
         .from("driver_invites")
-        .select("id, used, company_id")
+        .select("id, used, company_id, phone")
         .eq("code", inviteCode)
-        .single();
+        .maybeSingle();
 
-      if (!invite || invite.used) {
+      if (!invite || invite.used || (invite.phone && invite.phone !== phone)) {
         // Clean up the auto-created profile and release the navigation hold
         // before signing out so the home screen never becomes visible.
         await supabase.from("profiles").delete().eq("id", userId);
@@ -133,7 +133,9 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
           "Invalid invite code",
           invite?.used
             ? "This invite code has already been used. Please contact dispatch."
-            : "That invite code wasn't recognised. Please check it and try again.",
+            : invite?.phone && invite.phone !== phone
+              ? "This invite code was issued to a different phone number."
+              : "That invite code wasn't recognised. Please check it and try again.",
           [{ text: "OK", onPress: () => navigation.navigate("DriverSignUp") }],
         );
         return;

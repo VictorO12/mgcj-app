@@ -56,6 +56,24 @@ export default function DriverSignUpScreen({ navigation }: Props) {
     setLoading(true)
     setCodeError('')
 
+    const { data: check, error: checkError } = await supabase.rpc('check_invite_code', {
+      p_code: inviteCode.trim().toUpperCase(),
+      p_phone: e164,
+    })
+
+    if (checkError || !check?.valid) {
+      setLoading(false)
+      const reason = check?.reason
+      if (reason === 'already_used') {
+        setCodeError('This invite code has already been used. Please contact dispatch.')
+      } else if (reason === 'phone_mismatch') {
+        setCodeError('This invite code was issued to a different phone number.')
+      } else {
+        setCodeError('That invite code wasn\'t recognised. Please check it and try again.')
+      }
+      return
+    }
+
     const { error: otpError } = await supabase.auth.signInWithOtp({ phone: e164 })
     setLoading(false)
 
