@@ -93,7 +93,10 @@ export default function PassengerHomeScreen() {
     useActiveRide(profile?.id);
   useNotifications();
   const { colors, resolvedTheme } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(
+    () => makeStyles(colors, resolvedTheme),
+    [colors, resolvedTheme],
+  );
 
   const mapRef = useRef<MapView>(null);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
@@ -1042,6 +1045,7 @@ export default function PassengerHomeScreen() {
           keyboardVerticalOffset={0}
         >
           <View style={styles.sheet}>
+            <View style={styles.grabber} />
             {/* Input card — always visible except in confirm */}
             {sheet !== "confirm" && (
               <View style={styles.inputsCard}>
@@ -1633,13 +1637,22 @@ export default function PassengerHomeScreen() {
                     {bookingLoading ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
-                      <Text style={styles.bookBtnText}>
-                        {noDriversForImmediate
-                          ? "No drivers available"
-                          : isScheduled
-                            ? "Schedule ride"
-                            : "Book ride"}
-                      </Text>
+                      <View style={styles.bookBtnInner}>
+                        <Text style={styles.bookBtnText}>
+                          {noDriversForImmediate
+                            ? "No drivers available"
+                            : isScheduled
+                              ? "Schedule ride"
+                              : "Book ride"}
+                        </Text>
+                        {!noDriversForImmediate && (
+                          <Ionicons
+                            name={isScheduled ? "calendar" : "arrow-forward"}
+                            size={17}
+                            color="#fff"
+                          />
+                        )}
+                      </View>
                     )}
                   </TouchableOpacity>
                 </View>
@@ -1786,8 +1799,33 @@ function decodePolyline(encoded: string): LatLng[] {
   return coords;
 }
 
-const makeStyles = (colors: Colors) =>
-  StyleSheet.create({
+const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
+  const isDark = resolvedTheme === "dark";
+  // Soft elevation presets. Dark surfaces swallow drop shadows, so there we
+  // lean on a tighter, higher-opacity shadow purely to lift floating controls
+  // off the map; light mode gets a wider, softer ambient shadow.
+  const floatShadow = {
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: isDark ? 0.45 : 0.14,
+    shadowRadius: 12,
+    elevation: 6,
+  };
+  const sheetShadow = {
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: isDark ? 0.5 : 0.12,
+    shadowRadius: 20,
+    elevation: 16,
+  };
+  const brandShadow = {
+    shadowColor: colors.accentOrange,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.5 : 0.35,
+    shadowRadius: 14,
+    elevation: 8,
+  };
+  return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     map: { flex: 1 },
     topBar: {
@@ -1802,47 +1840,56 @@ const makeStyles = (colors: Colors) =>
       paddingBottom: 12,
       backgroundColor: colors.backgroundOverlay,
     },
-    topName: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
-    topSub: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
+    topName: {
+      fontSize: 22,
+      fontWeight: "800",
+      color: colors.textPrimary,
+      letterSpacing: -0.4,
+    },
+    topSub: { fontSize: 13, color: colors.textSecondary, marginTop: 3 },
     topActions: { flexDirection: "row", alignItems: "center", gap: 8 },
     topAvatar: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      borderWidth: 1.5,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 2,
       borderColor: colors.accentOrange,
+      ...floatShadow,
     },
     topAvatarFallback: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
       backgroundColor: colors.surfaceAlt,
       alignItems: "center",
       justifyContent: "center",
-      borderWidth: 1.5,
+      borderWidth: 2,
       borderColor: colors.accentOrange,
+      ...floatShadow,
     },
     topAvatarInitials: { fontSize: 13, fontWeight: "700", color: colors.avatarText },
     calendarBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: "rgba(168,85,247,0.12)",
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: isDark ? "rgba(168,85,247,0.16)" : colors.surface,
       borderWidth: 0.5,
       borderColor: "rgba(168,85,247,0.3)",
       alignItems: "center",
       justifyContent: "center",
+      ...floatShadow,
     },
     avatarBtn: { padding: 4 },
     inboxBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: "rgba(74,158,255,0.12)",
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: isDark ? "rgba(74,158,255,0.16)" : colors.surface,
       borderWidth: 0.5,
       borderColor: "rgba(74,158,255,0.3)",
       alignItems: "center",
       justifyContent: "center",
+      ...floatShadow,
     },
     inboxBadge: {
       position: "absolute",
@@ -1861,17 +1908,18 @@ const makeStyles = (colors: Colors) =>
     inboxBadgeText: { fontSize: 9, fontWeight: "700", color: "#fff" },
     driversPill: {
       position: "absolute",
-      top: Platform.OS === "ios" ? 110 : 96,
+      top: Platform.OS === "ios" ? 116 : 100,
       left: 20,
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
+      gap: 7,
       backgroundColor: colors.surfaceOverlay,
       borderRadius: 20,
-      paddingVertical: 5,
-      paddingHorizontal: 12,
+      paddingVertical: 7,
+      paddingHorizontal: 13,
       borderWidth: 0.5,
       borderColor: colors.borderStrong,
+      ...floatShadow,
     },
     driversPillDot: {
       width: 7,
@@ -1884,28 +1932,31 @@ const makeStyles = (colors: Colors) =>
       position: "absolute",
       right: 16,
       bottom: 320,
-      width: 42,
-      height: 42,
-      borderRadius: 21,
+      width: 46,
+      height: 46,
+      borderRadius: 23,
       backgroundColor: colors.surface,
       borderWidth: 0.5,
       borderColor: colors.borderStrong,
       alignItems: "center",
       justifyContent: "center",
+      ...floatShadow,
     },
     driverMarker: {
       backgroundColor: colors.surface,
       borderRadius: 20,
-      padding: 5,
+      padding: 6,
       borderWidth: 1.5,
       borderColor: colors.borderStrong,
+      ...floatShadow,
     },
     driverMarkerMine: {
       backgroundColor: colors.surfaceOrangeTint,
       borderRadius: 20,
-      padding: 5,
+      padding: 6,
       borderWidth: 1.5,
       borderColor: colors.accentOrange,
+      ...brandShadow,
     },
     driverMarkerText: { fontSize: 16 },
     pinWrap: { alignItems: "center" },
@@ -1940,22 +1991,32 @@ const makeStyles = (colors: Colors) =>
     },
     sheet: {
       backgroundColor: colors.background,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
       borderTopWidth: 0.5,
-      borderColor: colors.border,
+      borderColor: colors.borderStrong,
       paddingHorizontal: 20,
-      paddingTop: 16,
+      paddingTop: 10,
       paddingBottom: Platform.OS === "ios" ? 36 : 24,
+      ...sheetShadow,
+    },
+    grabber: {
+      alignSelf: "center",
+      width: 40,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: colors.borderStrong,
+      marginBottom: 12,
     },
 
     inputsCard: {
       backgroundColor: colors.surface,
-      borderRadius: 16,
+      borderRadius: 18,
       borderWidth: 0.5,
-      borderColor: colors.border,
+      borderColor: colors.borderStrong,
       marginBottom: 14,
       overflow: "hidden",
+      ...floatShadow,
     },
     inputRow: {
       flexDirection: "row",
@@ -2247,15 +2308,21 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "space-between",
       alignItems: "center",
       backgroundColor: colors.surface,
-      borderRadius: 14,
-      padding: 16,
+      borderRadius: 16,
+      padding: 18,
       borderWidth: 0.5,
-      borderColor: colors.border,
+      borderColor: colors.borderStrong,
       marginBottom: 16,
+      ...floatShadow,
     },
     fareLabel: { fontSize: 14, color: colors.textTertiary, marginBottom: 3 },
     fareNote: { fontSize: 11, color: colors.textMuted },
-    fareAmount: { fontSize: 28, fontWeight: "700", color: colors.textPrimary },
+    fareAmount: {
+      fontSize: 30,
+      fontWeight: "800",
+      color: colors.textPrimary,
+      letterSpacing: -0.5,
+    },
     fareStrikethrough: {
       fontSize: 14,
       color: colors.textMuted,
@@ -2292,23 +2359,37 @@ const makeStyles = (colors: Colors) =>
     confirmBtns: { flexDirection: "row", gap: 12 },
     editBtn: {
       flex: 1,
-      paddingVertical: 14,
-      borderRadius: 12,
+      paddingVertical: 16,
+      borderRadius: 14,
       backgroundColor: colors.surface,
       alignItems: "center",
+      justifyContent: "center",
       borderWidth: 0.5,
       borderColor: colors.borderStrong,
     },
     editBtnText: { color: colors.textTertiary, fontSize: 15, fontWeight: "500" },
     bookBtn: {
       flex: 2,
-      paddingVertical: 14,
-      borderRadius: 12,
+      paddingVertical: 16,
+      borderRadius: 14,
       backgroundColor: colors.accentOrange,
       alignItems: "center",
+      justifyContent: "center",
+      ...brandShadow,
     },
-    bookBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+    bookBtnInner: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    bookBtnText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "700",
+      letterSpacing: 0.2,
+    },
   });
+};
 
 const darkMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2c3f" }] },

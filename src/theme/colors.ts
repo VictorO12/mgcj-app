@@ -15,6 +15,7 @@ export interface Colors {
   borderSubtle: string;
   borderStrong: string;
   modalOverlay: string;
+  shadowColor: string;
 
   accentOrange: string;
   accentGreen: string;
@@ -63,6 +64,7 @@ export const darkColors: Colors = {
   borderSubtle: "rgba(255,255,255,0.05)",
   borderStrong: "rgba(255,255,255,0.12)",
   modalOverlay: "rgba(0,0,0,0.6)",
+  shadowColor: "#000000",
 
   ...accentTokens,
 
@@ -89,6 +91,7 @@ export const lightColors: Colors = {
   borderSubtle: "rgba(15,23,42,0.05)",
   borderStrong: "rgba(15,23,42,0.12)",
   modalOverlay: "rgba(15,23,42,0.45)",
+  shadowColor: "#1E293B",
 
   ...accentTokens,
 
