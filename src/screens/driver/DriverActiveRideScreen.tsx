@@ -228,6 +228,10 @@ export default function DriverActiveRideScreen({
   const [fareInput, setFareInput] = useState(
     ride.fare_estimate?.toFixed(2) ?? "",
   );
+  const [fareAnchor, setFareAnchor] = useState<number | null>(
+    ride.fare_estimate && ride.fare_estimate > 0 ? ride.fare_estimate : null,
+  );
+  const [fareAnchorLoading, setFareAnchorLoading] = useState(false);
   const [completing, setCompleting] = useState(false);
 
   const etaInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -716,8 +720,37 @@ export default function DriverActiveRideScreen({
       }
 
       // ── Cash ride: show fare entry modal ───────────────────────
-      setFareInput(ride.fare_estimate?.toFixed(2) ?? "");
-      setShowFareModal(true);
+      if (ride.fare_estimate && ride.fare_estimate > 0) {
+        setFareAnchor(ride.fare_estimate);
+        setFareInput(ride.fare_estimate.toFixed(2));
+        setShowFareModal(true);
+      } else {
+        // No stored estimate — calculate from coords so we still have a range anchor.
+        setFareAnchorLoading(true);
+        setFareInput("");
+        setShowFareModal(true);
+        const url =
+          `https://maps.googleapis.com/maps/api/distancematrix/json` +
+          `?origins=${ride.pickup_lat},${ride.pickup_lng}` +
+          `&destinations=${ride.dropoff_lat},${ride.dropoff_lng}` +
+          `&mode=driving&key=${MAPS_KEY}`;
+        try {
+          const res = await fetch(url);
+          const json = await res.json();
+          const element = json.rows?.[0]?.elements?.[0];
+          if (element?.status === "OK" && element.distance?.value) {
+            const computed = Math.ceil(4 + (element.distance.value / 1000) * 1.8);
+            setFareAnchor(computed);
+            setFareInput(computed.toFixed(2));
+          } else {
+            setFareAnchor(null);
+          }
+        } catch {
+          setFareAnchor(null);
+        } finally {
+          setFareAnchorLoading(false);
+        }
+      }
       return;
     }
 
@@ -734,14 +767,16 @@ export default function DriverActiveRideScreen({
       Alert.alert("Invalid fare", "Please enter a valid fare amount.");
       return;
     }
-    const minFare = ride.fare_estimate ?? 0;
-    const maxFare = minFare + CASH_FARE_MAX_OVERAGE;
-    if (fareValue < minFare || fareValue > maxFare) {
-      Alert.alert(
-        "Fare out of range",
-        `Cash fare must be between $${minFare.toFixed(2)} and $${maxFare.toFixed(2)}.`,
-      );
-      return;
+    if (fareAnchor && fareAnchor > 0) {
+      const minFare = fareAnchor;
+      const maxFare = minFare + CASH_FARE_MAX_OVERAGE;
+      if (fareValue < minFare || fareValue > maxFare) {
+        Alert.alert(
+          "Fare out of range",
+          `Cash fare must be between $${minFare.toFixed(2)} and $${maxFare.toFixed(2)}.`,
+        );
+        return;
+      }
     }
     setCompleting(true);
     // Cash fares round up to the nearest dollar so passengers don't need exact change.
@@ -1182,22 +1217,26 @@ export default function DriverActiveRideScreen({
               />
             </View>
 
-            {ride.fare_estimate && (
+            {fareAnchorLoading ? (
+              <Text style={[styles.fareModalSub, { marginTop: 6 }]}>
+                Calculating fare…
+              </Text>
+            ) : fareAnchor && fareAnchor > 0 ? (
               <>
                 <TouchableOpacity
                   style={styles.estimateHint}
-                  onPress={() => setFareInput(ride.fare_estimate!.toFixed(2))}
+                  onPress={() => setFareInput(fareAnchor.toFixed(2))}
                 >
                   <Text style={styles.estimateHintText}>
-                    Use estimate: ${ride.fare_estimate.toFixed(2)}
+                    Use estimate: ${fareAnchor.toFixed(2)}
                   </Text>
                 </TouchableOpacity>
                 <Text style={styles.fareModalSub}>
-                  Must be between ${ride.fare_estimate.toFixed(2)} and $
-                  {(ride.fare_estimate + CASH_FARE_MAX_OVERAGE).toFixed(2)}
+                  Must be between ${fareAnchor.toFixed(2)} and $
+                  {(fareAnchor + CASH_FARE_MAX_OVERAGE).toFixed(2)}
                 </Text>
               </>
-            )}
+            ) : null}
 
             <View style={styles.fareModalBtns}>
               <TouchableOpacity
@@ -1209,10 +1248,10 @@ export default function DriverActiveRideScreen({
               <TouchableOpacity
                 style={[
                   styles.fareModalConfirmBtn,
-                  completing && { opacity: 0.6 },
+                  (completing || fareAnchorLoading) && { opacity: 0.6 },
                 ]}
                 onPress={handleCompleteRide}
-                disabled={completing}
+                disabled={completing || fareAnchorLoading}
               >
                 {completing ? (
                   <ActivityIndicator color="#fff" />
