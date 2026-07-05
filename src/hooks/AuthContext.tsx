@@ -8,6 +8,7 @@ import React, {
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface AuthContextType {
   session: Session | null;
@@ -119,6 +120,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     loadingHeldRef.current = false;
+    const userId = sessionRef.current?.user?.id;
+    // Clear local token before nulling DB so the Realtime handler doesn't
+    // mistake a deliberate sign-out for a kicked-out-by-another-device event.
+    await AsyncStorage.removeItem("@driver_device_token");
+    if (userId) {
+      await supabase.from("drivers").update({ device_token: null }).eq("id", userId);
+    }
     await supabase.auth.signOut();
     setProfile(null);
     sessionRef.current = null;

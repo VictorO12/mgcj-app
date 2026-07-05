@@ -10,7 +10,8 @@ import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
 import RideRequestSheet from "./RideRequestSheet";
 import Constants from "expo-constants";
-import { Alert } from "react-native";
+import { Alert, AppState } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface ActiveRide {
   id: string;
@@ -75,6 +76,13 @@ interface ConfirmedScheduledRide {
 
 const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
+function generateUUID(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true;
   if (row.auto_started) return true; // cron has flipped it live
@@ -82,7 +90,7 @@ function isRideNow(row: any): boolean {
 }
 
 export default function DriverApp() {
-  const { profile } = useAuth();
+  const { profile, signOut } = useAuth();
   useDriverLocationBroadcast(profile?.id);
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
@@ -123,13 +131,41 @@ export default function DriverApp() {
   // realtime callback doesn't re-show the popup while the server is resetting
   const decliningRideIds = useRef<Set<string>>(new Set());
 
+  // Ensures claimDeviceSession runs exactly once per DriverApp mount even if
+  // profile object reference changes (onAuthStateChange can fire multiple times).
+  const sessionClaimedRef = useRef(false);
+
   useEffect(() => {
     if (!profile) return;
     fetchDriverRecord();
     fetchActiveRide();
     fetchAssignedRide();
     fetchConfirmedScheduledRides();
+    if (!sessionClaimedRef.current) {
+      sessionClaimedRef.current = true;
+      claimDeviceSession();
+    }
   }, [profile]);
+
+  async function claimDeviceSession() {
+    if (!profile) return;
+    const token = generateUUID();
+    console.log("[Session] claiming device session, token:", token);
+    // Write to DB first. When Realtime fires for this update, localToken is
+    // still null in AsyncStorage — the check short-circuits and we don't kick
+    // ourselves out. Only AFTER the DB write do we store the token locally,
+    // so future Realtime events from another device are correctly caught.
+    const { error } = await supabase
+      .from("drivers")
+      .update({ device_token: token })
+      .eq("id", profile.id);
+    if (error) {
+      console.error("[Session] failed to write device_token:", error);
+      return;
+    }
+    console.log("[Session] device_token written to DB");
+    await AsyncStorage.setItem("@driver_device_token", token);
+  }
 
   // ── Realtime: watch for ride changes on this driver ──────────
   useEffect(() => {
@@ -205,6 +241,66 @@ export default function DriverApp() {
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
+  // ── Single-session enforcement ────────────────────────────────
+  // If another device logs in with this driver account, device_token changes.
+  // We detect that via Realtime and via AppState resume, then force sign-out.
+  useEffect(() => {
+    if (!profile) return;
+
+    async function handleKickedOut() {
+      if (activeRideRef.current) return;
+      Alert.alert(
+        "Signed out",
+        "Your account was signed in on another device.",
+        [{ text: "OK" }],
+      );
+      await AsyncStorage.removeItem("@driver_device_token");
+      await signOut();
+    }
+
+    // Realtime: watch own drivers row for device_token changes
+    const channel = supabase
+      .channel("driver-session-" + profile.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "drivers",
+          filter: "id=eq." + profile.id,
+        },
+        async (payload) => {
+          const newToken = (payload.new as any)?.device_token;
+          const localToken = await AsyncStorage.getItem("@driver_device_token");
+          // Only kick out if a real (non-null) new token doesn't match ours
+          if (localToken && newToken && newToken !== localToken) {
+            handleKickedOut();
+          }
+        },
+      )
+      .subscribe();
+
+    // AppState: verify token on foreground resume (catches offline case)
+    const appStateSub = AppState.addEventListener("change", async (state) => {
+      if (state !== "active") return;
+      const { data } = await supabase
+        .from("drivers")
+        .select("device_token")
+        .eq("id", profile.id)
+        .maybeSingle();
+      const newToken = data?.device_token;
+      const localToken = await AsyncStorage.getItem("@driver_device_token");
+      if (localToken && newToken && newToken !== localToken) {
+        handleKickedOut();
+      }
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+      appStateSub.remove();
     };
   }, [profile]);
 
