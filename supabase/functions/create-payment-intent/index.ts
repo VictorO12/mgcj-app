@@ -1,7 +1,24 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
-const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY')!
-const STRIPE_API        = 'https://api.stripe.com/v1'
+const STRIPE_SECRET_KEY  = Deno.env.get('STRIPE_SECRET_KEY')!
+const STRIPE_API         = 'https://api.stripe.com/v1'
+const GOOGLE_MAPS_KEY    = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
+
+async function computeFareFromCoords(
+  pickupLat: number, pickupLng: number,
+  dropoffLat: number, dropoffLng: number,
+  baseFare: number, ratePerKm: number
+): Promise<number> {
+  const url =
+    `https://maps.googleapis.com/maps/api/directions/json` +
+    `?origin=${pickupLat},${pickupLng}` +
+    `&destination=${dropoffLat},${dropoffLng}` +
+    `&key=${GOOGLE_MAPS_KEY}`
+  const res  = await fetch(url)
+  const json = await res.json()
+  const metres: number = json.routes?.[0]?.legs?.[0]?.distance?.value ?? 0
+  return Math.round((baseFare + (metres / 1000) * ratePerKm) * 100) / 100
+}
 
 async function stripePost(path: string, body: Record<string, string> = {}) {
   const res = await fetch(`${STRIPE_API}${path}`, {
@@ -64,10 +81,13 @@ Deno.serve(async (req) => {
       })
     }
 
-    const { fare_amount, discount_code } = await req.json()
+    const { pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, discount_code } = await req.json()
 
-    if (!fare_amount || fare_amount <= 0) {
-      return new Response(JSON.stringify({ error: 'Invalid fare amount' }), {
+    if (
+      pickup_lat == null || pickup_lng == null ||
+      dropoff_lat == null || dropoff_lng == null
+    ) {
+      return new Response(JSON.stringify({ error: 'Missing pickup/dropoff coordinates' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
@@ -77,7 +97,7 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     )
 
-    // Fetch passenger Stripe customer ID + company (for discount eligibility)
+    // Fetch passenger Stripe customer ID + company (for discount eligibility and pricing)
     const { data: passenger } = await serviceClient
       .from('profiles')
       .select('stripe_customer_id, company_id')
@@ -86,6 +106,28 @@ Deno.serve(async (req) => {
 
     if (!passenger?.stripe_customer_id) {
       return new Response(JSON.stringify({ error: 'No saved payment method found. Please add a card first.' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Compute fare server-side from coordinates + company pricing
+    let companyBaseFare = 4
+    let companyRatePerKm = 1.8
+    if (passenger.company_id) {
+      const { data: pricing } = await serviceClient
+        .from('companies')
+        .select('base_fare, rate_per_km')
+        .eq('id', passenger.company_id)
+        .maybeSingle()
+      if (pricing?.base_fare != null)   companyBaseFare  = pricing.base_fare
+      if (pricing?.rate_per_km != null) companyRatePerKm = pricing.rate_per_km
+    }
+    const fare_amount = await computeFareFromCoords(
+      pickup_lat, pickup_lng, dropoff_lat, dropoff_lng,
+      companyBaseFare, companyRatePerKm
+    )
+    if (!fare_amount || fare_amount <= 0) {
+      return new Response(JSON.stringify({ error: 'Could not compute fare — check coordinates.' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }

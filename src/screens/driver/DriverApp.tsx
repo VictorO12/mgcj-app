@@ -11,7 +11,7 @@ import AssignedRidesListScreen from "./AssignedRidesListScreen";
 import RideRequestSheet from "./RideRequestSheet";
 import Constants from "expo-constants";
 import { Alert, AppState } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 
 interface ActiveRide {
   id: string;
@@ -164,7 +164,7 @@ export default function DriverApp() {
       return;
     }
     console.log("[Session] device_token written to DB");
-    await AsyncStorage.setItem("@driver_device_token", token);
+    await SecureStore.setItemAsync("@driver_device_token", token);
   }
 
   // ── Realtime: watch for ride changes on this driver ──────────
@@ -257,7 +257,7 @@ export default function DriverApp() {
         "Your account was signed in on another device.",
         [{ text: "OK" }],
       );
-      await AsyncStorage.removeItem("@driver_device_token");
+      await SecureStore.deleteItemAsync("@driver_device_token");
       await signOut();
     }
 
@@ -274,7 +274,7 @@ export default function DriverApp() {
         },
         async (payload) => {
           const newToken = (payload.new as any)?.device_token;
-          const localToken = await AsyncStorage.getItem("@driver_device_token");
+          const localToken = await SecureStore.getItemAsync("@driver_device_token");
           // Only kick out if a real (non-null) new token doesn't match ours
           if (localToken && newToken && newToken !== localToken) {
             handleKickedOut();
@@ -292,7 +292,7 @@ export default function DriverApp() {
         .eq("id", profile.id)
         .maybeSingle();
       const newToken = data?.device_token;
-      const localToken = await AsyncStorage.getItem("@driver_device_token");
+      const localToken = await SecureStore.getItemAsync("@driver_device_token");
       if (localToken && newToken && newToken !== localToken) {
         handleKickedOut();
       }
@@ -420,17 +420,20 @@ export default function DriverApp() {
   async function declineAndReassign(rideId: string, timedOut: boolean = false) {
     if (!profile) return;
     const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
-    const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey;
 
     decliningRideIds.current.add(rideId);
     setPendingRide(null);
 
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) return;
+
       await fetch(`${supabaseUrl}/functions/v1/assign-ride`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${supabaseAnonKey}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           ride_id: rideId,

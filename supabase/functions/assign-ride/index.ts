@@ -316,15 +316,37 @@ async function assignRide(
   return { success: true, driverId: winnerId, pass }
 }
 
+function isServiceRoleJwt(jwt: string): boolean {
+  try {
+    const payload = JSON.parse(atob(jwt.split('.')[1]))
+    return payload?.role === 'service_role'
+  } catch {
+    return false
+  }
+}
+
 // ── Entry point ───────────────────────────────────────────────
 Deno.serve(async (req) => {
   try {
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+
+    if (!jwt) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+    }
+
+    const isServiceRole = isServiceRoleJwt(jwt)
+
     const body = await req.json()
     let rideId: string | undefined
     let declinedByDriverId: string | undefined
     let timedOutDriverId: string | undefined
 
     if (body.type === 'INSERT' && body.table === 'rides') {
+      // DB webhook — must be service-role
+      if (!isServiceRole) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+      }
       const ride = body.record
       if (ride.status !== 'pending') return new Response('Not pending', { status: 200 })
       if (ride.scheduled_at) return new Response('Scheduled — skipping', { status: 200 })
@@ -333,6 +355,25 @@ Deno.serve(async (req) => {
       rideId = body.ride_id
       declinedByDriverId = body.declined_by_driver_id
       timedOutDriverId = body.timed_out_driver_id
+
+      if (!isServiceRole) {
+        // Caller is a driver — verify their identity from the JWT
+        const callerClient = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_ANON_KEY')!,
+          { global: { headers: { Authorization: authHeader } } }
+        )
+        const { data: { user }, error: userError } = await callerClient.auth.getUser()
+        if (userError || !user) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+        }
+
+        // The driver can only decline/timeout on behalf of themselves
+        const claimedDriverId = declinedByDriverId ?? timedOutDriverId
+        if (claimedDriverId && claimedDriverId !== user.id) {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+        }
+      }
     }
 
     if (!rideId) return new Response('No ride_id', { status: 400 })

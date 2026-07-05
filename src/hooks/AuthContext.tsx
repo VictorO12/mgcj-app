@@ -8,7 +8,7 @@ import React, {
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 
 interface AuthContextType {
   session: Session | null;
@@ -123,7 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userId = sessionRef.current?.user?.id;
     // Clear local token before nulling DB so the Realtime handler doesn't
     // mistake a deliberate sign-out for a kicked-out-by-another-device event.
-    await AsyncStorage.removeItem("@driver_device_token");
+    await SecureStore.deleteItemAsync("@driver_device_token");
     if (userId) {
       await supabase.from("drivers").update({ device_token: null }).eq("id", userId);
     }

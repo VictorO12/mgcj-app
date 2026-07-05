@@ -709,7 +709,10 @@ export default function PassengerHomeScreen() {
                 apikey: SUPABASE_ANON_KEY,
               },
               body: JSON.stringify({
-                fare_amount: fareEstimate,
+                pickup_lat: pickupCoords.latitude,
+                pickup_lng: pickupCoords.longitude,
+                dropoff_lat: dropoffCoords.latitude,
+                dropoff_lng: dropoffCoords.longitude,
                 discount_code: discountCodeInput.trim() || null,
               }),
             },

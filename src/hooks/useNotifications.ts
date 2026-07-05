@@ -64,8 +64,6 @@ export function useNotifications() {
       projectId: '1df2c110-8290-4853-9574-2fe4b71799b0',
     })
 
-    console.log('Push token:', token.data)
-
     // Save token — drivers → drivers table, passengers → profiles table
     if (profile?.id) {
       if (profile.role === 'driver') {

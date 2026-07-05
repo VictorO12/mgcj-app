@@ -72,8 +72,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
   async function verifyCode(code: string) {
     setLoading(true);
-    console.log("[OTP] verifying code for phone:", phone);
-    console.log("[OTP] isDriver:", isDriver, "inviteCode:", inviteCode);
 
     // Hold AuthContext navigation so the home screen doesn't flash while
     // we validate the invite code after OTP verification.
