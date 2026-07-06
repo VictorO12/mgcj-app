@@ -162,7 +162,6 @@ async function assignRide(
       .update({
         driver_id: null,
         status: 'pending',
-        confirmed_by_driver: false,
       })
       .eq('id', rideId)
       .eq('driver_id', driverId)
@@ -273,7 +272,7 @@ async function assignRide(
 
   // ── §5.4: Assign — set offered_at + assignment_source, optimistic lock ──
   const now = new Date().toISOString()
-  const { error: assignError, count } = await supabase
+  const { data: assignData, error: assignError } = await supabase
     .from('rides')
     .update({
       driver_id: winnerId,
@@ -283,9 +282,9 @@ async function assignRide(
     })
     .eq('id', rideId)
     .eq('status', 'pending')
-    .select('id', { count: 'exact', head: true })
+    .select('id')
 
-  if (assignError || count === 0) {
+  if (assignError || !assignData || assignData.length === 0) {
     console.log('Lost race condition or ride no longer pending')
     return { success: false, reason: 'race_condition' }
   }

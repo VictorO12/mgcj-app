@@ -197,19 +197,6 @@ export default function DriverApp() {
 
           const row = payload.new as any;
 
-          // Unclaimed scheduled offer broadcast to the company — free drivers only
-          if (row.status === "scheduled" && !row.driver_id) {
-            if (row.company_id !== profile.company_id) return;
-            if (activeRideRef.current || assignedRideRef.current) return;
-            if (dismissedOfferIds.current.has(row.id)) return;
-            setPendingRide((prev) => {
-              if (prev?.id === row.id) return prev;
-              showRideRequestPopup(row);
-              return prev;
-            });
-            return;
-          }
-
           if (row.driver_id !== profile.id) return;
 
           const isFutureScheduled = !isRideNow(row);
@@ -457,12 +444,7 @@ export default function DriverApp() {
   async function handleAcceptPendingRide() {
     const ride = pendingRideRef.current;
     if (!ride) return;
-    if (ride.scheduled_at) {
-      await claimScheduledRide(ride.id);
-      setPendingRide(null);
-    } else {
-      await confirmRide(ride.id);
-    }
+    await confirmRide(ride.id);
   }
 
   // ── Decline from popup sheet (manual or timeout) ─────────────
@@ -471,12 +453,6 @@ export default function DriverApp() {
   async function handleDeclinePendingRide(timedOut: boolean) {
     const ride = pendingRideRef.current;
     if (!ride) return;
-    if (ride.scheduled_at) {
-      // Unclaimed offer — just dismiss locally, it stays open for others
-      dismissedOfferIds.current.add(ride.id);
-      setPendingRide(null);
-      return;
-    }
     await declineAndReassign(ride.id, timedOut);
   }
 
