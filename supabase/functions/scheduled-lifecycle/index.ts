@@ -7,6 +7,7 @@ const supabase = createClient(
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const MAPS_KEY = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY') ?? ''
 const ESCALATION_MINS = 60
+const FALLBACK_TRAVEL_MINS = 20 // used only when drive time is unknown (no position / API failure); leaving early is nearly free, leaving late is the failure we care about
 
 Deno.serve(async () => {
   try {
@@ -57,9 +58,14 @@ async function handleClaimed(ride: any, now: Date) {
   const { data: pax } = await supabase.from('profiles')
     .select('name, phone, push_token').eq('id', ride.passenger_id).maybeSingle()
 
-  let travelMins = 0
+  // Unknown drive time (missing position OR failed lookup) → conservative
+  // fallback so auto-start fires with runway rather than at T-2.
+  // Note: both paths bias conservative on unknown data — here that means
+  // "fire the push early," in isDriverViableForRide it means "don't release."
+  // Same unknown signal, two different questions.
+  let travelMins = FALLBACK_TRAVEL_MINS
   if (driver?.current_lat && driver?.current_lng) {
-    travelMins = (await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)) ?? 0
+    travelMins = (await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)) ?? FALLBACK_TRAVEL_MINS
   }
 
   // Re-validate the claimed driver is still a live commitment, not just a
@@ -131,8 +137,15 @@ async function reBroadcastAndAlertAdmins(ride: any, reason: 'unclaimed' | 'drive
   if (!ride.company_id) return
   const when = new Date(ride.scheduled_at).toLocaleString('en-CA', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax' })
 
-  const { data: drivers } = await supabase.from('drivers')
-    .select('push_token').eq('company_id', ride.company_id).eq('is_active', true).not('push_token', 'is', null)
+  let driverQuery = supabase.from('drivers')
+    .select('push_token')
+    .eq('company_id', ride.company_id)
+    .eq('is_active', true)
+    .not('push_token', 'is', null)
+  if (ride.vehicle_class_id) {
+    driverQuery = driverQuery.eq('vehicle_class_id', ride.vehicle_class_id) // match broadcast-scheduled-ride
+  }
+  const { data: drivers } = await driverQuery
   for (const d of drivers ?? []) {
     await sendPush(d.push_token, '🗓 Scheduled ride still open', `${when} · ${ride.pickup_address} — claim it`,
       { rideId: ride.id, type: 'scheduled_offer', scheduledAt: ride.scheduled_at, pickupAddress: ride.pickup_address, dropoffAddress: ride.dropoff_address, fareEstimate: ride.fare_estimate })
@@ -150,28 +163,42 @@ async function reBroadcastAndAlertAdmins(ride: any, reason: 'unclaimed' | 'drive
 }
 
 // ── Is the committed driver still a live commitment? ────────────
-// A claim made days ago is intent, not a guarantee. This question is
-// the same at 2 companies or 200 — only what happens on "no" should
-// stay scaled to current size.
+// A claim is intent, not a guarantee — but the only signals strong
+// enough to justify auto-releasing a driver who accepted are:
+//   1. they went dark (is_active = false), or
+//   2. they are FREE and their travel time to pickup is confirmably
+//      impossible.
+// "Currently on a fare" is NOT a failure — it's the healthiest state
+// in the fleet. A busy driver's current position is mid-route and says
+// nothing about where they'll be when free, so we don't run the travel
+// check on them at all; we trust them to manage their own schedule.
+// A failed Distance Matrix lookup is an API blip, not a confirmed
+// impossibility, so it also does not trigger release.
+// Note: null → true here (don't release on a blip) is intentionally
+// opposite to the auto-start fallback above (null → FALLBACK_TRAVEL_MINS,
+// fire early). Same function, different questions — both correct.
 async function isDriverViableForRide(ride: any, driver: { current_lat?: number; current_lng?: number } | null) {
+  // (1) Went dark → genuine failure.
   const { data: d } = await supabase.from('drivers')
     .select('is_active').eq('id', ride.driver_id).maybeSingle()
   if (!d?.is_active) return false
 
+  // Is the driver mid-fare? If so, position is meaningless for this
+  // pickup — trust the committed, online driver and skip the travel check.
   const { data: busyRides } = await supabase.from('rides')
     .select('id').eq('driver_id', ride.driver_id)
     .in('status', ['assigned', 'driver_arriving', 'in_progress'])
     .neq('id', ride.id)
-  if ((busyRides ?? []).length > 0) return false
+  const onFare = (busyRides ?? []).length > 0
+  if (onFare) return true
 
+  // (2) Free driver: current position is meaningful. Only release on a
+  // *confirmed* impossibility — never on null (API/network failure).
   if (driver?.current_lat && driver?.current_lng) {
     const travelMins = await getDriveMins(driver.current_lat, driver.current_lng, ride.pickup_lat, ride.pickup_lng)
-    // null means the Distance Matrix lookup failed (no key, network error,
-    // non-OK status) — fail closed rather than treating an unknown ETA as
-    // "0 minutes away, always in range".
-    if (travelMins === null) return false
+    if (travelMins === null) return true // API blip ≠ confirmed impossible → do not release
     const minsUntil = (new Date(ride.scheduled_at).getTime() - Date.now()) / 60000
-    if (travelMins > minsUntil + 20) return false
+    if (travelMins > minsUntil + 20) return false // genuinely can't make it
   }
 
   return true
@@ -214,8 +241,16 @@ async function createScheduledPaymentIntent(ride: any) {
     return
   }
 
+  // Fetch company to handle Stripe Connect transfer_data correctly.
+  // transfer_data[destination] must be set at PI creation if the company has
+  // stripe_account_id — capture-payment adds transfer_data[amount] only when
+  // stripe_account_id is set, so both ends must agree or Stripe rejects capture.
+  const { data: company } = await supabase.from('companies')
+    .select('stripe_account_id').eq('id', ride.company_id).maybeSingle()
+
   const totalCents = Math.round((ride.fare_estimate ?? 0) * 100)
-  const intent = await stripePost('/payment_intents', {
+
+  const piBody: Record<string, string> = {
     amount: totalCents.toString(),
     currency: 'cad',
     customer: pax.stripe_customer_id,
@@ -226,7 +261,12 @@ async function createScheduledPaymentIntent(ride: any) {
     'automatic_payment_methods[allow_redirects]': 'never',
     'metadata[passenger_id]': ride.passenger_id,
     'metadata[ride_id]': ride.id,
-  })
+  }
+  if (company?.stripe_account_id) {
+    piBody['transfer_data[destination]'] = company.stripe_account_id
+  }
+
+  const intent = await stripePost('/payment_intents', piBody)
 
   if (intent.error) {
     console.error(`[ride ${ride.id}] deferred PaymentIntent failed:`, JSON.stringify(intent.error))
@@ -235,7 +275,11 @@ async function createScheduledPaymentIntent(ride: any) {
     return
   }
 
-  await supabase.from('rides').update({ stripe_payment_intent_id: intent.id }).eq('id', ride.id)
+  // §10: set BOTH stripe_payment_intent_id AND payment_status='pending' so any
+  // downstream charger that guards on payment_status also skips double-creation.
+  await supabase.from('rides')
+    .update({ stripe_payment_intent_id: intent.id, payment_status: 'pending' })
+    .eq('id', ride.id)
   console.log(`[ride ${ride.id}] deferred PaymentIntent created: ${intent.id}`)
 }
 
