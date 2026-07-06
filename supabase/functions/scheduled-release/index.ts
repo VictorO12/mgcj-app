@@ -94,14 +94,14 @@ async function releaseRide(ride: any, now: Date) {
 // ── §9.2 no-preferred path ───────────────────────────────────
 async function releaseToPool(ride: any) {
   // Optimistic lock — prevents double-release if two ticks overlap
-  const { error, count } = await supabase
+  const { data, error } = await supabase
     .from('rides')
     .update({ status: 'pending', offered_at: null })
     .eq('id', ride.id)
     .eq('status', 'scheduled')
-    .select('id', { count: 'exact', head: true })
+    .select('id')
 
-  if (error || !count) {
+  if (error || !data || data.length === 0) {
     console.log(`[ride ${ride.id}] already released or race condition — skipping`)
     return
   }
@@ -124,7 +124,7 @@ async function releaseToPreferred(ride: any, viable: boolean) {
   const now = new Date().toISOString()
 
   // Optimistic lock — guard on status='scheduled'
-  const { error, count } = await supabase
+  const { data, error } = await supabase
     .from('rides')
     .update({
       status: 'offered',
@@ -134,9 +134,9 @@ async function releaseToPreferred(ride: any, viable: boolean) {
     })
     .eq('id', ride.id)
     .eq('status', 'scheduled')
-    .select('id', { count: 'exact', head: true })
+    .select('id')
 
-  if (error || !count) {
+  if (error || !data || data.length === 0) {
     console.log(`[ride ${ride.id}] already released — skipping preferred offer`)
     return
   }
