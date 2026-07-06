@@ -71,6 +71,7 @@ async function handleStaleRide(ride: any) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+      'x-webhook-secret': Deno.env.get('WEBHOOK_SECRET') ?? '',
     },
     body: JSON.stringify({
       ride_id: ride.id,
