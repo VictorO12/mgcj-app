@@ -346,14 +346,18 @@ function isServiceRoleJwt(jwt: string): boolean {
 // ── Entry point ───────────────────────────────────────────────
 Deno.serve(async (req) => {
   try {
+    const webhookSecret  = Deno.env.get('WEBHOOK_SECRET')
+    const incomingSecret = req.headers.get('x-webhook-secret')
+    const isInternalCall = !!webhookSecret && incomingSecret === webhookSecret
+
     const authHeader = req.headers.get('Authorization') ?? ''
     const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
 
-    if (!jwt) {
+    if (!jwt && !isInternalCall) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
     }
 
-    const isServiceRole = isServiceRoleJwt(jwt)
+    const isServiceRole = isInternalCall || isServiceRoleJwt(jwt)
 
     const body = await req.json()
     let rideId: string | undefined
