@@ -482,6 +482,16 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.broadcast-scheduled-ride]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/broadcast-scheduled-ride/index.ts"
+
+[functions.scheduled-lifecycle]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/scheduled-lifecycle/index.ts"
+
 [functions.scheduled-coverage-monitor]
 enabled = true
 verify_jwt = false
