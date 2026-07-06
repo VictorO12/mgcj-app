@@ -1,3 +1,12 @@
+// §6: Repurposed from "claim-it" broadcast to booking-time coverage check.
+// Fires on rides INSERT (webhook already wired: broadcast_scheduled_ride_on_insert).
+// New behavior for status='scheduled' rides:
+//   1. Compute coverage_status and stamp it on the ride.
+//   2. If uncovered → alert dispatch immediately (find out days out, not T-60).
+//   3. If preferred_driver_id set and not yet notified → send non-binding heads-up.
+//
+// Advance driver claim-solicitation is removed — that path is gone.
+
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const supabase = createClient(
@@ -5,7 +14,8 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+const EXPO_PUSH_URL    = 'https://exp.host/--/api/v2/push/send'
+const RELEASE_LEAD_MINS = 30
 
 Deno.serve(async (req) => {
   try {
@@ -17,98 +27,136 @@ Deno.serve(async (req) => {
 
     const body = await req.json()
 
-    // Fired by the rides INSERT webhook
     if (body.type !== 'INSERT' || body.table !== 'rides') {
       return new Response('Not a ride insert', { status: 200 })
     }
 
     const ride = body.record
 
-    // Only act on freshly created scheduled rides
     if (!ride.scheduled_at || ride.status !== 'scheduled') {
       return new Response('Not a new scheduled ride — skipping', { status: 200 })
     }
 
-    if (ride.driver_id) {
-      return new Response('Already has a driver — skipping', { status: 200 })
-    }
     if (!ride.company_id) {
-      console.warn(`[broadcast-scheduled] ride ${ride.id} has no company_id — skipping`)
+      console.warn(`[coverage-check] ride ${ride.id} has no company_id — skipping`)
       return new Response('No company', { status: 200 })
     }
 
-    console.log(`[broadcast-scheduled] ride ${ride.id} company ${ride.company_id} at ${ride.scheduled_at}`)
+    console.log(`[coverage-check] ride ${ride.id} company ${ride.company_id} at ${ride.scheduled_at}`)
 
-    const { data: passenger } = await supabase
-      .from('profiles').select('name').eq('id', ride.passenger_id).maybeSingle()
+    // ── Compute coverage ─────────────────────────────────────────
+    // Count all roster drivers (online or not) matching the required class.
+    // "uncovered" = no driver of this class exists at all (can't be served
+    //   without adding a driver to the fleet).
+    // "at_risk"   = drivers exist but none are currently active, OR
+    //               exclusive ride and the preferred driver is offline.
+    // "covered"   = at least one active eligible driver exists.
 
-    // Drivers currently on an active confirmed ride — exclude them
-    const { data: busyRides } = await supabase
-      .from('rides')
-      .select('driver_id')
-      .in('status', ['assigned', 'driver_arriving', 'in_progress'])
-      .eq('confirmed_by_driver', true)
-      .not('driver_id', 'is', null)
-    const busy = new Set((busyRides ?? []).map((r: any) => r.driver_id))
-
-      // Online drivers in THIS company with a push token
-    const { data: drivers, error: driversError } = await supabase
+    let driversQuery = supabase
       .from('drivers')
-      .select('id, push_token')
+      .select('id, is_active')
       .eq('company_id', ride.company_id)
-      .eq('is_active', true)
-      .not('push_token', 'is', null)
+      .eq('is_deleted', false)
 
-    if (driversError) {
-      console.error('[broadcast-scheduled] drivers error:', JSON.stringify(driversError))
-      return new Response('drivers error', { status: 500 })
-    }
-    if (!drivers || drivers.length === 0) {
-      // Not a failure — ride stays on the board; the lifecycle cron escalates near pickup
-      console.log('[broadcast-scheduled] no online drivers in company — leaving on board')
-      return new Response('No drivers online', { status: 200 })
+    if (ride.vehicle_class_id) {
+      driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
     }
 
-    const passengerName = passenger?.name ?? 'A passenger'
-    const fareText = ride.fare_estimate ? `$${Number(ride.fare_estimate).toFixed(2)}` : 'Cash'
-    const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
-      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-      timeZone: 'America/Halifax',
-    })
+    const { data: roster } = await driversQuery
+    const totalCount  = roster?.length ?? 0
+    const activeCount = (roster ?? []).filter((d: any) => d.is_active).length
 
-    const messages = drivers.filter(d => d.push_token && !busy.has(d.id)).map(d => ({
-      to: d.push_token,
-      title: '🗓 Scheduled ride available',
-      body: `${when} · ${ride.pickup_address} → ${ride.dropoff_address} · ${fareText}`,
-      data: {
-        rideId: ride.id,
-        type: 'scheduled_offer',
-        scheduledAt: ride.scheduled_at,
-        pickupAddress: ride.pickup_address,
-        dropoffAddress: ride.dropoff_address,
-        fareEstimate: ride.fare_estimate,
-        passengerName,
-      },
-      categoryIdentifier: 'SCHEDULED_OFFER',
-      sound: 'default',
-      priority: 'high',
-    }))
+    let newCoverage: 'uncovered' | 'at_risk' | 'covered'
+    if (totalCount === 0) {
+      newCoverage = 'uncovered'
+    } else if (ride.preferred_driver_exclusive && ride.preferred_driver_id) {
+      // Exclusive: coverage is entirely determined by that one driver's status
+      const { data: prefD } = await supabase.from('drivers')
+        .select('is_active').eq('id', ride.preferred_driver_id).maybeSingle()
+      newCoverage = prefD?.is_active ? 'covered' : 'at_risk'
+    } else if (activeCount === 0) {
+      newCoverage = 'at_risk'
+    } else {
+      newCoverage = 'covered'
+    }
 
-    const res = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(messages),
-    })
-    const result = await res.json()
-    console.log(`[broadcast-scheduled] pushed to ${messages.length} driver(s):`, JSON.stringify(result))
+    await supabase.from('rides')
+      .update({ coverage_status: newCoverage })
+      .eq('id', ride.id)
 
-    return new Response(JSON.stringify({ ok: true, notified: messages.length }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    console.log(`[coverage-check] ride ${ride.id} coverage=${newCoverage}`)
+
+    // ── Alert dispatch immediately if uncovered ──────────────────
+    if (newCoverage === 'uncovered') {
+      const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+      })
+      const { data: admins } = await supabase.from('profiles')
+        .select('push_token')
+        .eq('role', 'admin')
+        .eq('company_id', ride.company_id)
+        .not('push_token', 'is', null)
+
+      for (const admin of admins ?? []) {
+        await sendPush(admin.push_token,
+          '🚨 Scheduled ride has no eligible drivers',
+          `${when} · ${ride.pickup_address} — no ${ride.vehicle_class_id ? 'matching' : 'available'} driver in fleet`,
+          { rideId: ride.id, type: 'coverage_uncovered' }
+        )
+      }
+      console.log(`[coverage-check] uncovered — alerted ${admins?.length ?? 0} admin(s)`)
+    }
+
+    // ── §8: Non-binding advance heads-up to preferred driver ─────
+    if (ride.preferred_driver_id && !ride.preferred_notified) {
+      const { data: prefDriver } = await supabase.from('drivers')
+        .select('push_token').eq('id', ride.preferred_driver_id).maybeSingle()
+
+      if (prefDriver?.push_token) {
+        const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
+          weekday: 'short', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+        })
+        const releaseAt = new Date(new Date(ride.scheduled_at).getTime() - RELEASE_LEAD_MINS * 60_000)
+        const releaseWhen = releaseAt.toLocaleTimeString('en-CA', {
+          hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+        })
+
+        await sendPush(prefDriver.push_token,
+          "🗓 You're the preferred driver",
+          `Scheduled ride at ${when}. You'll get the offer around ${releaseWhen}.`,
+          { rideId: ride.id, type: 'preferred_heads_up', scheduledAt: ride.scheduled_at }
+        )
+
+        await supabase.from('rides')
+          .update({ preferred_notified: true })
+          .eq('id', ride.id)
+
+        console.log(`[coverage-check] sent preferred heads-up to driver ${ride.preferred_driver_id.slice(0, 8)}`)
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true, coverage: newCoverage }),
+      { headers: { 'Content-Type': 'application/json' } }
+    )
   } catch (err) {
-    console.error('[broadcast-scheduled] fatal:', err)
+    console.error('[coverage-check] fatal:', err)
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500, headers: { 'Content-Type': 'application/json' },
     })
   }
 })
+
+async function sendPush(token: string, title: string, body: string, data: Record<string, unknown>) {
+  try {
+    await fetch(EXPO_PUSH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
+    })
+  } catch (e) {
+    console.error('[push]', e)
+  }
+}
