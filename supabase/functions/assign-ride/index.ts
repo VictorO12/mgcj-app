@@ -48,11 +48,13 @@ async function getDriveTimes(
   return result
 }
 
-async function notifyDispatchNoDrivers(rideId: string, pickupAddress: string) {
+// §5.2: alert only this ride's company admins (not all companies)
+async function notifyDispatchNoDrivers(rideId: string, pickupAddress: string, companyId: string) {
   const { data: dispatchers } = await supabase
-    .from('drivers')
+    .from('profiles')
     .select('push_token')
-    .eq('role', 'dispatch')
+    .eq('role', 'admin')
+    .eq('company_id', companyId)
     .not('push_token', 'is', null)
 
   if (!dispatchers || dispatchers.length === 0) return
@@ -133,7 +135,6 @@ async function assignRide(
     console.log(`Driver ${driverId.slice(0, 8)} ${isTimeout ? 'timed out on' : 'declining'} ride ${rideId}`)
 
     if (isTimeout) {
-      // Timeout: add to timed_out_by (eligible again on second pass)
       const { data: current } = await supabase
         .from('rides')
         .select('timed_out_by')
@@ -148,7 +149,6 @@ async function assignRide(
         .update({ timed_out_by: updatedTimedOut })
         .eq('id', rideId)
     } else {
-      // Hard decline: add to declined_by (excluded permanently)
       const { error: rpcError } = await supabase.rpc('append_declined_by', {
         p_ride_id: rideId,
         p_driver_id: driverId,
@@ -192,43 +192,57 @@ async function assignRide(
     return { success: false, reason: 'not_pending' }
   }
 
+  // §5.1: rides without company_id cannot be company-scoped — this is a data
+  // integrity issue, not something assign-ride can work around
+  if (!ride.company_id) {
+    console.error(`Ride ${rideId} has no company_id — cannot scope driver pool`)
+    return { success: false, reason: 'no_company_id' }
+  }
+
   const declinedBy: string[] = ride.declined_by ?? []
   const timedOutBy: string[] = ride.timed_out_by ?? []
   console.log(`Assigning ride ${rideId} | declined_by: [${declinedBy.map(id => id.slice(0,8)).join(', ')}] | timed_out_by: [${timedOutBy.map(id => id.slice(0,8)).join(', ')}]`)
 
-  // ── Fetch all online drivers ─────────────────────────────────
-  const { data: allDrivers, error: driversError } = await supabase
+  // ── §5.1: Fetch online drivers scoped to THIS company ───────
+  let driversQuery = supabase
     .from('drivers')
     .select('id, push_token, current_lat, current_lng')
+    .eq('company_id', ride.company_id)
     .eq('is_active', true)
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
     .not('push_token', 'is', null)
 
+  if (ride.vehicle_class_id) {
+    driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
+    console.log(`Filtering drivers by vehicle_class_id: ${ride.vehicle_class_id}`)
+  }
+
+  const { data: allDrivers, error: driversError } = await driversQuery
+
   if (driversError || !allDrivers || allDrivers.length === 0) {
-    console.log('No online drivers found')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address)
+    console.log('No online drivers found for this company/vehicle class')
+    await notifyDispatchNoDrivers(rideId, ride.pickup_address, ride.company_id)
     return { success: false, reason: 'no_drivers' }
   }
 
-  // Filter out drivers on an active confirmed ride
+  // §5.3: status-only busy filter — confirmed_by_driver removed
+  // §5.1: scope busy-ride lookup to same company (cross-company entries
+  // can't match allDrivers anyway, but filter keeps intent clear)
   const { data: busyRides } = await supabase
     .from('rides')
     .select('driver_id')
+    .eq('company_id', ride.company_id)
     .in('status', ['assigned', 'driver_arriving', 'in_progress'])
-    .eq('confirmed_by_driver', true)
     .not('driver_id', 'is', null)
 
   const busySet = new Set((busyRides ?? []).map((r: any) => r.driver_id))
   const availableDrivers = allDrivers.filter(d => !busySet.has(d.id))
 
   // ── Two-pass driver selection ────────────────────────────────
-  // Pass 1: drivers who haven't seen this ride at all
   const freshDrivers = availableDrivers.filter(
     d => !declinedBy.includes(d.id) && !timedOutBy.includes(d.id)
   )
-
-  // Pass 2: drivers who timed out (missed notification) but didn't hard decline
   const timedOutDrivers = availableDrivers.filter(
     d => timedOutBy.includes(d.id) && !declinedBy.includes(d.id)
   )
@@ -237,10 +251,8 @@ async function assignRide(
   let pass = 1
 
   if (candidatePool.length === 0 && timedOutDrivers.length > 0) {
-    // All fresh drivers exhausted — give timed-out drivers another chance
     console.log('No fresh drivers — cycling back to timed-out drivers')
     candidatePool = timedOutDrivers
-    // Clear timed_out_by so they each get a full 30s window again
     await supabase
       .from('rides')
       .update({ timed_out_by: [] })
@@ -250,7 +262,7 @@ async function assignRide(
 
   if (candidatePool.length === 0) {
     console.log('All drivers exhausted — notifying dispatch')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address)
+    await notifyDispatchNoDrivers(rideId, ride.pickup_address, ride.company_id)
     return { success: false, reason: 'all_declined' }
   }
 
@@ -259,10 +271,16 @@ async function assignRide(
   // ── Pick closest driver ──────────────────────────────────────
   const winnerId = await pickWinner(candidatePool, ride.pickup_lat, ride.pickup_lng)
 
-  // ── Assign — optimistic lock on status = pending ─────────────
+  // ── §5.4: Assign — set offered_at + assignment_source, optimistic lock ──
+  const now = new Date().toISOString()
   const { error: assignError, count } = await supabase
     .from('rides')
-    .update({ driver_id: winnerId, status: 'offered', confirmed_by_driver: false })
+    .update({
+      driver_id: winnerId,
+      status: 'offered',
+      offered_at: now,
+      assignment_source: 'auto_offer',
+    })
     .eq('id', rideId)
     .eq('status', 'pending')
     .select('id', { count: 'exact', head: true })
@@ -368,7 +386,6 @@ Deno.serve(async (req) => {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
         }
 
-        // The driver can only decline/timeout on behalf of themselves
         const claimedDriverId = declinedByDriverId ?? timedOutDriverId
         if (claimedDriverId && claimedDriverId !== user.id) {
           return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
