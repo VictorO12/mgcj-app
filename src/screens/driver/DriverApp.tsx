@@ -83,12 +83,6 @@ function generateUUID(): string {
   });
 }
 
-function isRideNow(row: any): boolean {
-  if (!row.scheduled_at) return true;
-  if (row.auto_started) return true; // cron has flipped it live
-  return new Date(row.scheduled_at) <= new Date();
-}
-
 export default function DriverApp() {
   const { profile, signOut } = useAuth();
   useDriverLocationBroadcast(profile?.id);
@@ -199,8 +193,6 @@ export default function DriverApp() {
 
           if (row.driver_id !== profile.id) return;
 
-          const isFutureScheduled = !isRideNow(row);
-
           if (row.status === "offered") {
             if (decliningRideIds.current.has(row.id)) return;
             setPendingRide((prev) => {
@@ -208,13 +200,9 @@ export default function DriverApp() {
               showRideRequestPopup(row);
               return prev;
             });
-          } else if (row.status === "assigned" && row.confirmed_by_driver) {
-            fetchActiveRide();
-            fetchConfirmedScheduledRides();
           } else if (
             ACTIVE_STATUSES.includes(row.status) &&
-            row.confirmed_by_driver &&
-            !isFutureScheduled
+            row.confirmed_by_driver
           ) {
             fetchActiveRide();
             fetchConfirmedScheduledRides();
@@ -400,6 +388,8 @@ export default function DriverApp() {
 
     if (!error) {
       setPendingRide(null);
+      fetchActiveRide();
+      fetchConfirmedScheduledRides();
     }
   }
 
@@ -476,7 +466,6 @@ export default function DriverApp() {
       .eq("driver_id", profile.id)
       .in("status", ACTIVE_STATUSES)
       .eq("confirmed_by_driver", true)
-      .or(`scheduled_at.is.null,scheduled_at.lte.${now},auto_started.eq.true`)
       .order("created_at", { ascending: false })
       .limit(1);
 
