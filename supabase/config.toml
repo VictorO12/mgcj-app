@@ -481,3 +481,13 @@ verify_jwt = true
 [functions.confirm-student-verification]
 enabled = true
 verify_jwt = false
+
+[functions.scheduled-coverage-monitor]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/scheduled-coverage-monitor/index.ts"
+
+[functions.scheduled-release]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/scheduled-release/index.ts"
