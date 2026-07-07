@@ -16,7 +16,7 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
 import { useActiveRide } from "../../hooks/useActiveRide";
 import { supabase } from "../../lib/supabase";
@@ -71,6 +71,12 @@ interface LatLng {
   latitude: number;
   longitude: number;
 }
+interface VehicleClass {
+  id: string;
+  name: string;
+  capacity: number;
+  surcharge_percent: number;
+}
 interface ActiveDriver {
   id: string;
   current_lat: number;
@@ -86,6 +92,18 @@ const VALLEY_REGION = {
   longitudeDelta: 0.15,
 };
 const BUSY_STATUSES = ["offered", "assigned", "driver_arriving", "in_progress"];
+
+type MCIcon = React.ComponentProps<typeof MaterialCommunityIcons>["name"];
+const CLASS_ICONS: Record<string, MCIcon> = {
+  sedan:    "car-side",
+  standard: "car-side",
+  van:      "van-passenger",
+  minivan:  "van-passenger",
+  suv:      "car-estate",
+  xl:       "car-estate",
+  luxury:   "car-sports",
+  truck:    "truck",
+};
 
 export default function PassengerHomeScreen() {
   const { profile, signOut } = useAuth();
@@ -110,6 +128,10 @@ export default function PassengerHomeScreen() {
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [vehicleClasses, setVehicleClasses] = useState<VehicleClass[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
+  const [classFares, setClassFares] = useState<Record<string, number>>({});
+  const [classAvailability, setClassAvailability] = useState<Record<string, number>>({});
   const [fareDiscountAmount, setFareDiscountAmount] = useState(0);
   const [fareDiscountType, setFareDiscountType] = useState<"student" | "code" | null>(
     null,
@@ -554,27 +576,68 @@ export default function PassengerHomeScreen() {
   async function getFareEstimate(pickup: LatLng, dropoff: LatLng) {
     setFareLoading(true);
     try {
-      const [directionsRes, pricingRes] = await Promise.all([
+      const [directionsRes, pricingRes, classesRes, onlineDriversRes, busyRidesRes] = await Promise.all([
         fetch(
           `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.latitude},${pickup.longitude}&destination=${dropoff.latitude},${dropoff.longitude}&key=${MAPS_KEY}`,
         ),
         profile?.company_id
           ? supabase.from("companies").select("base_fare, rate_per_km").eq("id", profile.company_id).maybeSingle()
           : Promise.resolve({ data: null }),
+        profile?.company_id
+          ? supabase.from("vehicle_classes").select("id, name, capacity, surcharge_percent").eq("company_id", profile.company_id).eq("is_active", true).order("display_order")
+          : Promise.resolve({ data: [] }),
+        supabase.from("drivers").select("id, vehicle_class_id").eq("is_active", true).not("current_lat", "is", null),
+        supabase.from("rides").select("driver_id").in("status", BUSY_STATUSES).not("driver_id", "is", null),
       ]);
       const metres = (await directionsRes.json()).routes?.[0]?.legs?.[0]?.distance?.value ?? 0;
       const pricing = (pricingRes as any).data;
       const baseFareRate = pricing?.base_fare ?? 4;
       const ratePerKm = pricing?.rate_per_km ?? 1.8;
       const baseFare = Math.round((baseFareRate + (metres / 1000) * ratePerKm) * 100) / 100;
-      setFareEstimate(baseFare);
-      const discount = await getDiscount(baseFare);
+
+      const classes: VehicleClass[] = (classesRes as any).data ?? [];
+      setVehicleClasses(classes);
+
+      // Compute a fare per class (surcharge applied to whole fare)
+      const fares: Record<string, number> = {};
+      for (const vc of classes) {
+        fares[vc.id] = Math.round(baseFare * (1 + vc.surcharge_percent / 100) * 100) / 100;
+      }
+      setClassFares(fares);
+
+      // Compute available driver count per class
+      const busyIds = new Set(((busyRidesRes as any).data ?? []).map((r: any) => r.driver_id));
+      const avail: Record<string, number> = {};
+      for (const d of ((onlineDriversRes as any).data ?? [])) {
+        if (!busyIds.has(d.id) && d.vehicle_class_id) {
+          avail[d.vehicle_class_id] = (avail[d.vehicle_class_id] ?? 0) + 1;
+        }
+      }
+      setClassAvailability(avail);
+
+      // Auto-select: prefer first class that has available drivers; fall back to first class
+      const firstAvailable = classes.find(c => (avail[c.id] ?? 0) > 0) ?? classes[0] ?? null;
+      const autoId = firstAvailable?.id ?? null;
+      setSelectedClassId(autoId);
+      const activeFare = autoId ? (fares[autoId] ?? baseFare) : baseFare;
+      setFareEstimate(activeFare);
+      const discount = await getDiscount(activeFare);
       setFareDiscountAmount(discount.discountAmount);
       setFareDiscountType(discount.discountType);
     } catch (e) {
       console.error(e);
     }
     setFareLoading(false);
+  }
+
+  async function selectClass(classId: string) {
+    setSelectedClassId(classId);
+    const fare = classFares[classId];
+    if (fare == null) return;
+    setFareEstimate(fare);
+    const discount = await getDiscount(fare, discountCodeInput || undefined);
+    setFareDiscountAmount(discount.discountAmount);
+    setFareDiscountType(discount.discountType);
   }
 
   async function getDiscount(fare: number, code?: string) {
@@ -668,6 +731,29 @@ export default function PassengerHomeScreen() {
       );
       return;
     }
+    // Pre-flight: for immediate rides, verify a driver of the selected class is
+    // still online — catches the race between sheet open and confirm tap.
+    if (!isScheduled && selectedClassId) {
+      const { count } = await supabase
+        .from("drivers")
+        .select("*", { count: "exact", head: true })
+        .eq("vehicle_class_id", selectedClassId)
+        .eq("is_active", true)
+        .not("current_lat", "is", null);
+
+      if (!count || count === 0) {
+        const className = vehicleClasses.find(c => c.id === selectedClassId)?.name;
+        setClassAvailability(prev => ({ ...prev, [selectedClassId]: 0 }));
+        Alert.alert(
+          "No drivers available",
+          className
+            ? `No ${className} drivers are online right now. Choose another vehicle type or try again shortly.`
+            : "No drivers of this type are online right now. Please try again shortly.",
+        );
+        return;
+      }
+    }
+
     setBookingLoading(true);
     const scheduledAt =
       isScheduled && scheduledDate ? scheduledDate.toISOString() : null;
@@ -745,6 +831,7 @@ export default function PassengerHomeScreen() {
         const { error: rideError } = await supabase.from("rides").insert({
           passenger_id: profile.id,
           company_id: profile.company_id,
+          vehicle_class_id: selectedClassId,
           status: scheduledAt ? "scheduled" : "pending",
           pickup_address: pickupText,
           pickup_lat: pickupCoords.latitude,
@@ -791,6 +878,7 @@ export default function PassengerHomeScreen() {
     const { error: rideError } = await supabase.from("rides").insert({
       passenger_id: profile.id,
       company_id: profile.company_id,
+      vehicle_class_id: selectedClassId,
       status: scheduledAt ? "scheduled" : "pending",
       pickup_address: pickupText,
       pickup_lat: pickupCoords.latitude,
@@ -867,7 +955,11 @@ export default function PassengerHomeScreen() {
     !driverProfileVisible;
   const { current: interstitialMessage, dismiss: dismissInterstitial } =
     useInterstitialQueue(interstitialGateOpen);
-  const noDriversForImmediate = !isScheduled && activeDrivers.length === 0;
+  const noDriversForImmediate = !isScheduled && (
+    vehicleClasses.length > 1
+      ? selectedClassId != null && (classAvailability[selectedClassId] ?? 0) === 0
+      : activeDrivers.length === 0
+  );
   const hasDriver = !!ride?.driver?.current_lat && !!ride?.driver?.current_lng;
   const driverCoords: LatLng | null = hasDriver
     ? {
@@ -1538,6 +1630,60 @@ export default function PassengerHomeScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
+
+                {/* Vehicle class picker — only shown when company has multiple classes */}
+                {vehicleClasses.length > 1 && (
+                  <View style={styles.classSection}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.classScroll}
+                    >
+                      {vehicleClasses.map((vc) => {
+                        const fare = classFares[vc.id];
+                        const selected = selectedClassId === vc.id;
+                        const icon: MCIcon = CLASS_ICONS[vc.name.toLowerCase()] ?? "car-side";
+                        const driverCount = classAvailability[vc.id] ?? 0;
+                        const unavailable = !isScheduled && driverCount === 0;
+                        return (
+                          <TouchableOpacity
+                            key={vc.id}
+                            style={[
+                              styles.classCard,
+                              selected && styles.classCardSelected,
+                              unavailable && styles.classCardUnavailable,
+                            ]}
+                            onPress={() => !unavailable && selectClass(vc.id)}
+                            activeOpacity={unavailable ? 1 : 0.75}
+                          >
+                            {selected && !unavailable && (
+                              <View style={styles.classCheckmark}>
+                                <Ionicons name="checkmark-circle" size={14} color={colors.accentOrange} />
+                              </View>
+                            )}
+                            <MaterialCommunityIcons
+                              name={icon}
+                              size={28}
+                              color={unavailable ? colors.textMuted : selected ? colors.accentOrange : colors.textSecondary}
+                              style={styles.classIcon}
+                            />
+                            <Text style={[styles.classCardName, selected && !unavailable && styles.classCardNameSelected, unavailable && styles.classCardNameUnavailable]}>
+                              {vc.name}
+                            </Text>
+                            <Text style={[styles.classCardSeats, selected && !unavailable && styles.classCardSeatsSelected]}>
+                              {vc.capacity} seats
+                            </Text>
+                            {fare != null && (
+                              <Text style={[styles.classCardFare, selected && !unavailable && styles.classCardFareSelected, unavailable && styles.classCardFareUnavailable]}>
+                                {unavailable ? "Unavailable" : `$${fare.toFixed(2)}`}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
 
                 {/* Discount code — hidden once a verified student discount
                     is already auto-applied, since it always wins over a code */}
@@ -2305,6 +2451,71 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       fontWeight: "500",
       flex: 1,
     },
+
+    classSection: {
+      marginBottom: 12,
+      marginHorizontal: -16,
+    },
+    classScroll: {
+      paddingHorizontal: 16,
+      gap: 8,
+    },
+    classCard: {
+      width: 112,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 1.5,
+      borderColor: colors.borderStrong,
+      paddingTop: 9,
+      paddingBottom: 8,
+      paddingHorizontal: 10,
+      alignItems: "center",
+      position: "relative",
+      shadowColor: "#000",
+      shadowOpacity: 0.08,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 2,
+    },
+    classCardSelected: {
+      borderColor: colors.accentOrange,
+      backgroundColor: "rgba(232,80,10,0.06)",
+    },
+    classCardUnavailable: {
+      opacity: 0.4,
+    },
+    classCheckmark: {
+      position: "absolute",
+      top: 7,
+      right: 7,
+    },
+    classIcon: {
+      marginBottom: 5,
+    },
+    classCardName: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.textPrimary,
+      marginBottom: 1,
+      textAlign: "center",
+      letterSpacing: 0.1,
+    },
+    classCardNameSelected: { color: colors.accentOrange },
+    classCardNameUnavailable: { color: colors.textMuted },
+    classCardSeats: {
+      fontSize: 10,
+      color: colors.textMuted,
+      marginBottom: 6,
+    },
+    classCardSeatsSelected: { color: "rgba(232,80,10,0.6)" },
+    classCardFare: {
+      fontSize: 15,
+      fontWeight: "800",
+      color: colors.textPrimary,
+      letterSpacing: -0.4,
+    },
+    classCardFareSelected: { color: colors.accentOrange },
+    classCardFareUnavailable: { fontSize: 11, fontWeight: "600", color: colors.textMuted, letterSpacing: 0 },
 
     fareRow: {
       flexDirection: "row",

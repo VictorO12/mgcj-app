@@ -121,10 +121,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function signOut() {
     loadingHeldRef.current = false;
     const userId = sessionRef.current?.user?.id;
-    // Clear local token before nulling DB so the Realtime handler doesn't
-    // mistake a deliberate sign-out for a kicked-out-by-another-device event.
-    await SecureStore.deleteItemAsync("@driver_device_token");
-    if (userId) {
+    if (profile?.role === "driver" && userId) {
+      // Clear local token before nulling DB so the Realtime handler doesn't
+      // mistake a deliberate sign-out for a kicked-out-by-another-device event.
+      await SecureStore.deleteItemAsync("@driver_device_token").catch(() => {});
       await supabase.from("drivers").update({ device_token: null }).eq("id", userId);
     }
     await supabase.auth.signOut();

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,25 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+
+interface VehicleClass {
+  id: string;
+  name: string;
+  capacity: number;
+  surcharge_percent: number;
+}
+
+const VAN_KEYWORDS = ['caravan', 'sienna', 'odyssey', 'transit', 'sprinter', 'express', 'savana', 'villager', 'entourage', 'sedona', 'routan', 'quest', 'windstar', 'promaster', 'econoline'];
+const SUV_KEYWORDS = ['explorer', 'tahoe', 'suburban', 'yukon', 'expedition', 'navigator', 'pathfinder', 'armada', 'sequoia', '4runner', 'highlander', 'pilot', 'traverse', 'enclave', 'acadia', 'terrain', 'equinox', 'escape', 'edge', 'flex', 'cx-9', 'qx', 'mdx', 'rdx', 'xt5', 'xt6', 'rav4', 'forester', 'outback', 'ascent', 'santa fe', 'tucson', 'telluride', 'sorento', 'palisade'];
+
+function suggestClass(model: string, classes: VehicleClass[]): VehicleClass | null {
+  if (classes.length <= 1) return classes[0] ?? null;
+  const m = model.toLowerCase();
+  let targetName = 'Sedan';
+  if (VAN_KEYWORDS.some(w => m.includes(w))) targetName = 'Van';
+  else if (SUV_KEYWORDS.some(w => m.includes(w))) targetName = 'SUV';
+  return classes.find(c => c.name.toLowerCase() === targetName.toLowerCase()) ?? classes[0];
+}
 
 interface Props {
   onComplete: () => void;
@@ -78,6 +97,34 @@ export default function DriverSetupScreen({ onComplete }: Props) {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const [vehicleClasses, setVehicleClasses] = useState<VehicleClass[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
+  const [classTouched, setClassTouched] = useState(false);
+
+  useEffect(() => {
+    if (!profile?.company_id) return;
+    supabase
+      .from("vehicle_classes")
+      .select("id, name, capacity, surcharge_percent")
+      .eq("company_id", profile.company_id)
+      .eq("is_active", true)
+      .order("display_order")
+      .then(({ data }) => {
+        const classes = data ?? [];
+        setVehicleClasses(classes);
+        if (classes.length === 1) setSelectedClassId(classes[0].id);
+      });
+  }, [profile?.company_id]);
+
+  function handleModelSelect(model: string) {
+    setVehicleModel(model);
+    setShowModelPicker(false);
+    if (!classTouched && vehicleClasses.length > 1) {
+      const suggested = suggestClass(model, vehicleClasses);
+      if (suggested) setSelectedClassId(suggested.id);
+    }
+  }
+
   async function handleComplete() {
     if (!vehicleMake.trim()) {
       Alert.alert("Missing info", "Please select your vehicle make.");
@@ -91,6 +138,10 @@ export default function DriverSetupScreen({ onComplete }: Props) {
       Alert.alert("Missing info", "Please enter your license plate number.");
       return;
     }
+    if (vehicleClasses.length > 1 && !selectedClassId) {
+      Alert.alert("Missing info", "Please select your vehicle class.");
+      return;
+    }
     if (!profile) return;
 
     setLoading(true);
@@ -99,7 +150,9 @@ export default function DriverSetupScreen({ onComplete }: Props) {
       .update({
         vehicle_make: vehicleMake.trim(),
         vehicle_model: vehicleModel.trim(),
+        vehicle_year: year ? parseInt(year) : null,
         plate_number: plateNumber.trim().toUpperCase(),
+        vehicle_class_id: selectedClassId ?? null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", profile.id);
@@ -211,7 +264,7 @@ export default function DriverSetupScreen({ onComplete }: Props) {
                       <TouchableOpacity
                         key={model}
                         style={[styles.pickerItem, vehicleModel === model && styles.pickerItemSelected]}
-                        onPress={() => { setVehicleModel(model); setShowModelPicker(false); }}
+                        onPress={() => handleModelSelect(model)}
                       >
                         <Text style={[styles.pickerItemText, vehicleModel === model && styles.pickerItemTextSelected]}>
                           {model}
@@ -253,6 +306,30 @@ export default function DriverSetupScreen({ onComplete }: Props) {
               maxLength={8}
             />
           </View>
+
+          {/* Vehicle class — only shown when company has more than one */}
+          {vehicleClasses.length > 1 && (
+            <View style={styles.inputWrap}>
+              <Text style={styles.label}>Vehicle class</Text>
+              <View style={styles.classPicker}>
+                {vehicleClasses.map((vc) => (
+                  <TouchableOpacity
+                    key={vc.id}
+                    style={[styles.classOption, selectedClassId === vc.id && styles.classOptionSelected]}
+                    onPress={() => { setSelectedClassId(vc.id); setClassTouched(true); }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.className, selectedClassId === vc.id && styles.classNameSelected]}>
+                      {vc.name}
+                    </Text>
+                    <Text style={[styles.classCapacity, selectedClassId === vc.id && styles.classCapacitySelected]}>
+                      {vc.capacity} seats
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
 
         {/* Preview card */}
@@ -424,6 +501,39 @@ const makeStyles = (colors: Colors) =>
     previewInitials: { fontSize: 14, fontWeight: "700", color: colors.avatarText },
     previewName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
     previewVehicle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+
+    classPicker: {
+      flexDirection: "row",
+      gap: 8,
+      flexWrap: "wrap",
+    },
+    classOption: {
+      flex: 1,
+      minWidth: 80,
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.borderStrong,
+      paddingVertical: 12,
+      paddingHorizontal: 10,
+      alignItems: "center",
+    },
+    classOptionSelected: {
+      borderColor: colors.accentGreen,
+      backgroundColor: "rgba(29,158,117,0.08)",
+    },
+    className: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
+    classNameSelected: { color: colors.accentGreen },
+    classCapacity: {
+      fontSize: 11,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    classCapacitySelected: { color: colors.accentGreen },
 
     btn: {
       backgroundColor: colors.accentGreen,
