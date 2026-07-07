@@ -119,7 +119,7 @@ async function releaseRide(ride: any, now: Date) {
     .not('current_lng', 'is', null)
 
   if (ride.vehicle_class_id) {
-    driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
+    driversQuery = driversQuery.or(`vehicle_class_id.eq.${ride.vehicle_class_id},vehicle_class_id.is.null`)
   }
 
   const [{ data: allDrivers }, { data: busyRides }] = await Promise.all([
@@ -390,7 +390,7 @@ async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
 
   if (!driver?.is_active) return false
   if (driver.company_id !== ride.company_id) return false
-  if (ride.vehicle_class_id && driver.vehicle_class_id !== ride.vehicle_class_id) return false
+  if (ride.vehicle_class_id && driver.vehicle_class_id !== null && driver.vehicle_class_id !== ride.vehicle_class_id) return false
 
   const { data: busyRides } = await supabase.from('rides')
     .select('id')

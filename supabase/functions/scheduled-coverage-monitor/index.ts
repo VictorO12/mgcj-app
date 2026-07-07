@@ -82,7 +82,7 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
     .eq('is_deleted', false)
 
   if (ride.vehicle_class_id) {
-    q = q.eq('vehicle_class_id', ride.vehicle_class_id)
+    q = q.or(`vehicle_class_id.eq.${ride.vehicle_class_id},vehicle_class_id.is.null`)
   }
 
   const { data: roster } = await q
