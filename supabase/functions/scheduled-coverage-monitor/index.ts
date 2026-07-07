@@ -70,9 +70,9 @@ async function processRide(ride: any, now: Date) {
     console.log(`[ride ${ride.id}] coverage ${current} → ${newCoverage}`)
   }
 
-  if (degraded) {
-    await alertDispatch(ride, newCoverage, minsUntil)
-  }
+  // Degradation is written to rides.coverage_status above.
+  // Dashboard reads it via Realtime and shows an in-app toast — no push needed.
+  void degraded
 }
 
 async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'covered'> {
@@ -100,50 +100,6 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
   }
 
   return activeCount > 0 ? 'covered' : 'at_risk'
-}
-
-async function alertDispatch(ride: any, newCoverage: string, minsUntil: number) {
-  if (!ride.company_id) return
-
-  const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
-  })
-
-  let title: string
-  let body: string
-  if (newCoverage === 'uncovered') {
-    title = '🚨 Scheduled ride — no eligible drivers'
-    body  = `${when} · ${ride.pickup_address} — no driver of this class in fleet`
-  } else {
-    title = '⚠️ Scheduled ride at risk'
-    body  = ride.preferred_driver_exclusive
-      ? `${when} · ${ride.pickup_address} — exclusive driver is offline`
-      : `${when} · ${ride.pickup_address} — no active drivers currently online`
-  }
-
-  const { data: admins } = await supabase.from('profiles')
-    .select('push_token')
-    .eq('role', 'admin')
-    .eq('company_id', ride.company_id)
-    .not('push_token', 'is', null)
-
-  for (const admin of admins ?? []) {
-    await sendPush(admin.push_token, title, body,
-      { rideId: ride.id, type: 'coverage_degraded', coverage: newCoverage })
-  }
-  console.log(`[ride ${ride.id}] degradation alert → ${newCoverage} (${minsUntil.toFixed(0)} min out), notified ${admins?.length ?? 0} admin(s)`)
-}
-
-async function sendPush(token: string | null | undefined, title: string, body: string, data: Record<string, unknown>) {
-  if (!token) return
-  try {
-    await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
-    })
-  } catch (e) { console.error('[push]', e) }
 }
 
 function json(body: unknown, status = 200) {
