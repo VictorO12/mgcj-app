@@ -506,7 +506,7 @@ async function sendPassengerReminders(now: Date) {
       hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
     })
 
-    if (!ride.notified_30min && minsUntil <= 31 && minsUntil > 14) {
+    if (!ride.notified_30min && minsUntil <= 31 && minsUntil > 16) {
       if (pax?.push_token) {
         await sendPush(pax.push_token,
           '⏰ Ride in 30 minutes',
