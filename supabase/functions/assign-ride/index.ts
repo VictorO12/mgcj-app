@@ -78,12 +78,18 @@ async function notifyDispatchNoDrivers(rideId: string, pickupAddress: string, co
   console.log(`Notified ${notifications.length} dispatcher(s) — no drivers available`)
 }
 
+const ARRIVAL_BUFFER_MINS = 3
+
 // ── Pick the closest driver from a candidate pool ────────────
+// Returns winnerId and their drive time in minutes.
+// For scheduled rides, always runs the DM call even for a single candidate
+// so leave_by can be accurately stamped.
 async function pickWinner(
   candidates: { id: string; current_lat: number; current_lng: number; push_token: string }[],
   pickupLat: number,
-  pickupLng: number
-): Promise<string> {
+  pickupLng: number,
+  isScheduled: boolean
+): Promise<{ winnerId: string; driveMins: number | null }> {
   const withDistance = candidates
     .map(d => ({
       ...d,
@@ -97,9 +103,10 @@ async function pickWinner(
     withDistance.map(d => `${d.id.slice(0, 8)} (${d.straightLineKm.toFixed(1)}km)`).join(', ')
   )
 
-  if (withDistance.length === 1) {
+  // Skip DM for a single immediate-ride candidate — no leave_by needed
+  if (withDistance.length === 1 && !isScheduled) {
     console.log(`Single candidate: ${withDistance[0].id.slice(0, 8)}`)
-    return withDistance[0].id
+    return { winnerId: withDistance[0].id, driveMins: null }
   }
 
   const driveTimes = await getDriveTimes(
@@ -110,7 +117,7 @@ async function pickWinner(
 
   if (driveTimes.size === 0) {
     console.warn('Distance Matrix failed — falling back to Haversine')
-    return withDistance[0].id
+    return { winnerId: withDistance[0].id, driveMins: null }
   }
 
   let bestTime = Infinity
@@ -120,7 +127,7 @@ async function pickWinner(
     if (seconds < bestTime) { bestTime = seconds; winnerId = id }
   }
   console.log(`Winner: ${winnerId.slice(0, 8)} at ${Math.round(bestTime / 60)} min`)
-  return winnerId
+  return { winnerId, driveMins: bestTime / 60 }
 }
 
 async function assignRide(
@@ -268,10 +275,24 @@ async function assignRide(
   console.log(`Pass ${pass}: ${candidatePool.length} candidate(s)`)
 
   // ── Pick closest driver ──────────────────────────────────────
-  const winnerId = await pickWinner(candidatePool, ride.pickup_lat, ride.pickup_lng)
+  const { winnerId, driveMins } = await pickWinner(
+    candidatePool, ride.pickup_lat, ride.pickup_lng, !!ride.scheduled_at
+  )
+
+  // Stamp leave_by for scheduled rides: pickup_time − drive_time − arrival_buffer.
+  // Conservative 15-min fallback when DM was unavailable.
+  const now = new Date().toISOString()
+  let leaveBy: string | null = null
+  let pickupEtaMins: number | null = null
+  if (ride.scheduled_at) {
+    const effectiveDriveMins = driveMins ?? 15
+    leaveBy = new Date(
+      new Date(ride.scheduled_at).getTime() - (effectiveDriveMins + ARRIVAL_BUFFER_MINS) * 60_000
+    ).toISOString()
+    pickupEtaMins = Math.round(effectiveDriveMins)
+  }
 
   // ── §5.4: Assign — set offered_at + assignment_source, optimistic lock ──
-  const now = new Date().toISOString()
   const { data: assignData, error: assignError } = await supabase
     .from('rides')
     .update({
@@ -279,6 +300,7 @@ async function assignRide(
       status: 'offered',
       offered_at: now,
       assignment_source: 'auto_offer',
+      ...(leaveBy ? { leave_by: leaveBy, pickup_eta_mins: pickupEtaMins } : {}),
     })
     .eq('id', rideId)
     .eq('status', 'pending')

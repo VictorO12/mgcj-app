@@ -1,11 +1,8 @@
-// §9: scheduled-release — the release engine. Runs every 2 minutes.
-// Picks up status='scheduled' rides within RELEASE_LEAD_MINS of departure
-// and injects them into the existing on-demand dispatch path (assign-ride).
-// From the moment of release a scheduled ride is indistinguishable from an
-// immediate ride — it inherits best-available selection, the 60s offer/ack
-// handshake, and pool fallthrough via reassign-stale-rides.
+// §9 (revised): scheduled-release — dynamic release timing.
+// Replaces fixed RELEASE_LEAD_MINS=30 with per-ride drive-time-based threshold.
+// Also handles departure reminders (§5.4) for backgrounded drivers.
 //
-// Cron: */2 * * * * (register in Supabase dashboard pg_cron)
+// Cron: */2 * * * * (two entries registered in pg_cron)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
@@ -14,20 +11,59 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL      = 'https://exp.host/--/api/v2/push/send'
-const ASSIGN_RIDE_URL    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
-const STRIPE_API         = 'https://api.stripe.com/v1'
-const STRIPE_SECRET_KEY  = Deno.env.get('STRIPE_SECRET_KEY') ?? ''
-const RELEASE_LEAD_MINS  = 30  // configurable per-company later
+const EXPO_PUSH_URL     = 'https://exp.host/--/api/v2/push/send'
+const ASSIGN_RIDE_URL   = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
+const STRIPE_API        = 'https://api.stripe.com/v1'
+const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? ''
+const MAPS_KEY          = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
+
+// §2 constants — global defaults, per-company tuning deferred
+const MAX_LEAD_MINS       = 75  // fetch window width AND release ceiling
+const MIN_LEAD_MINS       = 10  // release floor
+const POOL_SLICE_K        = 3   // Kth-nearest driver for churn slack
+const CHURN_BUFFER_MINS   = 8   // runway for decline / no-ack cycles
+const ARRIVAL_BUFFER_MINS = 3   // driver arrives slightly before pickup time
+
+function clamp(val: number, min: number, max: number): number {
+  return Math.min(Math.max(val, min), max)
+}
+
+// Batch Distance Matrix call — same pattern as assign-ride's getDriveTimes.
+async function getDriveTimes(
+  origins: { lat: number; lng: number; id: string }[],
+  destLat: number,
+  destLng: number
+): Promise<Map<string, number>> {
+  if (origins.length === 0) return new Map()
+  const originsStr = origins.map(o => `${o.lat},${o.lng}`).join('|')
+  const dest       = `${destLat},${destLng}`
+  const url =
+    `https://maps.googleapis.com/maps/api/distancematrix/json` +
+    `?origins=${encodeURIComponent(originsStr)}` +
+    `&destinations=${encodeURIComponent(dest)}` +
+    `&key=${MAPS_KEY}` +
+    `&mode=driving`
+  const res  = await fetch(url)
+  const data = await res.json()
+  const result = new Map<string, number>()
+  if (data.status !== 'OK') {
+    console.error('[DM error]', data.status)
+    return result
+  }
+  data.rows.forEach((row: any, i: number) => {
+    const el = row.elements[0]
+    if (el.status === 'OK') result.set(origins[i].id, el.duration.value) // seconds
+  })
+  return result
+}
 
 Deno.serve(async () => {
   try {
-    const now      = new Date()
-    const windowEnd = new Date(now.getTime() + RELEASE_LEAD_MINS * 60_000).toISOString()
+    const now       = new Date()
+    const windowEnd = new Date(now.getTime() + MAX_LEAD_MINS * 60_000).toISOString()
     console.log(`[scheduled-release] now=${now.toISOString()} window=${windowEnd}`)
 
-    // Only rides still in holding — released rides are pending/offered/assigned
-    // and don't come back through this query.
+    // §3.1: widen fetch window to MAX_LEAD_MINS so far-fleet rides are visible early
     const { data: rides, error } = await supabase
       .from('rides')
       .select('*')
@@ -40,32 +76,136 @@ Deno.serve(async () => {
       return json({ error: error.message }, 500)
     }
 
-    console.log(`[scheduled-release] ${rides?.length ?? 0} ride(s) to release`)
+    console.log(`[scheduled-release] ${rides?.length ?? 0} ride(s) in window`)
 
     for (const ride of rides ?? []) {
       await releaseRide(ride, now)
     }
 
-    return json({ ok: true, released: rides?.length ?? 0 })
+    // §5.4: push backgrounded drivers when leave_by arrives
+    await sendDepartureReminders(now)
+
+    return json({ ok: true, checked: rides?.length ?? 0 })
   } catch (err) {
     console.error('[scheduled-release] fatal:', err)
     return json({ error: String(err) }, 500)
   }
 })
 
+// ── §3.2: Per-ride release decision ──────────────────────────
 async function releaseRide(ride: any, now: Date) {
-  console.log(`[ride ${ride.id}] releasing — ${ride.preferred_driver_id ? (ride.preferred_driver_exclusive ? 'exclusive' : 'soft preferred') : 'no preferred'}`)
+  const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
 
-  // ── §9.1: Ensure PaymentIntent for card rides ────────────────
+  // §9.1: Ensure PaymentIntent for card rides before release
   if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id && ride.payment_status !== 'failed') {
     const piOk = await ensurePaymentIntent(ride)
     if (!piOk) {
-      // Payment failed — warn + continue (car still comes, default policy)
       console.warn(`[ride ${ride.id}] PI creation failed — proceeding as cash-fallback`)
     }
   }
 
-  // ── §9.2: Branch on preassignment ───────────────────────────
+  // Build available driver pool (same eligibility criteria as assign-ride)
+  let driversQuery = supabase
+    .from('drivers')
+    .select('id, current_lat, current_lng')
+    .eq('company_id', ride.company_id)
+    .eq('is_active', true)
+    .eq('is_deleted', false)
+    .not('current_lat', 'is', null)
+    .not('current_lng', 'is', null)
+
+  if (ride.vehicle_class_id) {
+    driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
+  }
+
+  const [{ data: allDrivers }, { data: busyRides }] = await Promise.all([
+    driversQuery,
+    supabase
+      .from('rides')
+      .select('driver_id')
+      .eq('company_id', ride.company_id)
+      .in('status', ['assigned', 'driver_arriving', 'in_progress'])
+      .not('driver_id', 'is', null),
+  ])
+
+  const busySet          = new Set((busyRides ?? []).map((r: any) => r.driver_id))
+  const availableDrivers = (allDrivers ?? []).filter((d: any) => !busySet.has(d.id))
+
+  // §3.3: empty pool fallback — bias early
+  if (availableDrivers.length === 0) {
+    if (minsUntil > MIN_LEAD_MINS) {
+      console.log(`[ride ${ride.id}] no drivers — holding (${minsUntil.toFixed(0)} min out)`)
+      return
+    }
+    // Inside MIN_LEAD: force-release so assign-ride can fire the no-drivers alert
+    // and dispatch can intervene manually
+    console.log(`[ride ${ride.id}] no drivers + inside MIN_LEAD — force-releasing`)
+    await executeRelease(ride, null)
+    return
+  }
+
+  const { threshold, targetDriveMins } = await computeReleaseThreshold(ride, availableDrivers)
+  console.log(
+    `[ride ${ride.id}] minsUntil=${minsUntil.toFixed(1)} ` +
+    `threshold=${threshold.toFixed(1)} targetDrive=${targetDriveMins?.toFixed(1) ?? 'null'}`
+  )
+
+  if (minsUntil <= threshold) {
+    await executeRelease(ride, targetDriveMins)
+  } else {
+    console.log(`[ride ${ride.id}] not yet — holding`)
+  }
+}
+
+// ── Compute the per-ride release threshold ────────────────────
+async function computeReleaseThreshold(
+  ride: any,
+  availableDrivers: any[]
+): Promise<{ threshold: number; targetDriveMins: number | null }> {
+
+  if (ride.preferred_driver_id) {
+    // Time off preferred driver's location regardless of viability.
+    // Exclusive + not viable still gets offered to preferred — timing still uses their drive time.
+    const { data: prefDriver } = await supabase
+      .from('drivers')
+      .select('current_lat, current_lng')
+      .eq('id', ride.preferred_driver_id)
+      .maybeSingle()
+
+    if (prefDriver?.current_lat && prefDriver?.current_lng) {
+      const driveTimes = await getDriveTimes(
+        [{ lat: prefDriver.current_lat, lng: prefDriver.current_lng, id: ride.preferred_driver_id }],
+        ride.pickup_lat, ride.pickup_lng
+      )
+      if (driveTimes.size === 0) return { threshold: MAX_LEAD_MINS, targetDriveMins: null }
+      const driveMins = (driveTimes.get(ride.preferred_driver_id) ?? 0) / 60
+      return {
+        threshold: clamp(driveMins + CHURN_BUFFER_MINS, MIN_LEAD_MINS, MAX_LEAD_MINS),
+        targetDriveMins: driveMins,
+      }
+    }
+    // Preferred driver offline / no location → release early
+    return { threshold: MAX_LEAD_MINS, targetDriveMins: null }
+  }
+
+  // Pool: batch DM, sort ascending, pick Kth-nearest for churn slack
+  const driveTimes = await getDriveTimes(
+    availableDrivers.map((d: any) => ({ lat: d.current_lat, lng: d.current_lng, id: d.id })),
+    ride.pickup_lat, ride.pickup_lng
+  )
+  if (driveTimes.size === 0) return { threshold: MAX_LEAD_MINS, targetDriveMins: null }
+
+  const sorted  = [...driveTimes.values()].sort((a, b) => a - b)
+  const kthIdx  = Math.min(POOL_SLICE_K, sorted.length) - 1
+  const kthMins = sorted[kthIdx] / 60
+  return {
+    threshold: clamp(kthMins + CHURN_BUFFER_MINS, MIN_LEAD_MINS, MAX_LEAD_MINS),
+    targetDriveMins: kthMins,
+  }
+}
+
+// ── Dispatch to the right release path ───────────────────────
+async function executeRelease(ride: any, targetDriveMins: number | null) {
   if (!ride.preferred_driver_id) {
     await releaseToPool(ride)
     return
@@ -74,16 +214,11 @@ async function releaseRide(ride: any, now: Date) {
   const viable = await isDriverViable(ride.preferred_driver_id, ride)
 
   if (ride.preferred_driver_exclusive) {
-    // Exclusive: always offer to preferred. If not viable, alert dispatch
-    // and mark at_risk — but still offer (never auto-substitute a stranger).
-    await releaseToPreferred(ride, viable)
-    if (!viable) {
-      await markAtRiskAndAlert(ride, 'exclusive_not_viable_at_release')
-    }
+    await releaseToPreferred(ride, viable, targetDriveMins)
+    if (!viable) await markAtRiskAndAlert(ride, 'exclusive_not_viable_at_release')
   } else {
-    // Soft preferred: offer to preferred if viable, fall to pool otherwise.
     if (viable) {
-      await releaseToPreferred(ride, true)
+      await releaseToPreferred(ride, true, targetDriveMins)
     } else {
       console.log(`[ride ${ride.id}] soft preferred not viable — falling to pool`)
       await releaseToPool(ride)
@@ -91,9 +226,41 @@ async function releaseRide(ride: any, now: Date) {
   }
 }
 
-// ── §9.2 no-preferred path ───────────────────────────────────
+// ── §5.4: Push backgrounded drivers when leave_by arrives ────
+async function sendDepartureReminders(now: Date) {
+  const { data: rides } = await supabase
+    .from('rides')
+    .select('id, driver_id, pickup_address')
+    .eq('status', 'assigned')
+    .not('scheduled_at', 'is', null)
+    .not('leave_by', 'is', null)
+    .lte('leave_by', now.toISOString())
+    .eq('departure_notified', false)
+
+  if (!rides || rides.length === 0) return
+  console.log(`[departure-reminder] ${rides.length} ride(s)`)
+
+  for (const ride of rides) {
+    const { data: driver } = await supabase
+      .from('drivers').select('push_token').eq('id', ride.driver_id).maybeSingle()
+
+    if (driver?.push_token) {
+      await sendPush(
+        driver.push_token,
+        '🚗 Time to head out',
+        `Head to ${ride.pickup_address} now`,
+        { rideId: ride.id, type: 'departure_reminder' }
+      )
+    }
+
+    await supabase.from('rides').update({ departure_notified: true }).eq('id', ride.id)
+    console.log(`[ride ${ride.id}] departure reminder sent`)
+  }
+}
+
+// ── Pool release: flip to pending, invoke assign-ride ────────
+// assign-ride stamps leave_by on the winning driver
 async function releaseToPool(ride: any) {
-  // Optimistic lock — prevents double-release if two ticks overlap
   const { data, error } = await supabase
     .from('rides')
     .update({ status: 'pending', offered_at: null })
@@ -120,18 +287,25 @@ async function releaseToPool(ride: any) {
   console.log(`[ride ${ride.id}] assign-ride result:`, JSON.stringify(result))
 }
 
-// ── §9.2 preferred (soft viable, or exclusive any-viability) path ───────────
-async function releaseToPreferred(ride: any, viable: boolean) {
+// ── Preferred direct-offer: flip to offered, stamp leave_by ──
+async function releaseToPreferred(ride: any, viable: boolean, targetDriveMins: number | null) {
   const now = new Date().toISOString()
 
-  // Optimistic lock — guard on status='scheduled'
+  // Conservative 15-min fallback when DM was unavailable
+  const effectiveDriveMins = targetDriveMins ?? 15
+  const leaveBy = new Date(
+    new Date(ride.scheduled_at).getTime() - (effectiveDriveMins + ARRIVAL_BUFFER_MINS) * 60_000
+  ).toISOString()
+
   const { data, error } = await supabase
     .from('rides')
     .update({
-      status: 'offered',
-      driver_id: ride.preferred_driver_id,
-      offered_at: now,
+      status:            'offered',
+      driver_id:         ride.preferred_driver_id,
+      offered_at:        now,
       assignment_source: 'preferred',
+      leave_by:          leaveBy,
+      pickup_eta_mins:   Math.round(effectiveDriveMins),
     })
     .eq('id', ride.id)
     .eq('status', 'scheduled')
@@ -142,9 +316,11 @@ async function releaseToPreferred(ride: any, viable: boolean) {
     return
   }
 
-  console.log(`[ride ${ride.id}] offered to preferred driver ${ride.preferred_driver_id.slice(0, 8)} (viable=${viable})`)
+  console.log(
+    `[ride ${ride.id}] offered to preferred ${ride.preferred_driver_id.slice(0, 8)} ` +
+    `(viable=${viable} leave_by=${leaveBy})`
+  )
 
-  // Push the offer to the preferred driver
   const { data: prefDriver } = await supabase.from('drivers')
     .select('push_token').eq('id', ride.preferred_driver_id).maybeSingle()
 
@@ -162,25 +338,23 @@ async function releaseToPreferred(ride: any, viable: boolean) {
       '🚗 Your scheduled ride is starting',
       `${passengerName} · ${when} · ${ride.pickup_address} → ${ride.dropoff_address} · ${fareText}`,
       {
-        rideId: ride.id,
-        type: 'ride_assigned',
-        pickupAddress: ride.pickup_address,
+        rideId:         ride.id,
+        type:           'ride_assigned',
+        pickupAddress:  ride.pickup_address,
         dropoffAddress: ride.dropoff_address,
-        fareEstimate: ride.fare_estimate,
+        fareEstimate:   ride.fare_estimate,
         passengerName,
-        scheduledAt: ride.scheduled_at,
+        scheduledAt:    ride.scheduled_at,
       }
     )
   }
 }
 
-// ── Mark at_risk and alert dispatch (once per degradation) ──────
+// ── Mark at_risk and alert dispatch (once per degradation) ───
 async function markAtRiskAndAlert(ride: any, reason: string) {
   const wasAlreadyAtRisk = ride.coverage_status === 'at_risk'
 
-  await supabase.from('rides')
-    .update({ coverage_status: 'at_risk' })
-    .eq('id', ride.id)
+  await supabase.from('rides').update({ coverage_status: 'at_risk' }).eq('id', ride.id)
 
   if (!wasAlreadyAtRisk && ride.company_id) {
     const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
@@ -204,7 +378,6 @@ async function markAtRiskAndAlert(ride: any, reason: string) {
 }
 
 // ── Check if a driver is viable for this ride ─────────────────
-// Viable = active, same company, right vehicle class, not on a committed ride.
 async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
   const { data: driver } = await supabase.from('drivers')
     .select('id, is_active, company_id, vehicle_class_id')
@@ -225,9 +398,6 @@ async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
 }
 
 // ── §9.1: Create the manual-capture PaymentIntent ─────────────
-// Sets BOTH stripe_payment_intent_id AND payment_status='pending' (§10).
-// Includes transfer_data[destination] for Stripe Connect companies so
-// capture-payment's transfer_data[amount] doesn't mismatch.
 async function ensurePaymentIntent(ride: any): Promise<boolean> {
   const { data: pax } = await supabase.from('profiles')
     .select('stripe_customer_id, push_token').eq('id', ride.passenger_id).maybeSingle()
@@ -261,25 +431,25 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
 
   const totalCents = Math.round((ride.fare_estimate ?? 0) * 100)
   const piBody: Record<string, string> = {
-    amount: totalCents.toString(),
-    currency: 'cad',
-    customer: pax.stripe_customer_id,
-    payment_method: stripePaymentMethodId,
-    capture_method: 'manual',
-    confirm: 'true',
-    'automatic_payment_methods[enabled]': 'true',
+    amount:                                       totalCents.toString(),
+    currency:                                     'cad',
+    customer:                                     pax.stripe_customer_id,
+    payment_method:                               stripePaymentMethodId,
+    capture_method:                               'manual',
+    confirm:                                      'true',
+    'automatic_payment_methods[enabled]':         'true',
     'automatic_payment_methods[allow_redirects]': 'never',
-    'metadata[passenger_id]': ride.passenger_id,
-    'metadata[ride_id]': ride.id,
+    'metadata[passenger_id]':                     ride.passenger_id,
+    'metadata[ride_id]':                          ride.id,
   }
   if (company?.stripe_account_id) {
     piBody['transfer_data[destination]'] = company.stripe_account_id
   }
 
-  const res = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: 'POST',
+  const res    = await fetch(`${STRIPE_API}/payment_intents`, {
+    method:  'POST',
     headers: {
-      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      Authorization:  `Bearer ${STRIPE_SECRET_KEY}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams(piBody).toString(),
@@ -297,7 +467,6 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     return false
   }
 
-  // §10: set BOTH fields so downstream chargers that guard on payment_status skip
   await supabase.from('rides')
     .update({ stripe_payment_intent_id: intent.id, payment_status: 'pending' })
     .eq('id', ride.id)
@@ -305,17 +474,25 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
   return true
 }
 
-async function sendPush(token: string | null | undefined, title: string, body: string, data: Record<string, unknown>) {
+async function sendPush(
+  token: string | null | undefined,
+  title: string,
+  body: string,
+  data: Record<string, unknown>
+) {
   if (!token) return
   try {
     await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
+      body:    JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
     })
   } catch (e) { console.error('[push]', e) }
 }
 
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }

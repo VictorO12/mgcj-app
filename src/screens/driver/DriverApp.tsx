@@ -5,6 +5,7 @@ import { useAuth } from "../../hooks/AuthContext";
 import { useDriverLocationBroadcast } from "../../hooks/useDriverLocationBroadcast";
 import DriverHomeScreen from "./DriverHomeScreen";
 import DriverActiveRideScreen from "./DriverActiveRideScreen";
+import DriverCountdownScreen from "./DriverCountdownScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
 import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
@@ -27,6 +28,8 @@ interface ActiveRide {
   passenger_phone: string | null;
   passenger_avatar_url: string | null;
   payment_method: string | null;
+  scheduled_at: string | null;
+  leave_by: string | null;
 }
 
 interface AssignedRide {
@@ -71,6 +74,7 @@ interface ConfirmedScheduledRide {
   dropoff_address: string;
   fare_estimate: number | null;
   scheduled_at: string;
+  leave_by: string | null;
   passenger_name: string | null;
 }
 
@@ -304,6 +308,12 @@ export default function DriverApp() {
           return;
         }
 
+        if (data.type === "departure_reminder") {
+          // leave_by has arrived — refresh so countdown screen shows Start button
+          await fetchActiveRide();
+          return;
+        }
+
         if (action === Notifications.DEFAULT_ACTION_IDENTIFIER) {
           await fetchAssignedRide();
           setShowAssigned(true);
@@ -317,6 +327,7 @@ export default function DriverApp() {
             })
             .eq("id", rideId)
             .eq("status", "offered");
+          // fetchActiveRide routes to countdown (scheduled) or active (immediate)
           if (!error) fetchActiveRide();
         } else if (action === "DECLINE") {
           console.log("Driver declined ride from notification:", rideId);
@@ -459,7 +470,6 @@ export default function DriverApp() {
 
   async function fetchActiveRide() {
     if (!profile) return;
-    const now = new Date().toISOString();
     const { data: rides } = await supabase
       .from("rides")
       .select("*")
@@ -493,6 +503,8 @@ export default function DriverApp() {
       passenger_phone: passenger?.phone ?? null,
       passenger_avatar_url: passenger?.avatar_url ?? null,
       payment_method: ride.payment_method ?? null,
+      scheduled_at: ride.scheduled_at ?? null,
+      leave_by: ride.leave_by ?? null,
     });
   }
 
@@ -522,6 +534,7 @@ export default function DriverApp() {
           dropoff_address: ride.dropoff_address,
           fare_estimate: ride.fare_estimate,
           scheduled_at: ride.scheduled_at,
+          leave_by: ride.leave_by ?? null,
           passenger_name: p?.name ?? null,
         };
       }),
@@ -580,19 +593,33 @@ export default function DriverApp() {
   }
 
   async function handleAcceptRide() {
-    const wasScheduled = !!assignedRide?.scheduled_at;
     setAssignedRide(null);
     setShowAssigned(false);
-    if (wasScheduled) {
-      fetchConfirmedScheduledRides();
-    } else {
-      await fetchActiveRide();
-    }
+    // Always fetch active ride — scheduled rides land on countdown screen,
+    // immediate rides land on active screen. Both paths route the same way.
+    await fetchActiveRide();
+    fetchConfirmedScheduledRides();
   }
 
   function handleDeclineRide() {
     setAssignedRide(null);
     setShowAssigned(false);
+  }
+
+  // ── Driver taps Start on countdown screen ────────────────────
+  // This is the departure go-ack — the human action that means "I am driving."
+  // The server never flips assigned → driver_arriving on a timer.
+  async function handleStartRide() {
+    if (!activeRide || !profile) return;
+    const { error } = await supabase
+      .from("rides")
+      .update({ status: "driver_arriving" })
+      .eq("id", activeRide.id)
+      .eq("driver_id", profile.id)
+      .eq("status", "assigned");
+    if (!error) {
+      await fetchActiveRide();
+    }
   }
 
   if (loadingDriver) return null;
@@ -613,6 +640,17 @@ export default function DriverApp() {
   }
 
   if (activeRide) {
+    // Accepted scheduled ride: driver is committed but not yet en route.
+    // Show countdown to leave_by, then Start button.
+    if (activeRide.scheduled_at && activeRide.status === "assigned") {
+      return (
+        <DriverCountdownScreen
+          ride={activeRide}
+          onStart={handleStartRide}
+        />
+      );
+    }
+    // Immediate rides (assigned) or any in-flight status → active ride screen
     return (
       <DriverActiveRideScreen
         key={activeRide.id}
