@@ -56,7 +56,6 @@ Deno.serve(async (req) => {
       .from('drivers')
       .select('id, is_active')
       .eq('company_id', ride.company_id)
-      .eq('is_deleted', false)
 
     if (ride.vehicle_class_id) {
       driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)

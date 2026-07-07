@@ -114,7 +114,6 @@ async function releaseRide(ride: any, now: Date) {
     .select('id, current_lat, current_lng')
     .eq('company_id', ride.company_id)
     .eq('is_active', true)
-    .eq('is_deleted', false)
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
 
