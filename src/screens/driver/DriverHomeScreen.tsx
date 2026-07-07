@@ -457,7 +457,7 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
-      {/* Active scheduled ride countdown / start card */}
+      {/* Scheduled ride countdown strip */}
       {activeScheduledRide && (() => {
         const startEnabled = !activeScheduledRide.leave_by || countdownMs === 0;
         const isLate = alreadyLateRef.current || (startEnabled && !!activeScheduledRide.leave_by);
@@ -465,55 +465,31 @@ export default function DriverHomeScreen({
         const pickupTime = new Date(activeScheduledRide.scheduled_at).toLocaleTimeString("en-CA", {
           hour: "numeric", minute: "2-digit",
         });
-        const leaveByTime = activeScheduledRide.leave_by
-          ? new Date(activeScheduledRide.leave_by).toLocaleTimeString("en-CA", {
-              hour: "numeric", minute: "2-digit",
-            })
-          : null;
         const totalSecs = Math.floor(countdownMs / 1000);
         const mm = String(Math.floor(totalSecs / 60)).padStart(2, "0");
         const ss = String(totalSecs % 60).padStart(2, "0");
+        const label = activeScheduledRide.passenger_name
+          ? `${pickupTime} · ${activeScheduledRide.passenger_name}`
+          : pickupTime;
 
         return (
-          <View style={[styles.countdownCard, { borderLeftColor: accentColor }]}>
-            <View style={styles.countdownCardTop}>
-              <Text style={[styles.countdownPickupTime, { color: accentColor }]}>
-                🗓 {pickupTime} pickup
-              </Text>
-              {isLate && startEnabled && (
-                <Text style={styles.countdownLateLabel}>Running late</Text>
-              )}
-            </View>
-            <Text style={styles.countdownRoute} numberOfLines={1}>
-              {activeScheduledRide.passenger_name
-                ? `${activeScheduledRide.passenger_name} · `
-                : ""}
-              {activeScheduledRide.pickup_address}
-            </Text>
+          <View style={[styles.countdownStrip, { borderColor: accentColor + "40" }]}>
+            <Text style={styles.countdownStripLabel} numberOfLines={1}>{label}</Text>
             {startEnabled ? (
               <TouchableOpacity
-                style={[styles.countdownStartBtn, { backgroundColor: accentColor }]}
+                style={[styles.countdownStripBtn, { backgroundColor: accentColor }]}
                 onPress={onStartRide}
                 activeOpacity={0.85}
               >
-                <Text style={styles.countdownStartBtnText}>
-                  {isLate ? "⚡ Head out now" : "On My Way"}
+                <Text style={styles.countdownStripBtnText}>
+                  {isLate ? "Head out" : "On My Way"}
                 </Text>
               </TouchableOpacity>
             ) : (
-              <View style={styles.countdownRow}>
-                <View>
-                  {leaveByTime && (
-                    <Text style={styles.countdownLeaveBy}>Leave by {leaveByTime}</Text>
-                  )}
-                  <Text style={[styles.countdownTimer, { color: accentColor }]}>
-                    {mm}:{ss}
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={onStartRide} style={styles.countdownEarlyBtn}>
-                  <Text style={styles.countdownEarlyText}>Leave early</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity style={styles.countdownStripTimerBtn} onPress={onStartRide} activeOpacity={0.7}>
+                <Text style={[styles.countdownStripTimer, { color: accentColor }]}>{mm}:{ss}</Text>
+                <Ionicons name="play-circle" size={20} color={accentColor} style={{ marginLeft: 6 }} />
+              </TouchableOpacity>
             )}
           </View>
         );
@@ -966,78 +942,50 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
     },
     onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    countdownCard: {
+    countdownStrip: {
       position: "absolute",
-      bottom: Platform.OS === "ios" ? 210 : 190,
+      bottom: Platform.OS === "ios" ? 200 : 180,
       left: 16,
       right: 16,
+      height: 48,
       backgroundColor: colors.surface,
-      borderRadius: 14,
-      borderLeftWidth: 3,
-      borderWidth: 0.5,
-      borderColor: "rgba(168,85,247,0.2)",
-      padding: 14,
+      borderRadius: 24,
+      borderWidth: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingLeft: 16,
+      paddingRight: 6,
       shadowColor: "#000",
-      shadowOpacity: 0.25,
+      shadowOpacity: 0.2,
       shadowOffset: { width: 0, height: 2 },
       shadowRadius: 8,
-      elevation: 5,
+      elevation: 4,
     },
-    countdownCardTop: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: 3,
-    },
-    countdownPickupTime: {
+    countdownStripLabel: {
+      flex: 1,
       fontSize: 13,
-      fontWeight: "700",
+      fontWeight: "500",
+      color: colors.textPrimary,
+      marginRight: 8,
     },
-    countdownLateLabel: {
-      fontSize: 11,
-      fontWeight: "600",
-      color: "#F59E0B",
-    },
-    countdownRoute: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginBottom: 12,
-    },
-    countdownRow: {
+    countdownStripTimerBtn: {
       flexDirection: "row",
       alignItems: "center",
-      justifyContent: "space-between",
+      paddingRight: 4,
     },
-    countdownLeaveBy: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginBottom: 2,
-    },
-    countdownTimer: {
-      fontSize: 36,
+    countdownStripTimer: {
+      fontSize: 16,
       fontWeight: "700",
       fontVariant: ["tabular-nums"],
-      letterSpacing: -1,
     },
-    countdownEarlyBtn: {
+    countdownStripBtn: {
+      borderRadius: 20,
       paddingVertical: 8,
       paddingHorizontal: 16,
-      borderRadius: 20,
-      borderWidth: 1,
-      borderColor: colors.border,
     },
-    countdownEarlyText: {
-      fontSize: 13,
-      color: colors.textSecondary,
-    },
-    countdownStartBtn: {
-      borderRadius: 12,
-      paddingVertical: 14,
-      alignItems: "center",
-    },
-    countdownStartBtnText: {
+    countdownStripBtnText: {
       color: "#fff",
-      fontSize: 16,
+      fontSize: 13,
       fontWeight: "700",
     },
     scheduledPanel: {
