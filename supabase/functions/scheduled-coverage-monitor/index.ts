@@ -16,8 +16,6 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
-
 // Coverage severity: higher = worse
 function severity(s: string): number {
   if (s === 'uncovered') return 2
