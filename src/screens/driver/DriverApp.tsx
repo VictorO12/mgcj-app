@@ -5,7 +5,6 @@ import { useAuth } from "../../hooks/AuthContext";
 import { useDriverLocationBroadcast } from "../../hooks/useDriverLocationBroadcast";
 import DriverHomeScreen from "./DriverHomeScreen";
 import DriverActiveRideScreen from "./DriverActiveRideScreen";
-import DriverCountdownScreen from "./DriverCountdownScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
 import AssignedRideScreen from "./AssignedRideScreen";
 import AssignedRidesListScreen from "./AssignedRidesListScreen";
@@ -639,18 +638,7 @@ export default function DriverApp() {
     );
   }
 
-  if (activeRide) {
-    // Accepted scheduled ride: driver is committed but not yet en route.
-    // Show countdown to leave_by, then Start button.
-    if (activeRide.scheduled_at && activeRide.status === "assigned") {
-      return (
-        <DriverCountdownScreen
-          ride={activeRide}
-          onStart={handleStartRide}
-        />
-      );
-    }
-    // Immediate rides (assigned) or any in-flight status → active ride screen
+  if (activeRide && !(activeRide.scheduled_at && activeRide.status === "assigned")) {
     return (
       <DriverActiveRideScreen
         key={activeRide.id}
@@ -684,6 +672,12 @@ export default function DriverApp() {
         onRideAccepted={fetchActiveRide}
         openInboxSignal={openInboxSignal}
         openChatSignal={openChatSignal}
+        activeScheduledRide={
+          activeRide?.scheduled_at && activeRide.status === "assigned"
+            ? activeRide
+            : null
+        }
+        onStartRide={handleStartRide}
       />
       {pendingRide && (
         <RideRequestSheet

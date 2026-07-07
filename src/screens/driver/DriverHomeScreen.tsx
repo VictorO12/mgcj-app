@@ -59,6 +59,17 @@ interface ConfirmedScheduledRide {
   passenger_name: string | null;
 }
 
+interface ActiveScheduledRide {
+  id: string;
+  scheduled_at: string;
+  leave_by: string | null;
+  pickup_address: string;
+  dropoff_address: string;
+  passenger_name: string | null;
+  fare_estimate: number | null;
+  payment_method: string | null;
+}
+
 interface Props {
   assignedRide: AssignedRide | null;
   onOpenAssigned: () => void;
@@ -66,6 +77,8 @@ interface Props {
   onRideAccepted: () => void;
   openInboxSignal?: number;
   openChatSignal?: number;
+  activeScheduledRide?: ActiveScheduledRide | null;
+  onStartRide?: () => void;
 }
 
 const VALLEY_REGION = {
@@ -82,6 +95,8 @@ export default function DriverHomeScreen({
   onRideAccepted,
   openInboxSignal,
   openChatSignal,
+  activeScheduledRide,
+  onStartRide,
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
@@ -105,6 +120,29 @@ export default function DriverHomeScreen({
   const [chatVisible, setChatVisible] = useState(false);
   const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } = useInboxUnreadCount();
   const { hasUnread: hasChatUnread, refetch: refetchChatUnread } = useDriverChatUnread();
+
+  const [countdownMs, setCountdownMs] = useState<number>(() => {
+    if (!activeScheduledRide?.leave_by) return 0;
+    return Math.max(0, new Date(activeScheduledRide.leave_by).getTime() - Date.now());
+  });
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Snapshot at mount — determines the "already late" label
+  const alreadyLateRef = useRef(
+    activeScheduledRide?.leave_by
+      ? new Date(activeScheduledRide.leave_by).getTime() <= Date.now()
+      : false
+  );
+
+  useEffect(() => {
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    if (!activeScheduledRide?.leave_by) { setCountdownMs(0); return; }
+    const leaveByMs = new Date(activeScheduledRide.leave_by).getTime();
+    alreadyLateRef.current = leaveByMs <= Date.now();
+    const tick = () => setCountdownMs(Math.max(0, leaveByMs - Date.now()));
+    tick();
+    countdownIntervalRef.current = setInterval(tick, 1000);
+    return () => { if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); };
+  }, [activeScheduledRide?.leave_by]);
 
   // Opened via a tapped push notification (see DriverApp's notification listener) —
   // signals are counters, not booleans, so a repeat tap re-fires even if already open.
@@ -419,8 +457,70 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
-      {/* Scheduled panel */}
-      {confirmedScheduledRides.length > 0 && (
+      {/* Active scheduled ride countdown / start card */}
+      {activeScheduledRide && (() => {
+        const startEnabled = !activeScheduledRide.leave_by || countdownMs === 0;
+        const isLate = alreadyLateRef.current || (startEnabled && !!activeScheduledRide.leave_by);
+        const accentColor = isLate ? "#F59E0B" : colors.accentPurple;
+        const pickupTime = new Date(activeScheduledRide.scheduled_at).toLocaleTimeString("en-CA", {
+          hour: "numeric", minute: "2-digit",
+        });
+        const leaveByTime = activeScheduledRide.leave_by
+          ? new Date(activeScheduledRide.leave_by).toLocaleTimeString("en-CA", {
+              hour: "numeric", minute: "2-digit",
+            })
+          : null;
+        const totalSecs = Math.floor(countdownMs / 1000);
+        const mm = String(Math.floor(totalSecs / 60)).padStart(2, "0");
+        const ss = String(totalSecs % 60).padStart(2, "0");
+
+        return (
+          <View style={[styles.countdownCard, { borderLeftColor: accentColor }]}>
+            <View style={styles.countdownCardTop}>
+              <Text style={[styles.countdownPickupTime, { color: accentColor }]}>
+                🗓 {pickupTime} pickup
+              </Text>
+              {isLate && startEnabled && (
+                <Text style={styles.countdownLateLabel}>Running late</Text>
+              )}
+            </View>
+            <Text style={styles.countdownRoute} numberOfLines={1}>
+              {activeScheduledRide.passenger_name
+                ? `${activeScheduledRide.passenger_name} · `
+                : ""}
+              {activeScheduledRide.pickup_address}
+            </Text>
+            {startEnabled ? (
+              <TouchableOpacity
+                style={[styles.countdownStartBtn, { backgroundColor: accentColor }]}
+                onPress={onStartRide}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.countdownStartBtnText}>
+                  {isLate ? "⚡ Head out now" : "On My Way"}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.countdownRow}>
+                <View>
+                  {leaveByTime && (
+                    <Text style={styles.countdownLeaveBy}>Leave by {leaveByTime}</Text>
+                  )}
+                  <Text style={[styles.countdownTimer, { color: accentColor }]}>
+                    {mm}:{ss}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={onStartRide} style={styles.countdownEarlyBtn}>
+                  <Text style={styles.countdownEarlyText}>Leave early</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        );
+      })()}
+
+      {/* Scheduled panel — hidden while the active scheduled ride card is showing */}
+      {!activeScheduledRide && confirmedScheduledRides.length > 0 && (
         <View style={styles.scheduledPanel}>
           <View style={styles.scheduledPanelHeader}>
             <Ionicons name="calendar" size={14} color={colors.accentPurple} />
@@ -866,6 +966,80 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
     },
     onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    countdownCard: {
+      position: "absolute",
+      bottom: Platform.OS === "ios" ? 210 : 190,
+      left: 16,
+      right: 16,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      borderLeftWidth: 3,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.2)",
+      padding: 14,
+      shadowColor: "#000",
+      shadowOpacity: 0.25,
+      shadowOffset: { width: 0, height: 2 },
+      shadowRadius: 8,
+      elevation: 5,
+    },
+    countdownCardTop: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 3,
+    },
+    countdownPickupTime: {
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    countdownLateLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: "#F59E0B",
+    },
+    countdownRoute: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginBottom: 12,
+    },
+    countdownRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    countdownLeaveBy: {
+      fontSize: 11,
+      color: colors.textSecondary,
+      marginBottom: 2,
+    },
+    countdownTimer: {
+      fontSize: 36,
+      fontWeight: "700",
+      fontVariant: ["tabular-nums"],
+      letterSpacing: -1,
+    },
+    countdownEarlyBtn: {
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    countdownEarlyText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+    },
+    countdownStartBtn: {
+      borderRadius: 12,
+      paddingVertical: 14,
+      alignItems: "center",
+    },
+    countdownStartBtnText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "700",
+    },
     scheduledPanel: {
       position: "absolute",
       bottom: Platform.OS === "ios" ? 210 : 190,
