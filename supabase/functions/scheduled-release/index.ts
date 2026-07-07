@@ -85,6 +85,10 @@ Deno.serve(async () => {
     // §5.4: push backgrounded drivers when leave_by arrives
     await sendDepartureReminders(now)
 
+    // Passenger T-30 / T-15 reminders — runs across all non-terminal statuses
+    // so rides that have already been released still get their reminders
+    await sendPassengerReminders(now)
+
     return json({ ok: true, checked: rides?.length ?? 0 })
   } catch (err) {
     console.error('[scheduled-release] fatal:', err)
@@ -472,6 +476,83 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     .eq('id', ride.id)
   console.log(`[ride ${ride.id}] PI created: ${intent.id}`)
   return true
+}
+
+// ── Passenger T-30 / T-15 reminders ─────────────────────────
+// Runs across all non-terminal statuses so released rides aren't missed.
+// notified_30min / notified_15min flags prevent double-sending.
+// Wide threshold (<=31, <=16) absorbs 2-min cron jitter.
+async function sendPassengerReminders(now: Date) {
+  const windowEnd = new Date(now.getTime() + 32 * 60_000).toISOString()
+
+  const { data: rides } = await supabase
+    .from('rides')
+    .select('id, passenger_id, scheduled_at, pickup_address, notified_30min, notified_15min')
+    .not('scheduled_at', 'is', null)
+    .not('passenger_id', 'is', null)
+    .gte('scheduled_at', now.toISOString())
+    .lte('scheduled_at', windowEnd)
+    .not('status', 'in', '("completed","cancelled")')
+
+  if (!rides || rides.length === 0) return
+
+  for (const ride of rides) {
+    const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
+
+    const { data: pax } = await supabase.from('profiles')
+      .select('name, phone, push_token').eq('id', ride.passenger_id).maybeSingle()
+
+    const when = new Date(ride.scheduled_at).toLocaleTimeString('en-CA', {
+      hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+    })
+
+    if (!ride.notified_30min && minsUntil <= 31 && minsUntil > 14) {
+      if (pax?.push_token) {
+        await sendPush(pax.push_token,
+          '⏰ Ride in 30 minutes',
+          `Your driver will be on the way to ${ride.pickup_address} soon`,
+          { rideId: ride.id, type: 'reminder_30min' }
+        )
+      }
+      if (pax?.phone) {
+        await sendSms(pax.phone,
+          `M&G C&J: Your ride at ${when} — your driver will be on the way to ${ride.pickup_address} very soon.`
+        )
+      }
+      await supabase.from('rides').update({ notified_30min: true }).eq('id', ride.id)
+      console.log(`[ride ${ride.id}] sent T-30 passenger reminder`)
+    }
+
+    if (!ride.notified_15min && minsUntil <= 16 && minsUntil > 0) {
+      if (pax?.push_token) {
+        await sendPush(pax.push_token,
+          '🚗 Driver heading your way soon',
+          `Be ready at ${ride.pickup_address} — your ride is at ${when}`,
+          { rideId: ride.id, type: 'reminder_15min' }
+        )
+      }
+      if (pax?.phone) {
+        await sendSms(pax.phone,
+          `M&G C&J: Your ride is at ${when}. Be ready at ${ride.pickup_address} — your driver is on the way shortly.`
+        )
+      }
+      await supabase.from('rides').update({ notified_15min: true }).eq('id', ride.id)
+      console.log(`[ride ${ride.id}] sent T-15 passenger reminder`)
+    }
+  }
+}
+
+async function sendSms(phone: string, message: string) {
+  try {
+    await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-sms`, {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization:  `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+      },
+      body: JSON.stringify({ phone, message }),
+    })
+  } catch (e) { console.error('[sms]', e) }
 }
 
 async function sendPush(
