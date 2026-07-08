@@ -63,11 +63,30 @@ interface ActiveScheduledRide {
   id: string;
   scheduled_at: string;
   leave_by: string | null;
+  pickup_lat: number | null;
+  pickup_lng: number | null;
   pickup_address: string;
   dropoff_address: string;
   passenger_name: string | null;
   fare_estimate: number | null;
   payment_method: string | null;
+}
+
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calcLeaveInMins(location: LatLng | null, ride: ActiveScheduledRide): number | null {
+  if (!location || ride.pickup_lat == null || ride.pickup_lng == null) return null;
+  const distKm = haversineKm(location.latitude, location.longitude, ride.pickup_lat, ride.pickup_lng);
+  const driveMins = (distKm / 35) * 60; // 35 km/h conservative for Annapolis Valley
+  const minsUntilPickup = (new Date(ride.scheduled_at).getTime() - Date.now()) / 60_000;
+  return Math.round(minsUntilPickup - driveMins - 3); // 3 min arrival buffer
 }
 
 interface Props {
@@ -121,28 +140,17 @@ export default function DriverHomeScreen({
   const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } = useInboxUnreadCount();
   const { hasUnread: hasChatUnread, refetch: refetchChatUnread } = useDriverChatUnread();
 
-  const [countdownMs, setCountdownMs] = useState<number>(() => {
-    if (!activeScheduledRide?.leave_by) return 0;
-    return Math.max(0, new Date(activeScheduledRide.leave_by).getTime() - Date.now());
-  });
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Snapshot at mount — determines the "already late" label
-  const alreadyLateRef = useRef(
-    activeScheduledRide?.leave_by
-      ? new Date(activeScheduledRide.leave_by).getTime() <= Date.now()
-      : false
-  );
+  const [leaveInMins, setLeaveInMins] = useState<number | null>(null);
+  const leaveCalcRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-    if (!activeScheduledRide?.leave_by) { setCountdownMs(0); return; }
-    const leaveByMs = new Date(activeScheduledRide.leave_by).getTime();
-    alreadyLateRef.current = leaveByMs <= Date.now();
-    const tick = () => setCountdownMs(Math.max(0, leaveByMs - Date.now()));
-    tick();
-    countdownIntervalRef.current = setInterval(tick, 1000);
-    return () => { if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); };
-  }, [activeScheduledRide?.leave_by]);
+    if (leaveCalcRef.current) clearInterval(leaveCalcRef.current);
+    if (!activeScheduledRide) { setLeaveInMins(null); return; }
+    const update = () => setLeaveInMins(calcLeaveInMins(location, activeScheduledRide));
+    update();
+    leaveCalcRef.current = setInterval(update, 30_000);
+    return () => { if (leaveCalcRef.current) clearInterval(leaveCalcRef.current); };
+  }, [activeScheduledRide?.id, location]);
 
   // Opened via a tapped push notification (see DriverApp's notification listener) —
   // signals are counters, not booleans, so a repeat tap re-fires even if already open.
@@ -457,40 +465,39 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
-      {/* Scheduled ride countdown strip */}
+      {/* Scheduled ride strip */}
       {activeScheduledRide && (() => {
-        const startEnabled = !activeScheduledRide.leave_by || countdownMs === 0;
-        const isLate = alreadyLateRef.current || (startEnabled && !!activeScheduledRide.leave_by);
-        const accentColor = isLate ? "#F59E0B" : colors.accentPurple;
+        const isLate = leaveInMins !== null && leaveInMins < 0;
+        const accentColor = isLate ? "#EF4444" : "#1D9E75";
         const pickupTime = new Date(activeScheduledRide.scheduled_at).toLocaleTimeString("en-CA", {
           hour: "numeric", minute: "2-digit",
         });
-        const totalSecs = Math.floor(countdownMs / 1000);
-        const mm = String(Math.floor(totalSecs / 60)).padStart(2, "0");
-        const ss = String(totalSecs % 60).padStart(2, "0");
         const label = activeScheduledRide.passenger_name
           ? `${pickupTime} · ${activeScheduledRide.passenger_name}`
           : pickupTime;
+        const statusText =
+          leaveInMins === null ? null
+          : leaveInMins > 1   ? `Leave in ${leaveInMins} min`
+          : leaveInMins >= 0  ? "Leave now"
+          :                     `${Math.abs(leaveInMins)} min late`;
 
         return (
           <View style={[styles.countdownStrip, { borderColor: accentColor + "40" }]}>
-            <Text style={styles.countdownStripLabel} numberOfLines={1}>{label}</Text>
-            {startEnabled ? (
-              <TouchableOpacity
-                style={[styles.countdownStripBtn, { backgroundColor: accentColor }]}
-                onPress={onStartRide}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.countdownStripBtnText}>
-                  {isLate ? "Head out" : "On My Way"}
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.countdownStripLabel} numberOfLines={1}>{label}</Text>
+              {statusText && (
+                <Text style={[styles.countdownStripStatus, { color: accentColor }]}>
+                  {statusText}
                 </Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={styles.countdownStripTimerBtn} onPress={onStartRide} activeOpacity={0.7}>
-                <Text style={[styles.countdownStripTimer, { color: accentColor }]}>{mm}:{ss}</Text>
-                <Ionicons name="play-circle" size={20} color={accentColor} style={{ marginLeft: 6 }} />
-              </TouchableOpacity>
-            )}
+              )}
+            </View>
+            <TouchableOpacity
+              style={[styles.countdownStripBtn, { backgroundColor: accentColor }]}
+              onPress={onStartRide}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.countdownStripBtnText}>On My Way</Text>
+            </TouchableOpacity>
           </View>
         );
       })()}
@@ -962,26 +969,19 @@ const makeStyles = (colors: Colors) =>
       elevation: 4,
     },
     countdownStripLabel: {
-      flex: 1,
       fontSize: 13,
-      fontWeight: "500",
+      fontWeight: "600",
       color: colors.textPrimary,
-      marginRight: 8,
     },
-    countdownStripTimerBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingRight: 4,
-    },
-    countdownStripTimer: {
-      fontSize: 16,
-      fontWeight: "700",
-      fontVariant: ["tabular-nums"],
+    countdownStripStatus: {
+      fontSize: 11,
+      fontWeight: "500",
+      marginTop: 1,
     },
     countdownStripBtn: {
       borderRadius: 20,
       paddingVertical: 8,
-      paddingHorizontal: 16,
+      paddingHorizontal: 14,
     },
     countdownStripBtnText: {
       color: "#fff",
