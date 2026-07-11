@@ -1675,7 +1675,9 @@ export default function PassengerHomeScreen() {
                             </Text>
                             {fare != null && (
                               <Text style={[styles.classCardFare, selected && !unavailable && styles.classCardFareSelected, unavailable && styles.classCardFareUnavailable]}>
-                                {unavailable ? "Unavailable" : `$${fare.toFixed(2)}`}
+                                {unavailable
+                                  ? "Unavailable"
+                                  : `$${(selectedPayment === "cash" ? Math.ceil(fare) : fare).toFixed(2)}`}
                               </Text>
                             )}
                           </TouchableOpacity>

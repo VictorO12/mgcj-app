@@ -161,6 +161,7 @@ export default function DriverHomeScreen({
     useDriverChatUnread();
 
   const [leaveInMins, setLeaveInMins] = useState<number | null>(null);
+  const [floatingStackHeight, setFloatingStackHeight] = useState(0);
   const leaveCalcRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -303,6 +304,8 @@ export default function DriverHomeScreen({
   const otherScheduledRides = activeScheduledRide
     ? confirmedScheduledRides.filter((r) => r.id !== activeScheduledRide.id)
     : confirmedScheduledRides;
+  const showFloatingStack =
+    (isOnline && otherScheduledRides.length > 0) || !!activeScheduledRide;
   // DriverApp unmounts this whole screen while on an active/assigned ride
   // (single conditional-return router, not an overlay stack), so the only
   // "not idle" states left to check are pending assignment + local overlays.
@@ -496,7 +499,16 @@ export default function DriverHomeScreen({
       {/* Recenter */}
       {location && (
         <TouchableOpacity
-          style={styles.recenterBtn}
+          style={[
+            styles.recenterBtn,
+            !isOnline && { bottom: styles.recenterBtn.bottom + 40 },
+            showFloatingStack && {
+              bottom:
+                (Platform.OS === "ios" ? 220 : 200) +
+                floatingStackHeight +
+                10,
+            },
+          ]}
           onPress={() =>
             mapRef.current?.animateToRegion(
               { ...location, latitudeDelta: 0.08, longitudeDelta: 0.08 },
@@ -511,8 +523,11 @@ export default function DriverHomeScreen({
       {/* Floating stack: upcoming-scheduled carousel + active countdown card,
           stacked above the bottom sheet instead of the countdown card
           replacing (and hiding) the carousel entirely. */}
-      {(otherScheduledRides.length > 0 || activeScheduledRide) && (
-        <View style={styles.floatingStack}>
+      {showFloatingStack && (
+        <View
+          style={styles.floatingStack}
+          onLayout={(e) => setFloatingStackHeight(e.nativeEvent.layout.height)}
+        >
           {activeScheduledRide &&
             (() => {
               const isLate = leaveInMins !== null && leaveInMins < 0;
@@ -590,7 +605,7 @@ export default function DriverHomeScreen({
               );
             })()}
 
-          {otherScheduledRides.length > 0 && (
+          {isOnline && otherScheduledRides.length > 0 && (
             <View style={styles.scheduledPanel}>
               <View style={styles.scheduledPanelHeader}>
                 <Ionicons

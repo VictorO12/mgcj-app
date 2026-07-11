@@ -21,6 +21,10 @@ interface RideWebhookPayload {
     dropoff_address: string;
     fare_final: number | null;
     fare_estimate: number | null;
+    pre_discount_fare: number | null;
+    discount_amount: number | null;
+    discount_type: string | null;
+    discount_code_id: string | null;
     payment_method: string;
     created_at: string;
     completed_at?: string;
@@ -73,6 +77,21 @@ Deno.serve(async (req) => {
     }
 
     const fare = ride.fare_final ?? ride.fare_estimate ?? 0;
+
+    let discountLabel: string | null = null;
+    if (ride.discount_type === "student") {
+      discountLabel = "Student discount";
+    } else if (ride.discount_type === "code" && ride.discount_code_id) {
+      const { data: discountCode } = await supabase
+        .from("discount_codes")
+        .select("code, label")
+        .eq("id", ride.discount_code_id)
+        .maybeSingle();
+      discountLabel = discountCode?.label || (discountCode?.code ? `Promo: ${discountCode.code}` : "Promo code");
+    }
+    const preDiscountFare = ride.discount_amount ? ride.pre_discount_fare ?? null : null;
+    const discountAmount = ride.discount_amount ?? null;
+
     const date = new Date(ride.created_at).toLocaleString("en-CA", {
       weekday: "long",
       year: "numeric",
@@ -93,14 +112,17 @@ Deno.serve(async (req) => {
       pickup: ride.pickup_address,
       dropoff: ride.dropoff_address,
       fare,
+      preDiscountFare,
+      discountAmount,
+      discountLabel,
       paymentMethod: ride.payment_method,
       date,
       companyName,
     });
 
-    const invoiceNumber = `INV-${ride.id.slice(0, 8).toUpperCase()}`;
-    const pdfBytes = await buildInvoicePdf({
-      invoiceNumber,
+    const receiptNumber = `RCPT-${ride.id.slice(0, 8).toUpperCase()}`;
+    const pdfBytes = await buildReceiptPdf({
+      receiptNumber,
       date: shortDate,
       passengerName: passenger.name ?? "Passenger",
       companyName,
@@ -108,6 +130,9 @@ Deno.serve(async (req) => {
       pickup: ride.pickup_address,
       dropoff: ride.dropoff_address,
       fare,
+      preDiscountFare,
+      discountAmount,
+      discountLabel,
       paymentMethod: ride.payment_method,
     });
 
@@ -126,7 +151,7 @@ Deno.serve(async (req) => {
         html,
         attachments: [
           {
-            filename: `${invoiceNumber}.pdf`,
+            filename: `${receiptNumber}.pdf`,
             content: base64Pdf,
             content_type: "application/pdf",
           },
@@ -142,8 +167,8 @@ Deno.serve(async (req) => {
 
     const resendData = await res.json().catch(() => null);
 
-    const { error: invoiceError } = await supabase.from("invoices").insert({
-      invoice_number: invoiceNumber,
+    const { error: receiptError } = await supabase.from("ride_receipts").insert({
+      receipt_number: receiptNumber,
       ride_id: ride.id,
       company_id: ride.company_id,
       passenger_name: passenger.name ?? null,
@@ -153,23 +178,26 @@ Deno.serve(async (req) => {
       pickup_address: ride.pickup_address,
       dropoff_address: ride.dropoff_address,
       fare,
+      pre_discount_fare: preDiscountFare,
+      discount_amount: discountAmount,
+      discount_label: discountLabel,
       payment_method: ride.payment_method,
       sent_at: new Date().toISOString(),
       resend_message_id: resendData?.id ?? null,
     });
-    if (invoiceError) {
-      console.error("[send-ride-receipt] invoice insert error:", invoiceError.message);
+    if (receiptError) {
+      console.error("[send-ride-receipt] receipt insert error:", receiptError.message);
     }
 
-    return new Response(JSON.stringify({ sent: true, invoice_number: invoiceNumber }), { status: 200 });
+    return new Response(JSON.stringify({ sent: true, receipt_number: receiptNumber }), { status: 200 });
   } catch (e) {
     console.error("[send-ride-receipt] error:", e);
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 });
 
-async function buildInvoicePdf(params: {
-  invoiceNumber: string;
+async function buildReceiptPdf(params: {
+  receiptNumber: string;
   date: string;
   passengerName: string;
   companyName: string;
@@ -177,9 +205,15 @@ async function buildInvoicePdf(params: {
   pickup: string;
   dropoff: string;
   fare: number;
+  preDiscountFare: number | null;
+  discountAmount: number | null;
+  discountLabel: string | null;
   paymentMethod: string;
 }): Promise<Uint8Array> {
-  const { invoiceNumber, date, passengerName, companyName, hstNumber, pickup, dropoff, fare, paymentMethod } = params;
+  const {
+    receiptNumber, date, passengerName, companyName, hstNumber, pickup, dropoff, fare,
+    preDiscountFare, discountAmount, discountLabel, paymentMethod,
+  } = params;
 
   const doc = await PDFDocument.create();
   const page = doc.addPage([612, 792]); // Letter
@@ -218,13 +252,13 @@ async function buildInvoicePdf(params: {
 
   // ── Header ────────────────────────────────────────────────────────────
   draw(companyName, left, y, { size: 18, font: bold });
-  draw("INVOICE", right, y, { size: 20, font: bold, align: "right" });
+  draw("RECEIPT", right, y, { size: 20, font: bold, align: "right" });
 
   y -= 20;
   if (hstNumber) {
     draw(`HST Reg: ${hstNumber}`, left, y, { size: 9, color: gray });
   }
-  draw(invoiceNumber, right, y, { size: 10, color: gray, align: "right" });
+  draw(receiptNumber, right, y, { size: 10, color: gray, align: "right" });
 
   y -= 14;
   draw(date, right, y, { size: 10, color: gray, align: "right" });
@@ -232,9 +266,9 @@ async function buildInvoicePdf(params: {
   y -= 18;
   rule(y);
 
-  // ── Bill To ───────────────────────────────────────────────────────────
+  // ── Passenger ─────────────────────────────────────────────────────────
   y -= 16;
-  draw("BILL TO", left, y, { size: 9, color: gray });
+  draw("PASSENGER", left, y, { size: 9, color: gray });
 
   y -= 16;
   draw(passengerName, left, y, { size: 13, font: bold });
@@ -263,9 +297,24 @@ async function buildInvoicePdf(params: {
   draw("Description", left + 6, y, { size: 9, color: gray });
   draw("Amount", right - 6, y, { size: 9, color: gray, align: "right" });
 
+  const hasDiscount = !!(discountAmount && preDiscountFare != null);
+
   y -= 24;
-  draw("Taxi fare", left + 6, y, { size: 11 });
-  draw(`$${fare.toFixed(2)}`, right - 6, y, { size: 11, align: "right" });
+  if (hasDiscount) {
+    draw("Original fare", left + 6, y, { size: 11 });
+    draw(`$${preDiscountFare!.toFixed(2)}`, right - 6, y, { size: 11, align: "right" });
+
+    y -= 18;
+    draw(`Discount${discountLabel ? ` — ${discountLabel}` : ""}`, left + 6, y, { size: 11 });
+    draw(`-$${discountAmount!.toFixed(2)}`, right - 6, y, { size: 11, align: "right" });
+
+    y -= 18;
+    draw("Fare", left + 6, y, { size: 11 });
+    draw(`$${fare.toFixed(2)}`, right - 6, y, { size: 11, align: "right" });
+  } else {
+    draw("Taxi fare", left + 6, y, { size: 11 });
+    draw(`$${fare.toFixed(2)}`, right - 6, y, { size: 11, align: "right" });
+  }
 
   y -= 20;
   draw("  Subtotal (before HST)", left + 6, y, { size: 10, color: gray });
@@ -307,11 +356,19 @@ function buildReceiptHtml(params: {
   pickup: string;
   dropoff: string;
   fare: number;
+  preDiscountFare: number | null;
+  discountAmount: number | null;
+  discountLabel: string | null;
   paymentMethod: string;
   date: string;
   companyName: string;
 }) {
-  const { passengerName, driverName, pickup, dropoff, fare, paymentMethod, date, companyName } = params;
+  const {
+    passengerName, driverName, pickup, dropoff, fare, preDiscountFare, discountAmount, discountLabel,
+    paymentMethod, date, companyName,
+  } = params;
+
+  const hasDiscount = !!(discountAmount && preDiscountFare != null);
 
   return `
   <div style="font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
@@ -321,6 +378,12 @@ function buildReceiptHtml(params: {
     </div>
 
     <div style="background: #f7f7f7; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+      ${hasDiscount ? `
+      <p style="margin: 0 0 4px; font-size: 13px; color: #6B7280;">Original fare</p>
+      <p style="margin: 0 0 8px; font-size: 15px; color: #9CA3AF; text-decoration: line-through;">$${preDiscountFare!.toFixed(2)}</p>
+      <p style="margin: 0 0 4px; font-size: 13px; color: #6B7280;">Discount${discountLabel ? ` — ${discountLabel}` : ""}</p>
+      <p style="margin: 0 0 12px; font-size: 15px; color: #1D9E75;">-$${discountAmount!.toFixed(2)}</p>
+      ` : ""}
       <p style="margin: 0 0 4px; font-size: 13px; color: #6B7280;">Total fare</p>
       <p style="margin: 0; font-size: 32px; font-weight: 700; color: #1a1a1a;">$${fare.toFixed(2)}</p>
       <p style="margin: 4px 0 0; font-size: 13px; color: #6B7280; text-transform: capitalize;">
