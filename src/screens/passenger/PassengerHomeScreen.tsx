@@ -809,6 +809,7 @@ export default function PassengerHomeScreen() {
             Alert.alert(
               "Payment failed",
               intentData.message ??
+                intentData.error ??
                 "Could not process payment. Please try a different card or pay with cash.",
             );
             return;
