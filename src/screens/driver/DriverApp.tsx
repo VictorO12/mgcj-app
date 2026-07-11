@@ -103,6 +103,13 @@ export default function DriverApp() {
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
+  // Ride id the driver has tapped "On My Way" for — moves a scheduled ride
+  // from the home-screen countdown card to the active-ride screen without
+  // touching `status` (see handleStartRide). Local/session-only by design:
+  // if the app restarts, the driver just sees the countdown card again.
+  const [startedScheduledRideId, setStartedScheduledRideId] = useState<
+    string | null
+  >(null);
 
   // Ref so handleDeclinePendingRide always reads the latest pendingRide
   // even when called from a stale closure (e.g. timer timeout after 30s)
@@ -605,20 +612,17 @@ export default function DriverApp() {
     setShowAssigned(false);
   }
 
-  // ── Driver taps Start on countdown screen ────────────────────
-  // This is the departure go-ack — the human action that means "I am driving."
-  // The server never flips assigned → driver_arriving on a timer.
-  async function handleStartRide() {
-    if (!activeRide || !profile) return;
-    const { error } = await supabase
-      .from("rides")
-      .update({ status: "driver_arriving" })
-      .eq("id", activeRide.id)
-      .eq("driver_id", profile.id)
-      .eq("status", "assigned");
-    if (!error) {
-      await fetchActiveRide();
-    }
+  // ── Driver taps "On My Way" on the countdown card ────────────
+  // This is just the departure go-ack that switches from the home-screen
+  // countdown card to the turn-by-turn active-ride screen — it must NOT
+  // flip status to driver_arriving, since that status means "arrived at
+  // pickup" everywhere else (passenger push copy, driver's own button
+  // label) and would falsely tell the passenger the driver is already
+  // there while also skipping the driver's real "I've arrived" step and
+  // its turn-by-turn nav to the pickup.
+  function handleStartRide() {
+    if (!activeRide) return;
+    setStartedScheduledRideId(activeRide.id);
   }
 
   if (loadingDriver) return null;
@@ -638,7 +642,11 @@ export default function DriverApp() {
     );
   }
 
-  if (activeRide && !(activeRide.scheduled_at && activeRide.status === "assigned")) {
+  if (
+    activeRide &&
+    (!(activeRide.scheduled_at && activeRide.status === "assigned") ||
+      startedScheduledRideId === activeRide.id)
+  ) {
     return (
       <DriverActiveRideScreen
         key={activeRide.id}

@@ -72,20 +72,38 @@ interface ActiveScheduledRide {
   payment_method: string | null;
 }
 
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
   const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function calcLeaveInMins(location: LatLng | null, ride: ActiveScheduledRide): number | null {
-  if (!location || ride.pickup_lat == null || ride.pickup_lng == null) return null;
-  const distKm = haversineKm(location.latitude, location.longitude, ride.pickup_lat, ride.pickup_lng);
+function calcLeaveInMins(
+  location: LatLng | null,
+  ride: ActiveScheduledRide,
+): number | null {
+  if (!location || ride.pickup_lat == null || ride.pickup_lng == null)
+    return null;
+  const distKm = haversineKm(
+    location.latitude,
+    location.longitude,
+    ride.pickup_lat,
+    ride.pickup_lng,
+  );
   const driveMins = (distKm / 35) * 60; // 35 km/h conservative for Annapolis Valley
-  const minsUntilPickup = (new Date(ride.scheduled_at).getTime() - Date.now()) / 60_000;
+  const minsUntilPickup =
+    (new Date(ride.scheduled_at).getTime() - Date.now()) / 60_000;
   return Math.round(minsUntilPickup - driveMins - 3); // 3 min arrival buffer
 }
 
@@ -137,19 +155,27 @@ export default function DriverHomeScreen({
   const [helpVisible, setHelpVisible] = useState(false);
   const [inboxVisible, setInboxVisible] = useState(false);
   const [chatVisible, setChatVisible] = useState(false);
-  const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } = useInboxUnreadCount();
-  const { hasUnread: hasChatUnread, refetch: refetchChatUnread } = useDriverChatUnread();
+  const { unreadCount: inboxUnreadCount, refetch: refetchInboxUnread } =
+    useInboxUnreadCount();
+  const { hasUnread: hasChatUnread, refetch: refetchChatUnread } =
+    useDriverChatUnread();
 
   const [leaveInMins, setLeaveInMins] = useState<number | null>(null);
   const leaveCalcRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (leaveCalcRef.current) clearInterval(leaveCalcRef.current);
-    if (!activeScheduledRide) { setLeaveInMins(null); return; }
-    const update = () => setLeaveInMins(calcLeaveInMins(location, activeScheduledRide));
+    if (!activeScheduledRide) {
+      setLeaveInMins(null);
+      return;
+    }
+    const update = () =>
+      setLeaveInMins(calcLeaveInMins(location, activeScheduledRide));
     update();
     leaveCalcRef.current = setInterval(update, 30_000);
-    return () => { if (leaveCalcRef.current) clearInterval(leaveCalcRef.current); };
+    return () => {
+      if (leaveCalcRef.current) clearInterval(leaveCalcRef.current);
+    };
   }, [activeScheduledRide?.id, location]);
 
   // Opened via a tapped push notification (see DriverApp's notification listener) —
@@ -272,6 +298,11 @@ export default function DriverHomeScreen({
   }
 
   const hasAssignedRide = !!assignedRide;
+  // The active-scheduled ride gets its own countdown card, so drop it from
+  // the swipeable carousel instead of hiding the whole carousel behind it.
+  const otherScheduledRides = activeScheduledRide
+    ? confirmedScheduledRides.filter((r) => r.id !== activeScheduledRide.id)
+    : confirmedScheduledRides;
   // DriverApp unmounts this whole screen while on an active/assigned ride
   // (single conditional-return router, not an overlay stack), so the only
   // "not idle" states left to check are pending assignment + local overlays.
@@ -316,7 +347,11 @@ export default function DriverHomeScreen({
             <Animated.View
               style={[
                 styles.statusDot,
-                { backgroundColor: isOnline ? colors.accentGreen : colors.textMuted },
+                {
+                  backgroundColor: isOnline
+                    ? colors.accentGreen
+                    : colors.textMuted,
+                },
                 isOnline && { transform: [{ scale: pulseAnim }] },
               ]}
             />
@@ -350,39 +385,43 @@ export default function DriverHomeScreen({
             style={styles.chatBtn}
             onPress={() => setChatVisible(true)}
           >
-            <Ionicons name="chatbubble-outline" size={17} color={colors.accentPurple} />
+            <Ionicons
+              name="chatbubble-outline"
+              size={17}
+              color={colors.accentPurple}
+            />
             {hasChatUnread && <View style={styles.chatDot} />}
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.avatarWrap}
             onPress={() => setMenuVisible(true)}
           >
-          {profile?.avatar_url ? (
-            <Image
-              source={{ uri: profile.avatar_url }}
-              style={styles.topAvatar}
-            />
-          ) : (
-            <View style={styles.topAvatarFallback}>
-              <Text style={styles.topAvatarInitials}>
-                {profile?.name
-                  ? profile.name
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")
-                      .slice(0, 2)
-                      .toUpperCase()
-                  : "?"}
-              </Text>
-            </View>
-          )}
-          {hasAssignedRide && (
-            <Animated.View
-              style={[styles.badge, { transform: [{ scale: badgePulse }] }]}
-            >
-              <Text style={styles.badgeText}>1</Text>
-            </Animated.View>
-          )}
+            {profile?.avatar_url ? (
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={styles.topAvatar}
+              />
+            ) : (
+              <View style={styles.topAvatarFallback}>
+                <Text style={styles.topAvatarInitials}>
+                  {profile?.name
+                    ? profile.name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")
+                        .slice(0, 2)
+                        .toUpperCase()
+                    : "?"}
+                </Text>
+              </View>
+            )}
+            {hasAssignedRide && (
+              <Animated.View
+                style={[styles.badge, { transform: [{ scale: badgePulse }] }]}
+              >
+                <Text style={styles.badgeText}>1</Text>
+              </Animated.View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -400,7 +439,9 @@ export default function DriverHomeScreen({
           <View
             style={[
               styles.assignedBannerDot,
-              assignedRide!.scheduled_at && { backgroundColor: colors.accentPurple },
+              assignedRide!.scheduled_at && {
+                backgroundColor: colors.accentPurple,
+              },
             ]}
           />
           <View style={{ flex: 1 }}>
@@ -442,7 +483,9 @@ export default function DriverHomeScreen({
           <View
             style={[
               styles.assignedBannerBtn,
-              assignedRide!.scheduled_at && { backgroundColor: colors.accentPurple },
+              assignedRide!.scheduled_at && {
+                backgroundColor: colors.accentPurple,
+              },
             ]}
           >
             <Text style={styles.assignedBannerBtnText}>View</Text>
@@ -465,105 +508,162 @@ export default function DriverHomeScreen({
         </TouchableOpacity>
       )}
 
-      {/* Scheduled ride strip */}
-      {activeScheduledRide && (() => {
-        const isLate = leaveInMins !== null && leaveInMins < 0;
-        const accentColor = isLate ? "#EF4444" : "#1D9E75";
-        const pickupTime = new Date(activeScheduledRide.scheduled_at).toLocaleTimeString("en-CA", {
-          hour: "numeric", minute: "2-digit",
-        });
-        const label = activeScheduledRide.passenger_name
-          ? `${pickupTime} · ${activeScheduledRide.passenger_name}`
-          : pickupTime;
-        const statusText =
-          leaveInMins === null ? null
-          : leaveInMins > 1   ? `Leave in ${leaveInMins} min`
-          : leaveInMins >= 0  ? "Leave now"
-          :                     `${Math.abs(leaveInMins)} min late`;
+      {/* Floating stack: upcoming-scheduled carousel + active countdown card,
+          stacked above the bottom sheet instead of the countdown card
+          replacing (and hiding) the carousel entirely. */}
+      {(otherScheduledRides.length > 0 || activeScheduledRide) && (
+        <View style={styles.floatingStack}>
+          {activeScheduledRide &&
+            (() => {
+              const isLate = leaveInMins !== null && leaveInMins < 0;
+              const accentColor = isLate
+                ? colors.accentRedDeep
+                : colors.accentGreen;
+              const pickupTime = new Date(
+                activeScheduledRide.scheduled_at,
+              ).toLocaleTimeString("en-CA", {
+                hour: "numeric",
+                minute: "2-digit",
+              });
+              const label = activeScheduledRide.passenger_name
+                ? `${pickupTime} · ${activeScheduledRide.passenger_name}`
+                : pickupTime;
+              const statusText =
+                leaveInMins === null
+                  ? null
+                  : leaveInMins > 1
+                    ? `Leave in ${leaveInMins} min`
+                    : leaveInMins >= 0
+                      ? "Leave now"
+                      : `${Math.abs(leaveInMins)} min late`;
 
-        return (
-          <View style={[styles.countdownStrip, { borderColor: accentColor + "40" }]}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.countdownStripLabel} numberOfLines={1}>{label}</Text>
-              {statusText && (
-                <Text style={[styles.countdownStripStatus, { color: accentColor }]}>
-                  {statusText}
-                </Text>
-              )}
-            </View>
-            <TouchableOpacity
-              style={[styles.countdownStripBtn, { backgroundColor: accentColor }]}
-              onPress={onStartRide}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.countdownStripBtnText}>On My Way</Text>
-            </TouchableOpacity>
-          </View>
-        );
-      })()}
-
-      {/* Scheduled panel — hidden while the active scheduled ride card is showing */}
-      {!activeScheduledRide && confirmedScheduledRides.length > 0 && (
-        <View style={styles.scheduledPanel}>
-          <View style={styles.scheduledPanelHeader}>
-            <Ionicons name="calendar" size={14} color={colors.accentPurple} />
-            <Text style={styles.scheduledPanelTitle}>UPCOMING SCHEDULED</Text>
-            <View style={styles.scheduledPanelBadge}>
-              <Text style={styles.scheduledPanelBadgeText}>
-                {confirmedScheduledRides.length}
-              </Text>
-            </View>
-          </View>
-          <FlatList
-            data={confirmedScheduledRides}
-            keyExtractor={(r) => r.id}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onScroll={(e) => {
-              const index = Math.round(
-                e.nativeEvent.contentOffset.x / CARD_WIDTH,
-              );
-              setActiveCard(index);
-            }}
-            scrollEventThrottle={16}
-            renderItem={({ item: r }) => (
-              <View style={[styles.scheduledRideRow, { width: CARD_WIDTH }]}>
-                <View style={styles.scheduledRideTime}>
-                  <Text style={styles.scheduledRideTimeText}>
-                    {new Date(r.scheduled_at).toLocaleString("en-CA", {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-                </View>
-                <View style={styles.scheduledRideInfo}>
-                  <Text style={styles.scheduledRidePassenger} numberOfLines={1}>
-                    {r.passenger_name ?? "Passenger"}
-                  </Text>
-                  <Text style={styles.scheduledRideRoute} numberOfLines={1}>
-                    {r.pickup_address} → {r.dropoff_address}
-                  </Text>
-                </View>
-                {r.fare_estimate && (
-                  <Text style={styles.scheduledRideFare}>
-                    ${r.fare_estimate.toFixed(2)}
-                  </Text>
-                )}
-              </View>
-            )}
-          />
-          {confirmedScheduledRides.length > 1 && (
-            <View style={styles.dotsRow}>
-              {confirmedScheduledRides.map((_, i) => (
+              return (
                 <View
-                  key={i}
-                  style={[styles.dot, i === activeCard && styles.dotActive]}
+                  style={[
+                    styles.countdownCard,
+                    { borderColor: accentColor + "40" },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.countdownCardIcon,
+                      { backgroundColor: accentColor + "1F" },
+                    ]}
+                  >
+                    <Ionicons
+                      name={isLate ? "alert" : "navigate"}
+                      size={18}
+                      color={accentColor}
+                    />
+                  </View>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.countdownCardLabel} numberOfLines={1}>
+                      {label}
+                    </Text>
+                    <Text style={styles.countdownCardRoute} numberOfLines={1}>
+                      {activeScheduledRide.pickup_address} →{" "}
+                      {activeScheduledRide.dropoff_address}
+                    </Text>
+                    {statusText && (
+                      <Text
+                        style={[
+                          styles.countdownCardStatus,
+                          { color: accentColor },
+                        ]}
+                      >
+                        {statusText}
+                      </Text>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.countdownCardBtn,
+                      { backgroundColor: accentColor },
+                    ]}
+                    onPress={onStartRide}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="navigate" size={13} color="#fff" />
+                    <Text style={styles.countdownCardBtnText}>On My Way</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })()}
+
+          {otherScheduledRides.length > 0 && (
+            <View style={styles.scheduledPanel}>
+              <View style={styles.scheduledPanelHeader}>
+                <Ionicons
+                  name="calendar"
+                  size={14}
+                  color={colors.accentPurple}
                 />
-              ))}
+                <Text style={styles.scheduledPanelTitle}>
+                  UPCOMING SCHEDULED
+                </Text>
+                <View style={styles.scheduledPanelBadge}>
+                  <Text style={styles.scheduledPanelBadgeText}>
+                    {otherScheduledRides.length}
+                  </Text>
+                </View>
+              </View>
+              <FlatList
+                data={otherScheduledRides}
+                keyExtractor={(r) => r.id}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onScroll={(e) => {
+                  const index = Math.round(
+                    e.nativeEvent.contentOffset.x / CARD_WIDTH,
+                  );
+                  setActiveCard(index);
+                }}
+                scrollEventThrottle={16}
+                renderItem={({ item: r }) => (
+                  <View
+                    style={[styles.scheduledRideRow, { width: CARD_WIDTH }]}
+                  >
+                    <View style={styles.scheduledRideTime}>
+                      <Text style={styles.scheduledRideTimeText}>
+                        {new Date(r.scheduled_at).toLocaleString("en-CA", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </Text>
+                    </View>
+                    <View style={styles.scheduledRideInfo}>
+                      <Text
+                        style={styles.scheduledRidePassenger}
+                        numberOfLines={1}
+                      >
+                        {r.passenger_name ?? "Passenger"}
+                      </Text>
+                      <Text style={styles.scheduledRideRoute} numberOfLines={1}>
+                        {r.pickup_address} → {r.dropoff_address}
+                      </Text>
+                    </View>
+                    {r.fare_estimate && (
+                      <Text style={styles.scheduledRideFare}>
+                        ${r.fare_estimate.toFixed(2)}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              />
+              {otherScheduledRides.length > 1 && (
+                <View style={styles.dotsRow}>
+                  {otherScheduledRides.map((_, i) => (
+                    <View
+                      key={i}
+                      style={[styles.dot, i === activeCard && styles.dotActive]}
+                    />
+                  ))}
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -575,7 +675,11 @@ export default function DriverHomeScreen({
           <View style={styles.onlineSheet}>
             <View style={styles.waitingRow}>
               <View style={styles.waitingIcon}>
-                <Ionicons name="radio-outline" size={22} color={colors.accentGreen} />
+                <Ionicons
+                  name="radio-outline"
+                  size={22}
+                  color={colors.accentGreen}
+                />
               </View>
               <View>
                 <Text style={styles.waitingTitle}>
@@ -907,7 +1011,11 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
       justifyContent: "center",
     },
-    waitingTitle: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+    waitingTitle: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
     waitingSubtitle: {
       fontSize: 12,
       color: colors.textSecondary,
@@ -949,50 +1057,65 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
     },
     onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    countdownStrip: {
+    floatingStack: {
       position: "absolute",
-      bottom: Platform.OS === "ios" ? 200 : 180,
+      bottom: Platform.OS === "ios" ? 220 : 200,
       left: 16,
       right: 16,
-      height: 48,
+      gap: 10,
+    },
+    countdownCard: {
       backgroundColor: colors.surface,
-      borderRadius: 24,
+      borderRadius: 16,
       borderWidth: 1,
       flexDirection: "row",
       alignItems: "center",
-      paddingLeft: 16,
-      paddingRight: 6,
+      padding: 12,
       shadowColor: "#000",
-      shadowOpacity: 0.2,
-      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowOffset: { width: 0, height: 4 },
       shadowRadius: 8,
-      elevation: 4,
+      elevation: 8,
     },
-    countdownStripLabel: {
+    countdownCardIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: 10,
+      flexShrink: 0,
+    },
+    countdownCardLabel: {
       fontSize: 13,
-      fontWeight: "600",
+      fontWeight: "700",
       color: colors.textPrimary,
     },
-    countdownStripStatus: {
+    countdownCardRoute: {
       fontSize: 11,
-      fontWeight: "500",
-      marginTop: 1,
+      color: colors.textSecondary,
+      marginTop: 2,
     },
-    countdownStripBtn: {
-      borderRadius: 20,
-      paddingVertical: 8,
+    countdownCardStatus: {
+      fontSize: 11,
+      fontWeight: "600",
+      marginTop: 3,
+    },
+    countdownCardBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      borderRadius: 18,
+      paddingVertical: 9,
       paddingHorizontal: 14,
+      flexShrink: 0,
     },
-    countdownStripBtnText: {
+    countdownCardBtnText: {
       color: "#fff",
       fontSize: 13,
       fontWeight: "700",
     },
     scheduledPanel: {
-      position: "absolute",
-      bottom: Platform.OS === "ios" ? 210 : 190,
-      left: 16,
-      right: 16,
       backgroundColor: colors.surface,
       borderRadius: 14,
       borderWidth: 0.5,
