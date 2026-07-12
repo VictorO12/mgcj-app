@@ -164,7 +164,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
     setCancelling(id);
     const { error } = await supabase
       .from("rides")
-      .update({ status: "cancelled" })
+      .update({ status: "cancelled", cancelled_reason: "passenger_cancelled" })
       .eq("id", id)
       .eq("passenger_id", profile?.id);
     setCancelling(null);

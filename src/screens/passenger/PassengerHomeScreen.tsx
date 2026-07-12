@@ -913,7 +913,7 @@ export default function PassengerHomeScreen() {
     if (!ride) return;
     await supabase
       .from("rides")
-      .update({ status: "cancelled" })
+      .update({ status: "cancelled", cancelled_reason: "passenger_cancelled" })
       .eq("id", ride.id);
   }
 

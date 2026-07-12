@@ -8,6 +8,7 @@ const supabase = createClient(
 const ASSIGN_RIDE_URL = `${Deno.env.get("SUPABASE_URL")}/functions/v1/assign-ride`;
 const TIMEOUT_MINUTES = 5;
 const REBROADCAST_MINUTES = 2;
+const MISSED_SCHEDULE_MINUTES = 20;
 
 Deno.serve(async () => {
   const now = new Date();
@@ -82,10 +83,44 @@ Deno.serve(async () => {
     }
   }
 
+  // ── 3. Cancel scheduled rides missed by >20 minutes with no driver underway ─
+  // Covers rides never released ('scheduled') or released but never actually
+  // engaged by a driver ('pending'/'offered'). Rides already 'assigned',
+  // 'driver_arriving', or 'in_progress' are left alone — a driver has taken
+  // action, even if running late, so this isn't a case of "nothing happened."
+  const missedScheduleCutoff = new Date(now.getTime() - MISSED_SCHEDULE_MINUTES * 60 * 1000).toISOString();
+
+  const { data: missedRides, error: missedError } = await supabase
+    .from("rides")
+    .select("id, passenger_id")
+    .in("status", ["scheduled", "pending", "offered"])
+    .not("scheduled_at", "is", null)
+    .lt("scheduled_at", missedScheduleCutoff);
+
+  if (missedError) {
+    console.error("[expire-pending-rides] fetch missed-schedule error:", missedError);
+  } else if (missedRides && missedRides.length > 0) {
+    const missedIds = missedRides.map((r) => r.id);
+    await supabase
+      .from("rides")
+      .update({ status: "cancelled", cancelled_reason: "missed_window" })
+      .in("id", missedIds);
+
+    for (const ride of missedRides) {
+      await sendPush(ride.passenger_id, {
+        title: "Scheduled ride cancelled",
+        body: "We couldn't find a driver in time for your scheduled pickup. Please rebook.",
+        data: { type: "scheduled_missed" },
+      });
+    }
+    console.log(`[expire-pending-rides] cancelled ${missedIds.length} missed scheduled ride(s)`);
+  }
+
   return new Response(
     JSON.stringify({
       expired: expiredRides?.length ?? 0,
       retried: staleRides?.length ?? 0,
+      missed: missedRides?.length ?? 0,
     }),
     { status: 200 }
   );

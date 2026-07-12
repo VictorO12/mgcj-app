@@ -24,8 +24,28 @@ const POOL_SLICE_K        = 3   // Kth-nearest driver for churn slack
 const CHURN_BUFFER_MINS   = 8   // runway for decline / no-ack cycles
 const ARRIVAL_BUFFER_MINS = 3   // driver arrives slightly before pickup time
 
+// §10: cost controls — bound Distance Matrix usage regardless of company driver count.
+// Without these, every 2-min tick DM-queries the *entire* active roster for every
+// ride still in its 75-min window, which scales with company size, not with the
+// handful of drivers who could realistically take the ride.
+const HAVERSINE_POOL_CANDIDATES = 8   // cap DM origins for the pool path (mirrors assign-ride's closest-5 pattern, with slack for Kth-nearest accuracy)
+const AVG_SPEED_KMH             = 30  // conservative in-town estimate, used only for the cheap pre-DM gate below
+const DM_CALL_MARGIN_MINS       = 15  // only spend a real DM call once the Haversine estimate is within this many minutes of the plausible threshold
+
 function clamp(val: number, min: number, max: number): number {
   return Math.min(Math.max(val, min), max)
+}
+
+function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 // Batch Distance Matrix call — same pattern as assign-ride's getDriveTimes.
@@ -147,6 +167,23 @@ async function releaseRide(ride: any, now: Date) {
     return
   }
 
+  // §10: cheap Haversine-only gate before spending a real DM call.
+  // Only applies to the pool path — a preferred-driver DM call is a single
+  // origin (1 element), too cheap to bother gating.
+  if (!ride.preferred_driver_id) {
+    const kthKm = availableDrivers
+      .map((d: any) => distanceKm(d.current_lat, d.current_lng, ride.pickup_lat, ride.pickup_lng))
+      .sort((a: number, b: number) => a - b)[Math.min(POOL_SLICE_K, availableDrivers.length) - 1]
+    const estimatedThreshold = clamp((kthKm / AVG_SPEED_KMH) * 60 + CHURN_BUFFER_MINS, MIN_LEAD_MINS, MAX_LEAD_MINS)
+
+    if (minsUntil > estimatedThreshold + DM_CALL_MARGIN_MINS && minsUntil > MIN_LEAD_MINS) {
+      console.log(
+        `[ride ${ride.id}] Haversine gate: est=${estimatedThreshold.toFixed(1)}min minsUntil=${minsUntil.toFixed(1)} — holding without DM call`
+      )
+      return
+    }
+  }
+
   const { threshold, targetDriveMins } = await computeReleaseThreshold(ride, availableDrivers)
   console.log(
     `[ride ${ride.id}] minsUntil=${minsUntil.toFixed(1)} ` +
@@ -191,9 +228,16 @@ async function computeReleaseThreshold(
     return { threshold: MAX_LEAD_MINS, targetDriveMins: null }
   }
 
-  // Pool: batch DM, sort ascending, pick Kth-nearest for churn slack
+  // Pool: Haversine-prefilter to bound DM origins regardless of company driver
+  // count (§10), then batch DM those candidates, sort ascending, pick Kth-nearest
+  // for churn slack
+  const prefiltered = availableDrivers
+    .map((d: any) => ({ ...d, straightLineKm: distanceKm(d.current_lat, d.current_lng, ride.pickup_lat, ride.pickup_lng) }))
+    .sort((a: any, b: any) => a.straightLineKm - b.straightLineKm)
+    .slice(0, HAVERSINE_POOL_CANDIDATES)
+
   const driveTimes = await getDriveTimes(
-    availableDrivers.map((d: any) => ({ lat: d.current_lat, lng: d.current_lng, id: d.id })),
+    prefiltered.map((d: any) => ({ lat: d.current_lat, lng: d.current_lng, id: d.id })),
     ride.pickup_lat, ride.pickup_lng
   )
   if (driveTimes.size === 0) return { threshold: MAX_LEAD_MINS, targetDriveMins: null }
