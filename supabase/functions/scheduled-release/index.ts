@@ -397,31 +397,10 @@ async function releaseToPreferred(ride: any, viable: boolean, targetDriveMins: n
   }
 }
 
-// ── Mark at_risk and alert dispatch (once per degradation) ───
+// ── Mark at_risk (dashboard surfaces this via coverage_status) ─
 async function markAtRiskAndAlert(ride: any, reason: string) {
-  const wasAlreadyAtRisk = ride.coverage_status === 'at_risk'
-
   await supabase.from('rides').update({ coverage_status: 'at_risk' }).eq('id', ride.id)
-
-  if (!wasAlreadyAtRisk && ride.company_id) {
-    const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
-      hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
-    })
-    const { data: admins } = await supabase.from('profiles')
-      .select('push_token')
-      .eq('role', 'admin')
-      .eq('company_id', ride.company_id)
-      .not('push_token', 'is', null)
-
-    for (const admin of admins ?? []) {
-      await sendPush(admin.push_token,
-        '⚠️ Exclusive ride — preferred driver unavailable',
-        `${when} pickup at ${ride.pickup_address} — exclusive driver is offline at release`,
-        { rideId: ride.id, type: reason }
-      )
-    }
-    console.log(`[ride ${ride.id}] at_risk alert sent (${reason}) to ${admins?.length ?? 0} admin(s)`)
-  }
+  console.log(`[ride ${ride.id}] marked at_risk (${reason})`)
 }
 
 // ── Check if a driver is viable for this ride ─────────────────

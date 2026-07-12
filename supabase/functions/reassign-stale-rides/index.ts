@@ -102,30 +102,6 @@ async function handleExclusiveStale(ride: any) {
     .eq('id', ride.id)
     .eq('status', 'offered')
 
-  // Alert dispatch once per degradation transition, not on every tick.
-  if (!wasAlreadyAtRisk && ride.company_id) {
-    const when = ride.scheduled_at
-      ? new Date(ride.scheduled_at).toLocaleString('en-CA', {
-          hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
-        })
-      : 'now'
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('push_token')
-      .eq('role', 'admin')
-      .eq('company_id', ride.company_id)
-      .not('push_token', 'is', null)
-
-    for (const admin of admins ?? []) {
-      await sendPush(admin.push_token,
-        '⚠️ Exclusive ride — driver not responding',
-        `${when} pickup at ${ride.pickup_address} — preferred driver hasn't accepted`,
-        { rideId: ride.id, type: 'exclusive_no_ack' }
-      )
-    }
-    console.log(`[ride ${ride.id}] exclusive no-ack: alerted ${admins?.length ?? 0} admin(s)`)
-  }
-
   // Re-push the preferred driver — keep pinging until dispatch intervenes.
   const { data: preferredDriver } = await supabase
     .from('drivers')

@@ -85,28 +85,6 @@ Deno.serve(async (req) => {
 
     console.log(`[coverage-check] ride ${ride.id} coverage=${newCoverage}`)
 
-    // ── Alert dispatch immediately if uncovered ──────────────────
-    if (newCoverage === 'uncovered') {
-      const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
-        weekday: 'short', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
-      })
-      const { data: admins } = await supabase.from('profiles')
-        .select('push_token')
-        .eq('role', 'admin')
-        .eq('company_id', ride.company_id)
-        .not('push_token', 'is', null)
-
-      for (const admin of admins ?? []) {
-        await sendPush(admin.push_token,
-          '🚨 Scheduled ride has no eligible drivers',
-          `${when} · ${ride.pickup_address} — no ${ride.vehicle_class_id ? 'matching' : 'available'} driver in fleet`,
-          { rideId: ride.id, type: 'coverage_uncovered' }
-        )
-      }
-      console.log(`[coverage-check] uncovered — alerted ${admins?.length ?? 0} admin(s)`)
-    }
-
     // ── §8: Non-binding advance heads-up to preferred driver ─────
     if (ride.preferred_driver_id && !ride.preferred_notified) {
       const { data: prefDriver } = await supabase.from('drivers')

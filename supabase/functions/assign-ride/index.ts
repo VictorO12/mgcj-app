@@ -48,36 +48,6 @@ async function getDriveTimes(
   return result
 }
 
-// §5.2: alert only this ride's company admins (not all companies)
-async function notifyDispatchNoDrivers(rideId: string, pickupAddress: string, companyId: string) {
-  const { data: dispatchers } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('role', 'admin')
-    .eq('company_id', companyId)
-    .not('push_token', 'is', null)
-
-  if (!dispatchers || dispatchers.length === 0) return
-
-  const notifications = dispatchers
-    .filter(d => d.push_token)
-    .map(d => ({
-      to: d.push_token,
-      title: '⚠️ No drivers available',
-      body: `Manual assignment needed: ${pickupAddress}`,
-      data: { rideId, type: 'no_drivers' },
-      sound: 'default',
-      priority: 'high',
-    }))
-
-  await fetch(EXPO_PUSH_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(notifications),
-  })
-  console.log(`Notified ${notifications.length} dispatcher(s) — no drivers available`)
-}
-
 const ARRIVAL_BUFFER_MINS = 3
 
 // ── Pick the closest driver from a candidate pool ────────────
@@ -228,7 +198,6 @@ async function assignRide(
 
   if (driversError || !allDrivers || allDrivers.length === 0) {
     console.log('No online drivers found for this company/vehicle class')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address, ride.company_id)
     return { success: false, reason: 'no_drivers' }
   }
 
@@ -267,8 +236,7 @@ async function assignRide(
   }
 
   if (candidatePool.length === 0) {
-    console.log('All drivers exhausted — notifying dispatch')
-    await notifyDispatchNoDrivers(rideId, ride.pickup_address, ride.company_id)
+    console.log('All drivers exhausted')
     return { success: false, reason: 'all_declined' }
   }
 
