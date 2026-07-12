@@ -216,6 +216,14 @@ export default function DriverApp() {
           ) {
             fetchActiveRide();
             fetchConfirmedScheduledRides();
+          } else if (
+            ["assigned", "scheduled", "pending"].includes(row.status) &&
+            !row.confirmed_by_driver
+          ) {
+            // Dispatch just (re)assigned this driver directly — show the
+            // accept/decline banner + badge immediately instead of waiting
+            // for the driver to reopen the app.
+            fetchAssignedRide();
           } else if (row.status === "completed" || row.status === "cancelled") {
             setActiveRide(null);
             setAssignedRide(null);

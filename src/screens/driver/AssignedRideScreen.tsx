@@ -10,6 +10,7 @@ import {
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import Constants from "expo-constants";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
@@ -113,7 +114,9 @@ export default function AssignedRideScreen({
   async function handleDecline() {
     Alert.alert(
       "Decline ride?",
-      "This ride will be returned to the queue and dispatch will be notified.",
+      isScheduled
+        ? "This ride will be released and dispatch will be notified to reassign it."
+        : "This ride will be returned to the queue and dispatch will be notified.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -121,16 +124,36 @@ export default function AssignedRideScreen({
           style: "destructive",
           onPress: async () => {
             setLoading("decline");
-            const { error } = await supabase
-              .from("rides")
-              .update({ driver_id: null, status: "pending" })
-              .eq("id", ride.id)
-              .eq("driver_id", profile?.id);
-            setLoading(null);
-            if (error) {
-              Alert.alert("Error", error.message);
+            try {
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              const accessToken = session?.access_token;
+              if (!accessToken) throw new Error("Not signed in");
+              const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+              const fnName = isScheduled ? "decline-assigned-ride" : "assign-ride";
+              const res = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${accessToken}`,
+                },
+                body: JSON.stringify(
+                  isScheduled
+                    ? { ride_id: ride.id }
+                    : { ride_id: ride.id, declined_by_driver_id: profile?.id },
+                ),
+              });
+              const result = await res.json();
+              if (!res.ok || result?.error) {
+                throw new Error(result?.error ?? "Failed to decline");
+              }
+            } catch (e: any) {
+              setLoading(null);
+              Alert.alert("Error", e.message ?? "Something went wrong");
               return;
             }
+            setLoading(null);
             onDecline();
           },
         },
