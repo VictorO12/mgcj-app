@@ -12,10 +12,12 @@ import {
   Alert,
   KeyboardAvoidingView,
   Dimensions,
+  Animated,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import { GradientFill } from "../../components/GradientFill";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
 import { useActiveRide } from "../../hooks/useActiveRide";
@@ -117,6 +119,42 @@ export default function PassengerHomeScreen() {
   );
 
   const mapRef = useRef<MapView>(null);
+  // Micro-interactions (RN Animated — no native module, works today).
+  const bookScale = useRef(new Animated.Value(1)).current;
+  const pressBookIn = () =>
+    Animated.spring(bookScale, {
+      toValue: 0.96,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 0,
+    }).start();
+  const pressBookOut = () =>
+    Animated.spring(bookScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 20,
+      bounciness: 8,
+    }).start();
+  // Gentle looping pulse on the "drivers available" dot.
+  const driversPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(driversPulse, {
+          toValue: 1,
+          duration: 1100,
+          useNativeDriver: true,
+        }),
+        Animated.timing(driversPulse, {
+          toValue: 0,
+          duration: 1100,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [driversPulse]);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
   const [pickupCoords, setPickupCoords] = useState<LatLng | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<LatLng | null>(null);
@@ -1111,7 +1149,25 @@ export default function PassengerHomeScreen() {
 
       {!hasActiveRide && activeDrivers.length > 0 && (
         <View style={styles.driversPill}>
-          <View style={styles.driversPillDot} />
+          <Animated.View
+            style={[
+              styles.driversPillDot,
+              {
+                transform: [
+                  {
+                    scale: driversPulse.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1, 1.5],
+                    }),
+                  },
+                ],
+                opacity: driversPulse.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 0.5],
+                }),
+              },
+            ]}
+          />
           <Text style={styles.driversPillText}>
             {activeDrivers.length} driver{activeDrivers.length > 1 ? "s" : ""}{" "}
             available
@@ -1776,6 +1832,12 @@ export default function PassengerHomeScreen() {
                   >
                     <Text style={styles.editBtnText}>Edit</Text>
                   </TouchableOpacity>
+                  <Animated.View
+                    style={[
+                      styles.bookBtnWrap,
+                      { transform: [{ scale: bookScale }] },
+                    ]}
+                  >
                   <TouchableOpacity
                     style={[
                       styles.bookBtn,
@@ -1783,9 +1845,18 @@ export default function PassengerHomeScreen() {
                         opacity: 0.6,
                       },
                     ]}
+                    activeOpacity={0.9}
+                    onPressIn={pressBookIn}
+                    onPressOut={pressBookOut}
                     onPress={confirmBooking}
                     disabled={bookingLoading || noDriversForImmediate}
                   >
+                    {!noDriversForImmediate && (
+                      <GradientFill
+                        colors={["#F97316", "#E8500A", "#C2410C"]}
+                        style={[StyleSheet.absoluteFill, styles.bookBtnGradient]}
+                      />
+                    )}
                     {bookingLoading ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
@@ -1807,6 +1878,7 @@ export default function PassengerHomeScreen() {
                       </View>
                     )}
                   </TouchableOpacity>
+                  </Animated.View>
                 </View>
               </ScrollView>
             )}
@@ -1970,13 +2042,6 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     shadowRadius: 20,
     elevation: 16,
   };
-  const brandShadow = {
-    shadowColor: colors.accentOrange,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: isDark ? 0.5 : 0.35,
-    shadowRadius: 14,
-    elevation: 8,
-  };
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     map: { flex: 1 },
@@ -2100,7 +2165,6 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       padding: 6,
       borderWidth: 1.5,
       borderColor: colors.borderStrong,
-      ...floatShadow,
     },
     driverMarkerMine: {
       backgroundColor: colors.surfaceOrangeTint,
@@ -2108,7 +2172,6 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       padding: 6,
       borderWidth: 1.5,
       borderColor: colors.accentOrange,
-      ...brandShadow,
     },
     driverMarkerText: { fontSize: 16 },
     pinWrap: { alignItems: "center" },
@@ -2530,7 +2593,6 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       borderWidth: 0.5,
       borderColor: colors.borderStrong,
       marginBottom: 16,
-      ...floatShadow,
     },
     fareLabel: { fontSize: 14, color: colors.textTertiary, marginBottom: 3 },
     fareNote: { fontSize: 11, color: colors.textMuted },
@@ -2585,15 +2647,18 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       borderColor: colors.borderStrong,
     },
     editBtnText: { color: colors.textTertiary, fontSize: 15, fontWeight: "500" },
+    bookBtnWrap: { flex: 2 },
     bookBtn: {
-      flex: 2,
+      flex: 1,
       paddingVertical: 16,
       borderRadius: 14,
       backgroundColor: colors.accentOrange,
       alignItems: "center",
       justifyContent: "center",
-      ...brandShadow,
     },
+    // Gradient sits behind the label; rounded to match so it clips cleanly
+    // without an overflow:hidden on the button (which would kill its shadow).
+    bookBtnGradient: { borderRadius: 14 },
     bookBtnInner: {
       flexDirection: "row",
       alignItems: "center",

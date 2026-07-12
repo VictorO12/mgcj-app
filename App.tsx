@@ -4,8 +4,14 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StripeProvider } from "@stripe/stripe-react-native";
 import Constants from "expo-constants";
+import { useFonts } from "expo-font";
 import { AuthProvider, useAuth } from "./src/hooks/AuthContext";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
+import { FONTS, applyFontPatch } from "./src/theme/typography";
+
+// Patch RN's Text/TextInput before any screen renders so all existing
+// fontWeight styles resolve to Manrope. Fonts finish loading in <App/>.
+applyFontPatch();
 import { RootStackParamList } from "./src/types";
 import WelcomeScreen from "./src/screens/auth/WelcomeScreen";
 import PhoneEntryScreen from "./src/screens/auth/PhoneEntryScreen";
@@ -86,6 +92,17 @@ function RootNavigator() {
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts(FONTS);
+
+  if (!fontsLoaded) {
+    // Brief; the native splash covers cold start, this covers the font-load tail.
+    return (
+      <View style={[styles.loading, { backgroundColor: "#111827" }]}>
+        <ActivityIndicator color="#E8500A" size="large" />
+      </View>
+    );
+  }
+
   return (
     <ThemeProvider>
       <StripeProvider publishableKey={STRIPE_KEY}>
