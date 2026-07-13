@@ -34,6 +34,12 @@ interface ReportWebhookPayload {
 
 Deno.serve(async (req) => {
   try {
+    const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+    const incomingSecret = req.headers.get("x-webhook-secret");
+    if (!webhookSecret || incomingSecret !== webhookSecret) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
     const payload: ReportWebhookPayload = await req.json();
     const report = payload.record;
 

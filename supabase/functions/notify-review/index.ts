@@ -10,6 +10,12 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 serve(async (req) => {
   try {
+    const webhookSecret  = Deno.env.get('WEBHOOK_SECRET')
+    const incomingSecret = req.headers.get('x-webhook-secret')
+    if (!webhookSecret || incomingSecret !== webhookSecret) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
     const body = await req.json()
 
     // Only handle INSERT events on ride_reviews table

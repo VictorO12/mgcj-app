@@ -9,6 +9,12 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 Deno.serve(async (req) => {
   try {
+    const webhookSecret  = Deno.env.get('WEBHOOK_SECRET')
+    const incomingSecret = req.headers.get('x-webhook-secret')
+    if (!webhookSecret || incomingSecret !== webhookSecret) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
     const body = await req.json()
 
     // Fired by the messages INSERT webhook

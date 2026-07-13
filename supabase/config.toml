@@ -432,8 +432,23 @@ entrypoint = "./functions/schedule-rides/index.ts"
 
 [functions.notify-review]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/notify-review/deno.json"
+
+[functions.send-message-push]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/send-message-push/index.ts"
+
+[functions.send-driver-chat-push]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/send-driver-chat-push/index.ts"
+
+[functions.notify-dispatch-report]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/notify-dispatch-report/index.ts"
 
 [functions.delete-account]
 enabled = true
