@@ -15,6 +15,9 @@ import {
   Animated,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import DateTimePicker, {
+  DateTimePickerAndroid,
+} from "@react-native-community/datetimepicker";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { GradientFill } from "../../components/GradientFill";
@@ -334,14 +337,14 @@ export default function PassengerHomeScreen() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
   const [selectedCalDay, setSelectedCalDay] = useState<Date | null>(null);
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedTime, setSelectedTime] = useState<Date | null>(null);
+  const [iosTimePickerOpen, setIosTimePickerOpen] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date | null>(null);
 
   useEffect(() => {
     if (selectedCalDay && selectedTime) {
-      const [h, m] = selectedTime.split(":").map(Number);
       const d = new Date(selectedCalDay);
-      d.setHours(h, m, 0, 0);
+      d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
       setScheduledDate(d);
     } else {
       setScheduledDate(null);
@@ -394,26 +397,30 @@ export default function PassengerHomeScreen() {
       a.getDate() === b.getDate()
     );
   }
-  function buildTimeSlots(): string[] {
-    const slots: string[] = [];
-    const isToday = selectedCalDay ? isSameDay(selectedCalDay, today) : false;
-    const nowMins = isToday
-      ? new Date().getHours() * 60 + new Date().getMinutes() + 30
-      : 0;
-    for (let h = 0; h < 24; h++)
-      for (const m of [0, 30]) {
-        if (isToday && h * 60 + m < nowMins) continue;
-        slots.push(
-          `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
-        );
-      }
-    return slots;
+  function formatTimeOfDay(d: Date): string {
+    return d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
   }
-  function formatTimeSlot(t: string): string {
-    const [h, m] = t.split(":").map(Number);
-    const ampm = h >= 12 ? "PM" : "AM";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  function openTimePicker() {
+    if (!selectedCalDay) return;
+    const isToday = isSameDay(selectedCalDay, today);
+    const minDate = isToday ? new Date() : undefined;
+    const base =
+      selectedTime && (!minDate || selectedTime >= minDate)
+        ? selectedTime
+        : (minDate ?? new Date());
+    if (Platform.OS === "android") {
+      DateTimePickerAndroid.open({
+        value: base,
+        mode: "time",
+        is24Hour: false,
+        minimumDate: minDate,
+        onChange: (event, date) => {
+          if (event.type === "set" && date) setSelectedTime(date);
+        },
+      });
+    } else {
+      setIosTimePickerOpen(true);
+    }
   }
   function formatScheduledDate(d: Date): string {
     return d.toLocaleString("en-CA", {
@@ -970,6 +977,7 @@ export default function PassengerHomeScreen() {
     setScheduledDate(null);
     setSelectedCalDay(null);
     setSelectedTime(null);
+    setIosTimePickerOpen(false);
     if (userLocation)
       mapRef.current?.animateToRegion(
         { ...userLocation, latitudeDelta: 0.08, longitudeDelta: 0.08 },
@@ -1196,7 +1204,9 @@ export default function PassengerHomeScreen() {
           style={styles.kavContainer}
           keyboardVerticalOffset={0}
         >
-          <View style={styles.sheet}>
+          <View
+            style={[styles.sheet, sheet === "confirm" && styles.sheetConfirm]}
+          >
             <View style={styles.grabber} />
             {/* Input card — always visible except in confirm */}
             {sheet !== "confirm" && (
@@ -1372,6 +1382,7 @@ export default function PassengerHomeScreen() {
 
             {/* ── CONFIRM SHEET ── */}
             {sheet === "confirm" && (
+              <>
               <ScrollView
                 style={styles.confirmScroll}
                 contentContainerStyle={styles.confirmScrollContent}
@@ -1415,6 +1426,7 @@ export default function PassengerHomeScreen() {
                     if (!next) {
                       setSelectedCalDay(null);
                       setSelectedTime(null);
+                      setIosTimePickerOpen(false);
                     }
                   }}
                   activeOpacity={0.8}
@@ -1530,6 +1542,7 @@ export default function PassengerHomeScreen() {
                               if (!selectable) return;
                               setSelectedCalDay(day);
                               setSelectedTime(null);
+                              setIosTimePickerOpen(false);
                             }}
                             disabled={!selectable}
                             activeOpacity={0.7}
@@ -1550,35 +1563,61 @@ export default function PassengerHomeScreen() {
                     </View>
                     {selectedCalDay && (
                       <View style={styles.timeSection}>
-                        <Text style={styles.timeSectionLabel}>Pick a time</Text>
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.timeScrollContent}
+                        <Text style={styles.timeSectionLabel}>Pickup time</Text>
+                        <TouchableOpacity
+                          style={styles.timePickerRow}
+                          onPress={openTimePicker}
+                          activeOpacity={0.8}
                         >
-                          {buildTimeSlots().map((slot) => (
+                          <View style={styles.timePickerIconWrap}>
+                            <Ionicons
+                              name="time-outline"
+                              size={16}
+                              color={colors.accentPurple}
+                            />
+                          </View>
+                          <Text
+                            style={[
+                              styles.timePickerText,
+                              !selectedTime && styles.timePickerPlaceholder,
+                            ]}
+                          >
+                            {selectedTime
+                              ? formatTimeOfDay(selectedTime)
+                              : "Select a time"}
+                          </Text>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={16}
+                            color={colors.textMuted}
+                          />
+                        </TouchableOpacity>
+                        {Platform.OS === "ios" && iosTimePickerOpen && (
+                          <View style={styles.iosTimePickerWrap}>
+                            <DateTimePicker
+                              mode="time"
+                              display="spinner"
+                              value={selectedTime ?? new Date()}
+                              minimumDate={
+                                isSameDay(selectedCalDay, today)
+                                  ? new Date()
+                                  : undefined
+                              }
+                              themeVariant={
+                                resolvedTheme === "dark" ? "dark" : "light"
+                              }
+                              onChange={(_, date) => date && setSelectedTime(date)}
+                              style={styles.iosTimePicker}
+                            />
                             <TouchableOpacity
-                              key={slot}
-                              style={[
-                                styles.timeChip,
-                                selectedTime === slot &&
-                                  styles.timeChipSelected,
-                              ]}
-                              onPress={() => setSelectedTime(slot)}
-                              activeOpacity={0.75}
+                              style={styles.timePickerDoneBtn}
+                              onPress={() => setIosTimePickerOpen(false)}
+                              activeOpacity={0.8}
                             >
-                              <Text
-                                style={[
-                                  styles.timeChipText,
-                                  selectedTime === slot &&
-                                    styles.timeChipTextSelected,
-                                ]}
-                              >
-                                {formatTimeSlot(slot)}
-                              </Text>
+                              <Text style={styles.timePickerDoneText}>Done</Text>
                             </TouchableOpacity>
-                          ))}
-                        </ScrollView>
+                          </View>
+                        )}
                       </View>
                     )}
                     {scheduledDate && (
@@ -1823,64 +1862,66 @@ export default function PassengerHomeScreen() {
                     </Text>
                   )}
                 </View>
-
-                {/* Buttons */}
-                <View style={styles.confirmBtns}>
-                  <TouchableOpacity
-                    style={styles.editBtn}
-                    onPress={resetBookingUI}
-                  >
-                    <Text style={styles.editBtnText}>Edit</Text>
-                  </TouchableOpacity>
-                  <Animated.View
-                    style={[
-                      styles.bookBtnWrap,
-                      { transform: [{ scale: bookScale }] },
-                    ]}
-                  >
-                  <TouchableOpacity
-                    style={[
-                      styles.bookBtn,
-                      (bookingLoading || noDriversForImmediate) && {
-                        opacity: 0.6,
-                      },
-                    ]}
-                    activeOpacity={0.9}
-                    onPressIn={pressBookIn}
-                    onPressOut={pressBookOut}
-                    onPress={confirmBooking}
-                    disabled={bookingLoading || noDriversForImmediate}
-                  >
-                    {!noDriversForImmediate && (
-                      <GradientFill
-                        colors={["#F97316", "#E8500A", "#C2410C"]}
-                        style={[StyleSheet.absoluteFill, styles.bookBtnGradient]}
-                      />
-                    )}
-                    {bookingLoading ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <View style={styles.bookBtnInner}>
-                        <Text style={styles.bookBtnText}>
-                          {noDriversForImmediate
-                            ? "No drivers available"
-                            : isScheduled
-                              ? "Schedule ride"
-                              : "Book ride"}
-                        </Text>
-                        {!noDriversForImmediate && (
-                          <Ionicons
-                            name={isScheduled ? "calendar" : "arrow-forward"}
-                            size={17}
-                            color="#fff"
-                          />
-                        )}
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  </Animated.View>
-                </View>
               </ScrollView>
+
+              {/* Buttons — kept outside the ScrollView so they're always
+                  visible without needing to scroll */}
+              <View style={styles.confirmBtns}>
+                <TouchableOpacity
+                  style={styles.editBtn}
+                  onPress={resetBookingUI}
+                >
+                  <Text style={styles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <Animated.View
+                  style={[
+                    styles.bookBtnWrap,
+                    { transform: [{ scale: bookScale }] },
+                  ]}
+                >
+                <TouchableOpacity
+                  style={[
+                    styles.bookBtn,
+                    (bookingLoading || noDriversForImmediate) && {
+                      opacity: 0.6,
+                    },
+                  ]}
+                  activeOpacity={0.9}
+                  onPressIn={pressBookIn}
+                  onPressOut={pressBookOut}
+                  onPress={confirmBooking}
+                  disabled={bookingLoading || noDriversForImmediate}
+                >
+                  {!noDriversForImmediate && (
+                    <GradientFill
+                      colors={["#F97316", "#E8500A", "#C2410C"]}
+                      style={[StyleSheet.absoluteFill, styles.bookBtnGradient]}
+                    />
+                  )}
+                  {bookingLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <View style={styles.bookBtnInner}>
+                      <Text style={styles.bookBtnText}>
+                        {noDriversForImmediate
+                          ? "No drivers available"
+                          : isScheduled
+                            ? "Schedule ride"
+                            : "Book ride"}
+                      </Text>
+                      {!noDriversForImmediate && (
+                        <Ionicons
+                          name={isScheduled ? "calendar" : "arrow-forward"}
+                          size={17}
+                          color="#fff"
+                        />
+                      )}
+                    </View>
+                  )}
+                </TouchableOpacity>
+                </Animated.View>
+              </View>
+              </>
             )}
           </View>
         </KeyboardAvoidingView>
@@ -2215,6 +2256,14 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       paddingBottom: Platform.OS === "ios" ? 36 : 24,
       ...sheetShadow,
     },
+    // Applied only to the confirm step: caps the sheet's own box at the
+    // same height the KAV wrapper allows, so the ScrollView (flexShrink)
+    // is forced to give up space to the button row below it instead of
+    // pushing it past the screen edge.
+    sheetConfirm: {
+      maxHeight: SCREEN_HEIGHT * 0.78,
+      flexShrink: 1,
+    },
     grabber: {
       alignSelf: "center",
       width: 40,
@@ -2319,7 +2368,7 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     cardNudgeSub: { fontSize: 11, color: colors.textSecondary },
 
     // Confirm
-    confirmScroll: { flexGrow: 0 },
+    confirmScroll: { flexGrow: 0, flexShrink: 1 },
     confirmScrollContent: { paddingBottom: 4 },
     confirmHeader: { marginBottom: 14 },
     confirmTitle: {
@@ -2441,21 +2490,48 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       letterSpacing: 0.5,
       marginBottom: 8,
     },
-    timeScrollContent: { gap: 8, paddingRight: 4 },
-    timeChip: {
-      paddingVertical: 7,
-      paddingHorizontal: 14,
-      borderRadius: 20,
+    timePickerRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
       backgroundColor: colors.background,
+      borderRadius: 12,
       borderWidth: 0.5,
       borderColor: colors.border,
+      paddingVertical: 12,
+      paddingHorizontal: 12,
     },
-    timeChipSelected: {
-      backgroundColor: "rgba(168,85,247,0.2)",
-      borderColor: colors.accentPurple,
+    timePickerIconWrap: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: "rgba(168,85,247,0.14)",
+      alignItems: "center",
+      justifyContent: "center",
     },
-    timeChipText: { fontSize: 13, color: colors.textSecondary, fontWeight: "500" },
-    timeChipTextSelected: { color: colors.accentPurpleTextStrong, fontWeight: "600" },
+    timePickerText: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
+    timePickerPlaceholder: { color: colors.textMuted, fontWeight: "500" },
+    iosTimePickerWrap: {
+      marginTop: 8,
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    iosTimePicker: { height: 170 },
+    timePickerDoneBtn: {
+      alignItems: "center",
+      paddingVertical: 10,
+      borderTopWidth: 0.5,
+      borderTopColor: colors.borderSubtle,
+    },
+    timePickerDoneText: { color: colors.accentPurple, fontSize: 14, fontWeight: "700" },
     schedSummary: {
       flexDirection: "row",
       alignItems: "center",
@@ -2635,7 +2711,7 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     discountCodeBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentOrange },
     discountCodeError: { fontSize: 12, color: colors.accentRed, marginBottom: 8 },
     discountCodeSuccess: { fontSize: 12, color: "#1D9E75", marginBottom: 8 },
-    confirmBtns: { flexDirection: "row", gap: 12 },
+    confirmBtns: { flexDirection: "row", gap: 12, paddingTop: 14 },
     editBtn: {
       flex: 1,
       paddingVertical: 16,

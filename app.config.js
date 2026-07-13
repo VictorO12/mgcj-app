@@ -41,6 +41,7 @@ export default {
         enableGooglePay: false,
       },
     ],
+    "@react-native-community/datetimepicker",
   ],
   extra: {
     supabaseUrl: process.env.SUPABASE_URL,
