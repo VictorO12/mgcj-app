@@ -1830,6 +1830,11 @@ export default function PassengerHomeScreen() {
                       {selectedPayment === "card" ? "Card · " : "Cash · "}
                       Subject to final distance
                     </Text>
+                    {isScheduled && selectedPayment === "card" && (
+                      <Text style={styles.fareNote}>
+                        Final fare confirmed near pickup
+                      </Text>
+                    )}
                   </View>
                   {fareLoading ? (
                     <ActivityIndicator color={colors.accentOrange} />

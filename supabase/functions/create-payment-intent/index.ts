@@ -1,24 +1,8 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { computeAuthoritativeFare } from '../_shared/fare.ts'
 
 const STRIPE_SECRET_KEY  = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_API         = 'https://api.stripe.com/v1'
-const GOOGLE_MAPS_KEY    = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
-
-async function computeFareFromCoords(
-  pickupLat: number, pickupLng: number,
-  dropoffLat: number, dropoffLng: number,
-  baseFare: number, ratePerKm: number
-): Promise<number> {
-  const url =
-    `https://maps.googleapis.com/maps/api/directions/json` +
-    `?origin=${pickupLat},${pickupLng}` +
-    `&destination=${dropoffLat},${dropoffLng}` +
-    `&key=${GOOGLE_MAPS_KEY}`
-  const res  = await fetch(url)
-  const json = await res.json()
-  const metres: number = json.routes?.[0]?.legs?.[0]?.distance?.value ?? 0
-  return Math.round((baseFare + (metres / 1000) * ratePerKm) * 100) / 100
-}
 
 async function stripePost(path: string, body: Record<string, string> = {}) {
   const res = await fetch(`${STRIPE_API}${path}`, {
@@ -110,22 +94,21 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Compute fare server-side from coordinates + company pricing
-    let companyBaseFare = 4
-    let companyRatePerKm = 1.8
-    if (passenger.company_id) {
-      const { data: pricing } = await serviceClient
-        .from('companies')
-        .select('base_fare, rate_per_km')
-        .eq('id', passenger.company_id)
-        .maybeSingle()
-      if (pricing?.base_fare != null)   companyBaseFare  = pricing.base_fare
-      if (pricing?.rate_per_km != null) companyRatePerKm = pricing.rate_per_km
-    }
-    const fare_amount = await computeFareFromCoords(
-      pickup_lat, pickup_lng, dropoff_lat, dropoff_lng,
-      companyBaseFare, companyRatePerKm
-    )
+    // Compute the authoritative fare + discount server-side (single source of
+    // truth, shared with scheduled-release). Never trust a client-supplied fare.
+    const {
+      fare:           fare_amount,
+      discountedFare,
+      discountAmount,
+      discountType,
+      discountCodeId,
+    } = await computeAuthoritativeFare(serviceClient, {
+      userId:     user.id,
+      companyId:  passenger.company_id,
+      pickupLat:  pickup_lat,  pickupLng:  pickup_lng,
+      dropoffLat: dropoff_lat, dropoffLng: dropoff_lng,
+      discountCode: discount_code ?? null,
+    })
     if (!fare_amount || fare_amount <= 0) {
       return new Response(JSON.stringify({ error: 'Could not compute fare — check coordinates.' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -144,30 +127,6 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'No default payment method found. Please add a card first.' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
-    }
-
-    // Apply student discount (always wins) or a discount code, if eligible —
-    // see compute_discount_for_booking for the priority rules.
-    let discountedFare = fare_amount
-    let discountAmount = 0
-    let discountType: string | null = null
-    let discountCodeId: string | null = null
-    if (passenger.company_id) {
-      const { data: discount } = await serviceClient
-        .rpc('compute_discount_for_booking', {
-          p_user_id:    user.id,
-          p_company_id: passenger.company_id,
-          p_fare:       fare_amount,
-          p_code:       discount_code ?? null,
-        })
-        .maybeSingle()
-
-      if (discount) {
-        discountedFare = discount.discounted_fare ?? fare_amount
-        discountAmount = discount.discount_amount ?? 0
-        discountType = discount.discount_type ?? null
-        discountCodeId = discount.code_id ?? null
-      }
     }
 
     // Use platform fee default — actual fee % recalculated against the

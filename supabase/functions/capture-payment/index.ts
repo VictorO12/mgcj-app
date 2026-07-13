@@ -16,6 +16,14 @@ async function stripeRequest(path: string, body: Record<string, string> = {}) {
   return res.json()
 }
 
+async function stripeGet(path: string) {
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${STRIPE_SECRET_KEY}` },
+  })
+  return res.json()
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -121,17 +129,42 @@ Deno.serve(async (req) => {
       })
     }
 
-    // ── Calculate final capture amount ──────────────────────────
-    // Use fare_final if set (driver confirmed actual fare), else fall back to estimate
-    const fareAmount = ride.fare_final ?? ride.fare_estimate
-    if (!fareAmount || fareAmount <= 0) {
-      return new Response(JSON.stringify({ error: 'Invalid fare amount' }), {
+    // ── Determine the capture amount from Stripe, not the DB ────
+    // The charge is sized off the PaymentIntent's server-set authorized amount,
+    // never off ride.fare_final/fare_estimate — both are passenger-writable, and
+    // trusting them let a tampered-down fare drive the capture. The hold is
+    // always server-sized (create-payment-intent for immediate rides,
+    // scheduled-release for scheduled), so the authorized amount is authoritative.
+    const intent = await stripeGet(`/payment_intents/${ride.stripe_payment_intent_id}`)
+    if (intent.error) {
+      return new Response(JSON.stringify({ error: 'Could not load payment intent' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
-    // Fetch company fee percent to recalculate transfer amount
+    // Only a manual-capture PI awaiting capture can be captured. Bail clearly on
+    // already-captured / canceled / never-confirmed intents instead of a bad capture.
+    if (intent.status !== 'requires_capture') {
+      return new Response(JSON.stringify({
+        error: intent.status === 'succeeded'
+          ? 'Already captured'
+          : `Payment not capturable (status: ${intent.status})`,
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    const totalCents: number = intent.amount_capturable ?? intent.amount ?? 0
+    if (!totalCents || totalCents <= 0) {
+      return new Response(JSON.stringify({ error: 'No capturable amount on this payment' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Fetch company fee percent to recalculate the Connect transfer split.
     const { data: company } = await serviceClient
       .from('companies')
       .select('platform_fee_percent, stripe_account_id')
@@ -139,16 +172,13 @@ Deno.serve(async (req) => {
       .single()
 
     const feePct        = company?.platform_fee_percent ?? 10
-    const totalCents    = Math.round(fareAmount * 100)
     const feeCents      = Math.round(totalCents * (feePct / 100))
     const transferCents = totalCents - feeCents
 
-    // ── Capture the payment intent ──────────────────────────────
-    // Stripe will charge the card for exactly this amount.
-    // Only include transfer_data if this company has been onboarded
-    // to Stripe Connect (stripe_account_id set) — otherwise the
-    // original PaymentIntent has no transfer_data.destination and
-    // Stripe will reject transfer_data[amount].
+    // ── Capture the payment intent for the full authorized amount ──
+    // Only include transfer_data if this company has been onboarded to Stripe
+    // Connect (stripe_account_id set) — otherwise the original PaymentIntent has
+    // no transfer_data.destination and Stripe will reject transfer_data[amount].
     const captureBody: Record<string, string> = {
       amount_to_capture: totalCents.toString(),
     }
@@ -177,15 +207,23 @@ Deno.serve(async (req) => {
       })
     }
 
-    // ── Update ride payment status ──────────────────────────────
-    // Webhook will also fire payment_intent.succeeded but we update
-    // here immediately for a snappy UI response
+    // ── Persist the true charged amount ─────────────────────────
+    // Overwrite fare_final AND fare_estimate with what was actually captured so
+    // receipts, ride history and revenue analytics match the card charge — even
+    // if the stored estimate had been tampered down. Card rides are exempt from
+    // the cash_fare_final_range constraint, so this write is safe. (Webhook will
+    // also fire payment_intent.succeeded; we update here for a snappy UI.)
+    const capturedFare = totalCents / 100
     await serviceClient
       .from('rides')
-      .update({ payment_status: 'succeeded' })
+      .update({
+        payment_status: 'succeeded',
+        fare_final:     capturedFare,
+        fare_estimate:  capturedFare,
+      })
       .eq('id', ride_id)
 
-    console.log(`Ride ${ride_id} captured — $${fareAmount} CAD`)
+    console.log(`Ride ${ride_id} captured — $${capturedFare} CAD`)
 
     return new Response(
       JSON.stringify({

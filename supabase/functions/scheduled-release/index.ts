@@ -5,6 +5,7 @@
 // Cron: */2 * * * * (two entries registered in pg_cron)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { computeAuthoritativeFare } from '../_shared/fare.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -455,7 +456,33 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
   const { data: company } = await supabase.from('companies')
     .select('stripe_account_id').eq('id', ride.company_id).maybeSingle()
 
-  const totalCents = Math.round((ride.fare_estimate ?? 0) * 100)
+  // Recompute the authoritative fare server-side rather than trusting the
+  // client-written fare_estimate on the ride row. Resolve the booked discount
+  // code (if any) so the RPC can re-validate it at release time — an expired or
+  // exhausted code simply yields no code discount now (see the "final fare
+  // confirmed near pickup" note in the scheduled-booking UI).
+  let discountCode: string | null = null
+  if (ride.discount_code_id) {
+    const { data: dc } = await supabase.from('discount_codes')
+      .select('code').eq('id', ride.discount_code_id).maybeSingle()
+    discountCode = dc?.code ?? null
+  }
+
+  const fareResult = await computeAuthoritativeFare(supabase, {
+    userId:     ride.passenger_id,
+    companyId:  ride.company_id,
+    pickupLat:  ride.pickup_lat,  pickupLng:  ride.pickup_lng,
+    dropoffLat: ride.dropoff_lat, dropoffLng: ride.dropoff_lng,
+    discountCode,
+  })
+
+  // Use the recomputed fare when we got one; only fall back to the stored value
+  // on a transient compute failure (Google unreachable → fare 0) so a blip
+  // doesn't zero the hold. The freeze trigger keeps that stored value honest.
+  const authoritativeFare = fareResult.discountedFare > 0
+    ? fareResult.discountedFare
+    : (ride.fare_estimate ?? 0)
+  const totalCents = Math.round(authoritativeFare * 100)
   const piBody: Record<string, string> = {
     amount:                                       totalCents.toString(),
     currency:                                     'cad',
@@ -493,10 +520,22 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     return false
   }
 
-  await supabase.from('rides')
-    .update({ stripe_payment_intent_id: intent.id, payment_status: 'pending' })
-    .eq('id', ride.id)
-  console.log(`[ride ${ride.id}] PI created: ${intent.id}`)
+  // Persist the recomputed fare alongside the PI so the app, receipt and
+  // capture all agree on the amount the card was actually held for. Skipped on
+  // the transient-failure fallback above (nothing new/trustworthy to write).
+  const rideUpdate: Record<string, unknown> = {
+    stripe_payment_intent_id: intent.id,
+    payment_status:           'pending',
+  }
+  if (fareResult.discountedFare > 0) {
+    rideUpdate.fare_estimate     = fareResult.discountedFare
+    rideUpdate.pre_discount_fare = fareResult.fare
+    rideUpdate.discount_amount   = fareResult.discountAmount
+    rideUpdate.discount_type     = fareResult.discountType
+    rideUpdate.discount_code_id  = fareResult.discountCodeId
+  }
+  await supabase.from('rides').update(rideUpdate).eq('id', ride.id)
+  console.log(`[ride ${ride.id}] PI created: ${intent.id} — $${authoritativeFare}`)
   return true
 }
 
