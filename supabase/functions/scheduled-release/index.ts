@@ -454,7 +454,7 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
   }
 
   const { data: company } = await supabase.from('companies')
-    .select('stripe_account_id').eq('id', ride.company_id).maybeSingle()
+    .select('stripe_account_id, stripe_onboarded').eq('id', ride.company_id).maybeSingle()
 
   // Recompute the authoritative fare server-side rather than trusting the
   // client-written fare_estimate on the ride row. Resolve the booked discount
@@ -495,7 +495,9 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     'metadata[passenger_id]':                     ride.passenger_id,
     'metadata[ride_id]':                          ride.id,
   }
-  if (company?.stripe_account_id) {
+  // Route to the company's Connect account only once fully onboarded — see the
+  // matching gate in capture-payment / create-payment-intent.
+  if (company?.stripe_onboarded && company?.stripe_account_id) {
     piBody['transfer_data[destination]'] = company.stripe_account_id
   }
 

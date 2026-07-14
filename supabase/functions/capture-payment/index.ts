@@ -167,7 +167,7 @@ Deno.serve(async (req) => {
     // Fetch company fee percent to recalculate the Connect transfer split.
     const { data: company } = await serviceClient
       .from('companies')
-      .select('platform_fee_percent, stripe_account_id')
+      .select('platform_fee_percent, stripe_account_id, stripe_onboarded')
       .eq('id', ride.company_id)
       .single()
 
@@ -176,14 +176,18 @@ Deno.serve(async (req) => {
     const transferCents = totalCents - feeCents
 
     // ── Capture the payment intent for the full authorized amount ──
-    // Only include transfer_data if this company has been onboarded to Stripe
-    // Connect (stripe_account_id set) — otherwise the original PaymentIntent has
-    // no transfer_data.destination and Stripe will reject transfer_data[amount].
+    // Only include transfer_data once the company is fully Stripe-onboarded
+    // (stripe_onboarded true AND account id set). Before that the hold was
+    // created without transfer_data.destination, so Stripe would reject
+    // transfer_data[amount]. Gating on stripe_onboarded (not just account id
+    // presence) keeps this consistent with create-payment-intent and
+    // scheduled-release, and lets onboarding stamp the account id before the
+    // Connect account can actually receive transfers.
     const captureBody: Record<string, string> = {
       amount_to_capture: totalCents.toString(),
     }
 
-    if (company?.stripe_account_id) {
+    if (company?.stripe_onboarded && company?.stripe_account_id) {
       captureBody['transfer_data[amount]'] = transferCents.toString()
     }
 
