@@ -9,6 +9,7 @@ import {
   TextInput,
   Platform,
   KeyboardAvoidingView,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -25,6 +26,48 @@ interface ChatMessage {
 
 interface Props {
   onClose: () => void;
+}
+
+function dayKey(iso: string) {
+  return new Date(iso).toDateString();
+}
+
+function formatDateLabel(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.round(
+    (new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) /
+      (1000 * 60 * 60 * 24),
+  );
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString("en-CA", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
+const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+
+function linkifyBody(text: string, linkColor: string) {
+  const parts = text.split(URL_RE);
+  return parts.map((part, i) => {
+    // split() on a global regex with one capture group alternates
+    // plain-text, match, plain-text, match... — odd indices are URLs.
+    if (i % 2 === 0) return part;
+    const href = part.startsWith("www.") ? `https://${part}` : part;
+    return (
+      <Text
+        key={i}
+        style={{ color: linkColor, textDecorationLine: "underline" }}
+        onPress={() => Linking.openURL(href)}
+      >
+        {part}
+      </Text>
+    );
+  });
 }
 
 export default function DriverChatScreen({ onClose }: Props) {
@@ -158,23 +201,33 @@ export default function DriverChatScreen({ onClose }: Props) {
               <Text style={styles.emptyText}>No messages yet</Text>
             </View>
           ) : (
-            messages.map((m) => {
+            messages.map((m, i) => {
               const isDriver = m.sender_role === "driver";
+              const showSeparator =
+                i === 0 || dayKey(m.created_at) !== dayKey(messages[i - 1].created_at);
               return (
-                <View
-                  key={m.id}
-                  style={[styles.bubbleRow, isDriver ? styles.bubbleRowRight : styles.bubbleRowLeft]}
-                >
-                  <View style={[styles.bubble, isDriver ? styles.bubbleDriver : styles.bubbleAdmin]}>
-                    <Text style={styles.bubbleText}>{m.body}</Text>
+                <React.Fragment key={m.id}>
+                  {showSeparator && (
+                    <View style={styles.dateSep}>
+                      <Text style={styles.dateSepText}>{formatDateLabel(m.created_at)}</Text>
+                    </View>
+                  )}
+                  <View
+                    style={[styles.bubbleRow, isDriver ? styles.bubbleRowRight : styles.bubbleRowLeft]}
+                  >
+                    <View style={[styles.bubble, isDriver ? styles.bubbleDriver : styles.bubbleAdmin]}>
+                      <Text style={styles.bubbleText}>
+                        {linkifyBody(m.body, isDriver ? colors.textPrimary : colors.accentOrange)}
+                      </Text>
+                    </View>
+                    <Text style={[styles.bubbleTime, isDriver && styles.bubbleTimeRight]}>
+                      {new Date(m.created_at).toLocaleTimeString("en-CA", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </Text>
                   </View>
-                  <Text style={[styles.bubbleTime, isDriver && styles.bubbleTimeRight]}>
-                    {new Date(m.created_at).toLocaleTimeString("en-CA", {
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-                </View>
+                </React.Fragment>
               );
             })
           )}
@@ -229,6 +282,17 @@ const makeStyles = (colors: Colors) =>
     emptyText: { fontSize: 14, color: colors.textSecondary },
     scroll: { flex: 1 },
     scrollContent: { padding: 20, paddingBottom: 20, flexGrow: 1 },
+    dateSep: { alignItems: "center", marginBottom: 12, marginTop: 2 },
+    dateSepText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.textFaint,
+      backgroundColor: colors.surface,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 3,
+      overflow: "hidden",
+    },
     bubbleRow: { marginBottom: 12, maxWidth: "78%" },
     bubbleRowLeft: { alignSelf: "flex-start" },
     bubbleRowRight: { alignSelf: "flex-end" },
