@@ -2329,7 +2329,7 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     sectionLabel: {
       fontSize: 10,
       fontWeight: "600",
-      color: colors.textFaint,
+      color: colors.textTertiary,
       letterSpacing: 0.08,
       marginBottom: 10,
       marginTop: 4,

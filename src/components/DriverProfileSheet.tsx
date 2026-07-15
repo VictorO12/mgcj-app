@@ -557,7 +557,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     borderColor: colors.border,
   },
   noReviewsTitle: { fontSize: 15, fontWeight: "600", color: colors.textMuted },
-  noReviewsSub: { fontSize: 13, color: colors.textFaint, textAlign: "center" },
+  noReviewsSub: { fontSize: 13, color: colors.textTertiary, textAlign: "center" },
 
   ratingCard: {
     backgroundColor: colors.surface,

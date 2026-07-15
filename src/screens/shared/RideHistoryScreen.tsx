@@ -741,5 +741,5 @@ const makeStyles = (colors: Colors) =>
       borderColor: "rgba(245,158,11,0.3)",
     },
     rateBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentAmber },
-    noRatingText: { fontSize: 12, color: colors.textFaint, fontStyle: "italic" },
+    noRatingText: { fontSize: 12, color: colors.textTertiary, fontStyle: "italic" },
   });

@@ -543,5 +543,5 @@ const makeStyles = (colors: Colors) =>
       marginBottom: 12,
     },
     btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    note: { fontSize: 12, color: colors.textFaint, textAlign: "center" },
+    note: { fontSize: 12, color: colors.textTertiary, textAlign: "center" },
   });

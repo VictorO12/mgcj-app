@@ -69,6 +69,7 @@ export default function WelcomeScreen({ navigation }: Props) {
         <Text style={styles.legal}>
           By continuing you agree to our Terms of Service.{'\n'}Standard message rates may apply.
         </Text>
+        <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </View>
 
     </View>
@@ -125,5 +126,9 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     borderWidth: 0.5, borderColor: 'rgba(29,158,117,0.4)', marginBottom: 24,
   },
   driverBtnText: { color: colors.accentGreen, fontSize: 16, fontWeight: '500' },
-  legal: { fontSize: 11, color: colors.textFaint, textAlign: 'center', lineHeight: 17 },
+  legal: { fontSize: 11, color: colors.textTertiary, textAlign: 'center', lineHeight: 17 },
+  poweredBy: {
+    fontSize: 10, fontWeight: '600', color: colors.textTertiary,
+    textAlign: 'center', letterSpacing: 0.8, marginTop: 12,
+  },
 })

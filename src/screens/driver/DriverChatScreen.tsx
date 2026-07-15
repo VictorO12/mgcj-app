@@ -286,7 +286,7 @@ const makeStyles = (colors: Colors) =>
     dateSepText: {
       fontSize: 11,
       fontWeight: "600",
-      color: colors.textFaint,
+      color: colors.textTertiary,
       backgroundColor: colors.surface,
       borderRadius: 999,
       paddingHorizontal: 12,
@@ -306,7 +306,7 @@ const makeStyles = (colors: Colors) =>
       borderBottomRightRadius: 4,
     },
     bubbleText: { fontSize: 14, color: colors.textPrimary, lineHeight: 19 },
-    bubbleTime: { fontSize: 10, color: colors.textFaint, marginTop: 3 },
+    bubbleTime: { fontSize: 10, color: colors.textTertiary, marginTop: 3 },
     bubbleTimeRight: { textAlign: "right" },
     inputRow: {
       flexDirection: "row",

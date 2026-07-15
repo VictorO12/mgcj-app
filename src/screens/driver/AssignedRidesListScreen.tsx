@@ -708,7 +708,7 @@ const makeStyles = (colors: Colors) =>
     emptyTitle: { fontSize: 18, fontWeight: "600", color: colors.textMuted },
     emptySub: {
       fontSize: 13,
-      color: colors.textFaint,
+      color: colors.textTertiary,
       textAlign: "center",
       paddingHorizontal: 40,
     },
@@ -723,7 +723,7 @@ const makeStyles = (colors: Colors) =>
     },
     sectionSub: {
       fontSize: 12,
-      color: colors.textFaint,
+      color: colors.textTertiary,
       marginBottom: 10,
       marginTop: -4,
     },

@@ -319,6 +319,8 @@ export default function ProfileScreen({ onClose, onDeleteAccount }: Props) {
             records but detached from your number.
           </Text>
         </View>
+
+        <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -445,4 +447,13 @@ const makeStyles = (colors: Colors) =>
     },
     deleteBtnText: { fontSize: 15, fontWeight: "600", color: colors.accentRed },
     dangerNote: { fontSize: 12, color: colors.textSecondary, lineHeight: 16 },
+    poweredBy: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.textTertiary,
+      textAlign: "center",
+      letterSpacing: 0.8,
+      marginTop: 24,
+      marginBottom: 8,
+    },
   });

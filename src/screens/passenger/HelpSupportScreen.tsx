@@ -160,6 +160,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
 
         {/* Version info */}
         <Text style={styles.versionText}>M&G C&J Rides · Version 1.0.0</Text>
+        <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </ScrollView>
     </View>
   );
@@ -253,8 +254,16 @@ const makeStyles = (colors: Colors) =>
     },
     versionText: {
       fontSize: 12,
-      color: colors.textFaint,
+      color: colors.textTertiary,
       textAlign: "center",
       marginTop: 32,
+    },
+    poweredBy: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.textTertiary,
+      textAlign: "center",
+      letterSpacing: 0.8,
+      marginTop: 6,
     },
   });

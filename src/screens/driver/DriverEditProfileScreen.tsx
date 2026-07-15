@@ -499,6 +499,8 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
             </View>
           </View>
         )}
+
+        <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -684,4 +686,13 @@ const makeStyles = (colors: Colors) =>
     previewInitials: { fontSize: 14, fontWeight: "700", color: colors.avatarText },
     previewName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
     previewVehicle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    poweredBy: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.textTertiary,
+      textAlign: "center",
+      letterSpacing: 0.8,
+      marginTop: 24,
+      marginBottom: 8,
+    },
   });
