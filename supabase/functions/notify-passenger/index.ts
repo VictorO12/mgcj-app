@@ -43,13 +43,21 @@ Deno.serve(async (req) => {
     // Get passenger push token
     const { data: passengerProfile } = await supabase
       .from('profiles')
-      .select('name, push_token')
+      .select('name, push_token, notification_prefs')
       .eq('id', ride.passenger_id)
       .single()
 
     if (!passengerProfile?.push_token) {
       console.log('No passenger push token')
       return new Response('No passenger push token', { status: 200 })
+    }
+
+    // Cancellation notices are safety-critical and always sent regardless of
+    // preference; every other status is gated on the ride_updates toggle.
+    const rideUpdatesEnabled = passengerProfile.notification_prefs?.ride_updates ?? true
+    if (ride.status !== 'cancelled' && !rideUpdatesEnabled) {
+      console.log('Passenger has ride_updates notifications off')
+      return new Response('Passenger opted out of ride updates', { status: 200 })
     }
 
     // Get driver name

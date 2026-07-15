@@ -563,7 +563,11 @@ async function sendPassengerReminders(now: Date) {
     const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
 
     const { data: pax } = await supabase.from('profiles')
-      .select('name, phone, push_token').eq('id', ride.passenger_id).maybeSingle()
+      .select('name, phone, push_token, notification_prefs').eq('id', ride.passenger_id).maybeSingle()
+
+    // Pickup reminders (push + SMS, same category) are opt-out via prefs —
+    // unlike ride status changes these aren't safety-critical.
+    if (pax?.notification_prefs?.pickup_reminders === false) continue
 
     const when = new Date(ride.scheduled_at).toLocaleTimeString('en-CA', {
       hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',

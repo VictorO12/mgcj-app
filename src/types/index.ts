@@ -15,6 +15,10 @@ export interface Profile {
   student_email: string | null
   student_institution_id: string | null
   student_verified_at: string | null
+  notification_prefs: {
+    ride_updates: boolean
+    pickup_reminders: boolean
+  }
 }
 
 export type RootStackParamList = {

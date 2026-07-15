@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
+import { useAuth } from "../../hooks/AuthContext";
+import { supabase } from "../../lib/supabase";
 import type { Colors } from "../../theme/colors";
 
 interface Props {
@@ -18,62 +20,54 @@ interface Props {
 }
 
 interface NotifSetting {
-  id: string;
+  id: "ride_updates" | "pickup_reminders";
   icon: string;
   label: string;
   description: string;
-  enabled: boolean;
 }
+
+const SETTINGS: NotifSetting[] = [
+  {
+    id: "ride_updates",
+    icon: "car-outline",
+    label: "Ride updates",
+    description: "Driver assigned, arriving, in progress, and completed",
+  },
+  {
+    id: "pickup_reminders",
+    icon: "alarm-outline",
+    label: "Pickup reminders",
+    description: "Heads-up texts and pushes 30 and 15 minutes before a scheduled ride",
+  },
+];
 
 export default function NotificationsScreen({ onClose }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [settings, setSettings] = useState<NotifSetting[]>([
-    {
-      id: "ride_updates",
-      icon: "car-outline",
-      label: "Ride updates",
-      description: "Driver assigned, arriving, and trip status changes",
-      enabled: true,
-    },
-    {
-      id: "driver_arriving",
-      icon: "navigate-outline",
-      label: "Driver arriving",
-      description: "Alert when your driver is nearby",
-      enabled: true,
-    },
-    {
-      id: "trip_complete",
-      icon: "checkmark-circle-outline",
-      label: "Trip completed",
-      description: "Receipt and trip summary after each ride",
-      enabled: true,
-    },
-    {
-      id: "promotions",
-      icon: "pricetag-outline",
-      label: "Offers & promotions",
-      description: "Discounts and special deals from M&G",
-      enabled: false,
-    },
-    {
-      id: "account",
-      icon: "shield-outline",
-      label: "Account activity",
-      description: "Sign-in alerts and account changes",
-      enabled: true,
-    },
-  ]);
+  const { profile, refetch } = useAuth();
+  const [prefs, setPrefs] = useState({
+    ride_updates: profile?.notification_prefs?.ride_updates ?? true,
+    pickup_reminders: profile?.notification_prefs?.pickup_reminders ?? true,
+  });
+  const [saving, setSaving] = useState(false);
 
-  function toggle(id: string) {
-    setSettings((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)),
-    );
+  function toggle(id: NotifSetting["id"]) {
+    setPrefs((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
-  function saveSettings() {
-    Alert.alert("Saved", "Notification preferences updated.");
+  async function saveSettings() {
+    if (!profile?.id) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ notification_prefs: prefs })
+      .eq("id", profile.id);
+    setSaving(false);
+    if (error) {
+      Alert.alert("Couldn't save", "Please try again.");
+      return;
+    }
+    await refetch();
     onClose();
   }
 
@@ -94,12 +88,14 @@ export default function NotificationsScreen({ onClose }: Props) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.intro}>
-          Choose which notifications you'd like to receive.
+          Choose which notifications you'd like to receive. Cancellation
+          alerts always go through, so you're never left waiting on a ride
+          that isn't coming.
         </Text>
 
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>NOTIFICATION PREFERENCES</Text>
-          {settings.map((setting, i) => (
+          {SETTINGS.map((setting, i) => (
             <View key={setting.id}>
               {i > 0 && <View style={styles.itemDivider} />}
               <View style={styles.settingRow}>
@@ -107,7 +103,7 @@ export default function NotificationsScreen({ onClose }: Props) {
                   <Ionicons
                     name={setting.icon as any}
                     size={18}
-                    color={setting.enabled ? colors.accentOrange : colors.textSecondary}
+                    color={prefs[setting.id] ? colors.accentOrange : colors.textSecondary}
                   />
                 </View>
                 <View style={styles.settingText}>
@@ -115,10 +111,10 @@ export default function NotificationsScreen({ onClose }: Props) {
                   <Text style={styles.settingDesc}>{setting.description}</Text>
                 </View>
                 <Switch
-                  value={setting.enabled}
+                  value={prefs[setting.id]}
                   onValueChange={() => toggle(setting.id)}
                   trackColor={{ false: colors.textFaint, true: "rgba(232,80,10,0.4)" }}
-                  thumbColor={setting.enabled ? colors.accentOrange : colors.textSecondary}
+                  thumbColor={prefs[setting.id] ? colors.accentOrange : colors.textSecondary}
                   ios_backgroundColor={colors.textFaint}
                 />
               </View>
@@ -130,8 +126,11 @@ export default function NotificationsScreen({ onClose }: Props) {
           style={styles.saveBtn}
           onPress={saveSettings}
           activeOpacity={0.85}
+          disabled={saving}
         >
-          <Text style={styles.saveBtnText}>Save preferences</Text>
+          <Text style={styles.saveBtnText}>
+            {saving ? "Saving…" : "Save preferences"}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
