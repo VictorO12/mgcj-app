@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
     // Target must be a dispatcher in the caller's own company.
     const { data: target, error: targetError } = await supabase
       .from('profiles')
-      .select('role, company_id')
+      .select('role, company_id, name, phone')
       .eq('id', staff_id)
       .maybeSingle()
 
@@ -103,11 +103,23 @@ Deno.serve(async (req) => {
 
     if (profileError) return json({ error: profileError.message }, 500)
 
+    // Log before→after only for fields that actually changed, so the activity
+    // log can show "Old Name → New Name" rather than just the current value.
+    const newName = name.trim()
+    const details: Record<string, unknown> = { staff_id, name: newName }
+    if (target.name !== newName) {
+      details.name_from = target.name
+      details.name_to = newName
+    }
+    if (target.phone !== e164) {
+      details.phone_from = target.phone
+      details.phone_to = e164
+    }
     const { error: logError } = await supabase.from('dispatch_events').insert({
       company_id: caller.company_id,
       dispatcher_id: callerId,
       event_type: 'staff.updated',
-      details: { staff_id, name: name.trim() },
+      details,
     })
     if (logError) console.error('dispatch_events log error:', logError)
 
