@@ -470,6 +470,18 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+# Browser-called (dashboard) — verify_jwt must be false so the CORS preflight
+# OPTIONS (which carries no Authorization header) isn't 401'd at the gateway.
+# The function verifies the caller's JWT + admin role internally instead.
+[functions.create-staff-account]
+enabled = true
+verify_jwt = false
+
+# Browser-called (dashboard) — same CORS/verify_jwt rationale as create-staff-account.
+[functions.update-staff-account]
+enabled = true
+verify_jwt = false
+
 [functions.expire-pending-rides]
 verify_jwt = false
 
