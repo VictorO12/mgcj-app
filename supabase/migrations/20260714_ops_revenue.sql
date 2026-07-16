@@ -1,0 +1,58 @@
+-- Revenue aggregation for the Vellon Ops console (Revenue module).
+--
+-- There is no platform-fee ledger in mgcj — the fee is derived on the fly from
+-- each completed ride's fare_final × the company's platform_fee_percent. Doing
+-- that SUM/GROUP BY in SQL (rather than pulling raw rides into the Node server)
+-- keeps it correct past PostgREST's 1000-row page cap and cheap at any volume.
+--
+-- Time axis is rides.updated_at: there is no completed_at column, and updated_at
+-- on a completed ride ≈ its completion moment (± seconds for the card webhook),
+-- which is accurate enough for month-bucketed revenue. Months are bucketed in
+-- UTC (explicit `at time zone 'UTC'`) so the result is deterministic regardless
+-- of the connection's session timezone; the caller passes UTC month bounds to
+-- match. A handful of late-evening-Halifax rides may land in the next UTC month
+-- — immaterial for cash-invoice totals, and avoids DST offset math.
+--
+-- SECURITY DEFINER owned by postgres; execute granted only to service_role
+-- (the Vellon Ops server). Mirrors ops_health_system().
+
+create or replace function public.ops_revenue(
+  p_from timestamptz,
+  p_to   timestamptz
+)
+returns table (
+  company_id     uuid,
+  company_name   text,
+  fee_percent    numeric,
+  month          date,
+  payment_method text,
+  ride_count     bigint,
+  fares_total    numeric,
+  fee_total      numeric
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select
+    r.company_id,
+    c.name                                   as company_name,
+    c.platform_fee_percent                   as fee_percent,
+    date_trunc('month', r.updated_at at time zone 'UTC')::date as month,
+    r.payment_method,
+    count(*)                                 as ride_count,
+    coalesce(sum(r.fare_final), 0)           as fares_total,
+    coalesce(sum(r.fare_final * c.platform_fee_percent / 100.0), 0) as fee_total
+  from rides r
+  join companies c on c.id = r.company_id
+  where r.status = 'completed'
+    and r.fare_final is not null
+    and r.updated_at >= p_from
+    and r.updated_at <  p_to
+  group by r.company_id, c.name, c.platform_fee_percent,
+           date_trunc('month', r.updated_at at time zone 'UTC'), r.payment_method;
+$$;
+
+revoke all on function public.ops_revenue(timestamptz, timestamptz) from public;
+grant execute on function public.ops_revenue(timestamptz, timestamptz) to service_role;
