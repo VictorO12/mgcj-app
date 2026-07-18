@@ -1,7 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
-const FROM_ADDRESS = "no-reply@vellon.ca";
+const FROM_ADDRESS = "Vellon <no-reply@vellon.ca>";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 
 const corsHeaders = {

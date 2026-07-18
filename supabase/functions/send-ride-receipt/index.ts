@@ -6,7 +6,7 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-const FROM_ADDRESS = "no-reply@vellon.ca";
+const FROM_ADDRESS = "Vellon <no-reply@vellon.ca>";
 
 interface RideWebhookPayload {
   type: string;

@@ -5,7 +5,7 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-const FROM_ADDRESS = "no-reply@vellon.ca";
+const FROM_ADDRESS = "Vellon <no-reply@vellon.ca>";
 const TO_ADDRESS = "support@vellon.ca";
 
 const CATEGORY_LABELS: Record<string, string> = {
