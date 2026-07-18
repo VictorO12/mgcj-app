@@ -148,6 +148,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         from: FROM_ADDRESS,
         to: passenger.email,
+        reply_to: "support@vellon.ca",
         subject: `Your ride receipt — $${fare.toFixed(2)}`,
         html,
         attachments: [
