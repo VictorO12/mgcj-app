@@ -13,6 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import ReportProblemModal from "../../components/ReportProblemModal";
 
 if (
   Platform.OS === "android" &&
@@ -61,6 +62,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [reportVisible, setReportVisible] = useState(false);
 
   function toggleFAQ(index: number) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -158,10 +160,26 @@ export default function HelpSupportScreen({ onClose }: Props) {
           ))}
         </View>
 
+        {/* Report a problem */}
+        <TouchableOpacity
+          style={styles.reportRow}
+          onPress={() => setReportVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="flag-outline" size={18} color={colors.accentRed} />
+          <Text style={styles.reportText}>Report a problem</Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
+
         {/* Version info */}
         <Text style={styles.versionText}>M&G C&J Rides · Version 1.0.0</Text>
         <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </ScrollView>
+
+      <ReportProblemModal
+        visible={reportVisible}
+        onDismiss={() => setReportVisible(false)}
+      />
     </View>
   );
 }
@@ -252,6 +270,19 @@ const makeStyles = (colors: Colors) =>
       backgroundColor: colors.borderSubtle,
       marginHorizontal: 18,
     },
+    reportRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      paddingVertical: 16,
+      paddingHorizontal: 18,
+      marginTop: 24,
+    },
+    reportText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.textPrimary },
     versionText: {
       fontSize: 12,
       color: colors.textTertiary,

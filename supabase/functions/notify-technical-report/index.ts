@@ -1,0 +1,112 @@
+import { createClient } from "jsr:@supabase/supabase-js@2";
+import { emailFooter } from "../_shared/emailFooter.ts";
+
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+
+const FROM_ADDRESS = "Vellon <no-reply@vellon.ca>";
+const TO_ADDRESS = "support@vellon.ca";
+
+const CATEGORY_LABELS: Record<string, string> = {
+  bug: "Bug / technical issue",
+  payment: "Payment issue",
+  account: "Account issue",
+  other: "Other",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  passenger: "Passenger",
+  driver: "Driver",
+};
+
+const esc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+interface ReportWebhookPayload {
+  type: string;
+  table: string;
+  record: {
+    id: string;
+    reporter_id: string;
+    reporter_role: string;
+    company_id: string | null;
+    ride_id: string | null;
+    category: string;
+    message: string;
+    created_at: string;
+  };
+}
+
+Deno.serve(async (req) => {
+  try {
+    const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+    const incomingSecret = req.headers.get("x-webhook-secret");
+    if (!webhookSecret || incomingSecret !== webhookSecret) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const payload: ReportWebhookPayload = await req.json();
+    const report = payload.record;
+
+    const [{ data: reporter }, { data: company }] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("name, phone")
+        .eq("id", report.reporter_id)
+        .maybeSingle(),
+      report.company_id
+        ? supabase.from("companies").select("name").eq("id", report.company_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    const categoryLabel = CATEGORY_LABELS[report.category] ?? report.category;
+    const roleLabel = ROLE_LABELS[report.reporter_role] ?? report.reporter_role;
+    const reporterName = reporter?.name ?? "Unknown user";
+    const reporterPhone = reporter?.phone ?? "—";
+    const companyName = company?.name ?? "—";
+
+    const html = `
+      <div style="font-family: system-ui, sans-serif; color: #111827;">
+        <h2 style="margin-bottom: 4px;">New ${esc(roleLabel.toLowerCase())} report</h2>
+        <p style="color: #6B7280; margin-top: 0;">${esc(categoryLabel)}</p>
+        <table style="border-collapse: collapse; margin: 12px 0;">
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Reported by</td><td>${esc(reporterName)} (${esc(roleLabel)})</td></tr>
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Phone</td><td>${esc(reporterPhone)}</td></tr>
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Company</td><td>${esc(companyName)}</td></tr>
+          ${report.ride_id ? `<tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Ride</td><td>${esc(report.ride_id)}</td></tr>` : ""}
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Time</td><td>${esc(report.created_at)}</td></tr>
+        </table>
+        <p style="white-space: pre-wrap; border-left: 3px solid #E8500A; padding-left: 12px;">${esc(report.message)}</p>
+        ${emailFooter()}
+      </div>
+    `;
+
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${Deno.env.get("RESEND_API_KEY")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: FROM_ADDRESS,
+        to: TO_ADDRESS,
+        reply_to: "support@vellon.ca",
+        subject: `[${roleLabel} report] ${categoryLabel} — ${reporterName}`,
+        html,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("[notify-technical-report] Resend error:", errText);
+      return new Response(JSON.stringify({ error: errText }), { status: 500 });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  } catch (err) {
+    console.error("[notify-technical-report] error:", err);
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
+  }
+});
