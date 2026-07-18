@@ -1,4 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { emailFooter } from "../_shared/emailFooter.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const FROM_ADDRESS = "Vellon <no-reply@vellon.ca>";
@@ -158,6 +159,7 @@ function buildEmailHtml(institutionName: string, confirmUrl: string, companyName
       <a href="${confirmUrl}" style="background: #E8500A; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600;">Confirm my student status</a>
     </div>
     <p style="font-size: 12px; color: #9CA3AF;">This link expires in 30 minutes. If you didn't request this, you can ignore this email.</p>
+    ${emailFooter()}
   </div>
   `;
 }

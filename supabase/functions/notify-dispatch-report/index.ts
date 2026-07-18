@@ -1,4 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { emailFooter } from "../_shared/emailFooter.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -62,6 +63,7 @@ Deno.serve(async (req) => {
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Time</td><td>${esc(report.created_at)}</td></tr>
         </table>
         <p style="white-space: pre-wrap; border-left: 3px solid #E8500A; padding-left: 12px;">${esc(report.message)}</p>
+        ${emailFooter()}
       </div>
     `;
 
