@@ -1,7 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const VERIFY_BASE_URL = "https://mgcj-dashboard.vercel.app/verify.html";
+const VERIFY_BASE_URL = "https://vellon-dispatch.vercel.app/verify.html";
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
