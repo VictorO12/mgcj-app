@@ -323,6 +323,26 @@ export default function RideHistoryScreen({ onClose }: Props) {
     .filter((r) => r.status === "completed")
     .reduce((sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0), 0);
 
+  // Net-of-fee total for driver_direct drivers only — what actually lands
+  // with the driver after Vellon's cut (and Stripe's processing fee, for
+  // card rides). Cash rides are counted at fare minus Vellon's fee too, even
+  // though that fee is invoiced to the company later rather than deducted
+  // up front — this is the eventual net, not what's in-hand today.
+  const totalNet =
+    payoutModel === "driver_direct"
+      ? rides
+          .filter((r) => r.status === "completed")
+          .reduce((sum, r) => {
+            const fare = r.fare_final ?? r.fare_estimate;
+            if (fare == null || r.platform_fee_percent_at_completion == null) {
+              return sum;
+            }
+            const vellonFee =
+              fare * (r.platform_fee_percent_at_completion / 100);
+            return sum + (fare - vellonFee - (r.stripe_fee ?? 0));
+          }, 0)
+      : null;
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -346,8 +366,21 @@ export default function RideHistoryScreen({ onClose }: Props) {
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>${totalEarnings.toFixed(2)}</Text>
-            <Text style={styles.summaryLabel}>Earned</Text>
+            <Text style={styles.summaryLabel}>
+              {totalNet != null ? "Fares" : "Earned"}
+            </Text>
           </View>
+          {totalNet != null && (
+            <>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={[styles.summaryValue, { color: colors.accentGreen }]}>
+                  ${totalNet.toFixed(2)}
+                </Text>
+                <Text style={styles.summaryLabel}>Net to you</Text>
+              </View>
+            </>
+          )}
         </View>
       )}
 
@@ -876,22 +909,22 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "space-between",
       alignItems: "center",
     },
-    settlementLabel: { fontSize: 12, color: colors.textSecondary },
+    settlementLabel: { fontSize: 12, color: colors.textTertiary },
     settlementValue: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
     settlementValueNeg: { fontSize: 13, fontWeight: "600", color: colors.accentRedDeep },
     settlementNetRow: {
       borderTopWidth: 0.5,
-      borderColor: colors.borderSubtle,
+      borderColor: colors.borderStrong,
       paddingTop: 6,
       marginTop: 2,
     },
     settlementNetLabel: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
     settlementNetValue: { fontSize: 15, fontWeight: "700", color: colors.accentGreen },
-    settlementPending: { fontSize: 12, color: colors.textFaint, fontStyle: "italic" },
-    settlementNote: { fontSize: 12, color: colors.textSecondary, lineHeight: 17 },
+    settlementPending: { fontSize: 12, color: colors.textTertiary, fontStyle: "italic" },
+    settlementNote: { fontSize: 12, color: colors.textOnSurfaceLight, lineHeight: 17 },
     settlementRouteNote: {
       fontSize: 11,
-      color: colors.textFaint,
+      color: colors.textTertiary,
       marginTop: 2,
     },
     reviewSection: {
