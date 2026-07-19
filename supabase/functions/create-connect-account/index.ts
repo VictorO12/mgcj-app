@@ -167,19 +167,19 @@ Deno.serve(async (req) => {
     //
     // NOTE: Stripe rejects custom URL schemes here (`mgcjapp://...` fails
     // Account Links' own URL validation with "not a valid URL") — return_url/
-    // refresh_url must be real https URLs. Auto-closing the in-app browser
-    // exactly when Stripe redirects would need a small hosted bridge page
-    // that forwards https -> the app's custom scheme (Vellon has no such
-    // page yet). Using the already-live dashboard as a placeholder landing
-    // spot for now; the client doesn't try to auto-detect this URL, it just
-    // lets the driver manually dismiss the browser when done, then re-checks
-    // the real account status via check-connect-status regardless of how the
-    // browser was closed — per Stripe's own guidance, the return_url
-    // redirect firing (or not) never means onboarding actually completed.
+    // refresh_url must be real https URLs. Both point at a small hosted
+    // bridge page (mgcj-dashboard's public/stripe-connect-return.html) whose
+    // only job is to forward https -> mgcjapp://stripe-connect-return. The
+    // client opens this link via WebBrowser.openAuthSessionAsync with that
+    // same custom-scheme return URL, so it detects the bridge page's redirect
+    // and auto-closes the in-app browser. We still re-check the real account
+    // status via check-connect-status regardless of how the session closed —
+    // per Stripe's own guidance, the return_url redirect firing (or not)
+    // never means onboarding actually completed.
     const accountLink = await stripePost('/account_links', {
       account:     accountId,
-      refresh_url: 'https://vellon-dispatch.vercel.app',
-      return_url:  'https://vellon-dispatch.vercel.app',
+      refresh_url: 'https://vellon-dispatch.vercel.app/stripe-connect-return.html',
+      return_url:  'https://vellon-dispatch.vercel.app/stripe-connect-return.html',
       type:        'account_onboarding',
     })
 

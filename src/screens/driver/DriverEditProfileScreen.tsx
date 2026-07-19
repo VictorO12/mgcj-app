@@ -171,10 +171,17 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
       }
 
       // Stripe requires return_url/refresh_url to be real https URLs (no
-      // custom scheme support), so there's nothing for the OS to auto-close
-      // on here — the driver dismisses the browser manually when done. We
-      // re-check the real status below regardless of how it was closed.
-      await WebBrowser.openBrowserAsync(result.url);
+      // custom scheme support), so create-connect-account points both at a
+      // hosted bridge page that forwards to this custom scheme. Using
+      // openAuthSessionAsync (not openBrowserAsync) so the browser session
+      // itself watches for that redirect and auto-closes when it fires. We
+      // still re-check the real status below regardless of how it was
+      // closed, since the redirect firing doesn't guarantee onboarding
+      // actually finished.
+      await WebBrowser.openAuthSessionAsync(
+        result.url,
+        "mgcjapp://stripe-connect-return",
+      );
 
       // The return-url firing doesn't mean onboarding actually finished —
       // re-check the real status against Stripe regardless of how the
