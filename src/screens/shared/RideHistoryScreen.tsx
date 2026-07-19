@@ -82,6 +82,12 @@ function settlementRouteLabel(
       return "Held by Vellon for now — contact dispatch";
     case "transfer_failed":
       return "Payout issue — contact Vellon support";
+    case "transfer_reversed":
+      return "Payout reversed — this ride's charge was disputed";
+    case "reversal_failed":
+      return "Dispute issue — contact Vellon support";
+    case "retransfer_failed":
+      return "Dispute won, but payout didn't go through — contact Vellon support";
     default:
       return null;
   }

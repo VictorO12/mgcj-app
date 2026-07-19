@@ -2,6 +2,24 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const STRIPE_SECRET_KEY      = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_WEBHOOK_SECRET  = Deno.env.get('STRIPE_WEBHOOK_SECRET')!
+const STRIPE_API             = 'https://api.stripe.com/v1'
+
+// ── Stripe helper (only charge.dispute.created needs to call back to
+// Stripe — every other event here just writes to the DB) ────────────
+async function stripePost(path: string, body: Record<string, string> = {}, idempotencyKey?: string) {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  }
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    method: 'POST',
+    headers,
+    body: new URLSearchParams(body).toString(),
+  })
+  return res.json()
+}
 
 // ── Stripe signature verification ─────────────────────────────
 // Stripe signs every webhook payload so we can confirm it's genuine
@@ -146,6 +164,190 @@ Deno.serve(async (req) => {
           .eq('id', ride_id)
 
         console.log(`Ride ${ride_id} marked as refunded`)
+        break
+      }
+
+      case 'charge.dispute.created': {
+        const dispute = event.data.object
+        const paymentIntentId: string | undefined =
+          typeof dispute.payment_intent === 'string'
+            ? dispute.payment_intent
+            : dispute.payment_intent?.id
+
+        if (!paymentIntentId) {
+          console.warn('charge.dispute.created — no payment_intent on dispute object')
+          break
+        }
+
+        const { data: ride } = await serviceClient
+          .from('rides')
+          .select('id, stripe_transfer_id, settlement_route')
+          .eq('stripe_payment_intent_id', paymentIntentId)
+          .maybeSingle()
+
+        if (!ride) {
+          console.warn(`charge.dispute.created — no ride found for payment_intent ${paymentIntentId}`)
+          break
+        }
+
+        await serviceClient
+          .from('rides')
+          .update({ stripe_dispute_id: dispute.id })
+          .eq('id', ride.id)
+
+        // Only a ride whose settlement actually left the platform balance
+        // (sent to a driver or company Connect account) needs reversing —
+        // platform_invoiced never left, transfer_failed never sent anything.
+        const hasOutstandingTransfer =
+          !!ride.stripe_transfer_id &&
+          (ride.settlement_route === 'driver_transfer' || ride.settlement_route === 'company_transfer')
+
+        if (!hasOutstandingTransfer) {
+          console.log(`Ride ${ride.id}: dispute ${dispute.id} recorded, no outstanding transfer to reverse (route: ${ride.settlement_route})`)
+          break
+        }
+
+        // Idempotency-Key derived from the dispute id so a webhook retry
+        // reaches Stripe as the SAME reversal attempt, not a second one.
+        const reversal = await stripePost(
+          `/transfers/${ride.stripe_transfer_id}/reversals`,
+          {},
+          `reversal-${dispute.id}`,
+        )
+
+        if (reversal.error) {
+          // Common cause: the destination account's balance no longer covers
+          // it (already paid out to their bank) — needs manual recovery.
+          console.error(`Ride ${ride.id}: failed to reverse transfer ${ride.stripe_transfer_id} for dispute ${dispute.id}:`, reversal.error)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'reversal_failed' })
+            .eq('id', ride.id)
+        } else {
+          console.log(`Ride ${ride.id}: reversed transfer ${ride.stripe_transfer_id} for dispute ${dispute.id}`)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'transfer_reversed' })
+            .eq('id', ride.id)
+        }
+        break
+      }
+
+      case 'charge.dispute.closed': {
+        const dispute = event.data.object
+        const paymentIntentId: string | undefined =
+          typeof dispute.payment_intent === 'string'
+            ? dispute.payment_intent
+            : dispute.payment_intent?.id
+        const chargeId: string | undefined =
+          typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id
+
+        if (!paymentIntentId) {
+          console.warn('charge.dispute.closed — no payment_intent on dispute object')
+          break
+        }
+
+        const { data: ride } = await serviceClient
+          .from('rides')
+          .select('id, driver_id, company_id, fare_final, platform_fee_percent_at_completion, stripe_fee, settlement_route')
+          .eq('stripe_payment_intent_id', paymentIntentId)
+          .maybeSingle()
+
+        if (!ride) {
+          console.warn(`charge.dispute.closed — no ride found for payment_intent ${paymentIntentId}`)
+          break
+        }
+
+        if (dispute.status !== 'won') {
+          // 'lost' (or any other terminal status) — Vellon keeps absorbing
+          // the reversal, nothing to re-send. Just log for the record.
+          console.log(`Ride ${ride.id}: dispute ${dispute.id} closed as '${dispute.status}' — no action needed`)
+          break
+        }
+
+        if (ride.settlement_route !== 'transfer_reversed') {
+          // Nothing was reversed for this ride (no transfer ever went out,
+          // or it's already been re-sent) — nothing to send back.
+          console.log(`Ride ${ride.id}: dispute ${dispute.id} won, but settlement_route is '${ride.settlement_route}' — nothing to re-send`)
+          break
+        }
+
+        if (!chargeId || ride.fare_final == null || ride.platform_fee_percent_at_completion == null || ride.stripe_fee == null) {
+          console.error(`Ride ${ride.id}: dispute ${dispute.id} won, but missing data to recompute the re-transfer amount — needs manual payout`)
+          break
+        }
+
+        // Re-resolve the destination the same way capture-payment originally
+        // did — we don't store which one the reversed transfer went to, and
+        // re-deriving it (rather than caching it) means this naturally picks
+        // up a driver who finished Connect onboarding in the meantime.
+        const { data: company } = await serviceClient
+          .from('companies')
+          .select('stripe_account_id, stripe_onboarded, payout_model')
+          .eq('id', ride.company_id)
+          .single()
+
+        const isDriverDirect = company?.payout_model === 'driver_direct'
+
+        let driver: { stripe_connect_account_id: string | null; connect_status: string | null } | null = null
+        if (isDriverDirect && ride.driver_id) {
+          const { data } = await serviceClient
+            .from('drivers')
+            .select('stripe_connect_account_id, connect_status')
+            .eq('id', ride.driver_id)
+            .maybeSingle()
+          driver = data
+        }
+
+        const destination =
+          isDriverDirect && driver?.connect_status === 'complete' && driver?.stripe_connect_account_id
+            ? { id: driver.stripe_connect_account_id, route: 'driver_transfer' }
+            : company?.stripe_onboarded && company?.stripe_account_id
+              ? { id: company.stripe_account_id, route: 'company_transfer' }
+              : null
+
+        if (!destination) {
+          console.error(`Ride ${ride.id}: dispute ${dispute.id} won, but no usable Connect account to re-send the transfer to — needs manual payout`)
+          break
+        }
+
+        // Same real-numbers-only math capture-payment uses — never re-estimate
+        // the fee, both platform_fee_percent_at_completion and stripe_fee were
+        // already frozen/real values from the original capture.
+        const totalCents    = Math.round(ride.fare_final * 100)
+        const feeCents       = Math.round(totalCents * (ride.platform_fee_percent_at_completion / 100))
+        const stripeFeeCents = Math.round(ride.stripe_fee * 100)
+        const transferCents  = totalCents - feeCents - stripeFeeCents
+
+        if (transferCents <= 0) {
+          console.warn(`Ride ${ride.id}: dispute ${dispute.id} won, but computed re-transfer amount is <= 0 — skipping`)
+          break
+        }
+
+        // Idempotency-Key derived from the dispute id so a webhook retry
+        // reaches Stripe as the SAME re-transfer attempt, not a second one.
+        const transfer = await stripePost('/transfers', {
+          amount:               transferCents.toString(),
+          currency:             'cad',
+          destination:          destination.id,
+          source_transaction:   chargeId,
+          'metadata[ride_id]':  ride.id,
+          'metadata[dispute_won_retransfer]': 'true',
+        }, `retransfer-${dispute.id}`)
+
+        if (transfer.error) {
+          console.error(`Ride ${ride.id}: failed to re-send transfer after won dispute ${dispute.id}:`, transfer.error)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'retransfer_failed' })
+            .eq('id', ride.id)
+        } else {
+          console.log(`Ride ${ride.id}: re-sent transfer ${transfer.id} after won dispute ${dispute.id}`)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: destination.route, stripe_transfer_id: transfer.id })
+            .eq('id', ride.id)
+        }
         break
       }
 
