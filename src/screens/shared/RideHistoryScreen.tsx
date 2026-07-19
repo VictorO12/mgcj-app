@@ -93,6 +93,18 @@ function settlementRouteLabel(
   }
 }
 
+// Routes that need the driver's attention (disputed/failed), as opposed to
+// the routine "here's where your money went" routes — these get a warning
+// treatment instead of blending into the rest of the breakdown.
+function isSettlementProblem(route: string | null): boolean {
+  return (
+    route === "transfer_failed" ||
+    route === "transfer_reversed" ||
+    route === "reversal_failed" ||
+    route === "retransfer_failed"
+  );
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -642,14 +654,29 @@ export default function RideHistoryScreen({ onClose }: Props) {
                               settlementRouteLabel(
                                 ride.settlement_route,
                                 companyName,
-                              ) && (
+                              ) &&
+                              (isSettlementProblem(ride.settlement_route) ? (
+                                <View style={styles.settlementWarningRow}>
+                                  <Ionicons
+                                    name="warning"
+                                    size={13}
+                                    color={colors.accentRedDeep}
+                                  />
+                                  <Text style={styles.settlementWarningText}>
+                                    {settlementRouteLabel(
+                                      ride.settlement_route,
+                                      companyName,
+                                    )}
+                                  </Text>
+                                </View>
+                              ) : (
                                 <Text style={styles.settlementRouteNote}>
                                   {settlementRouteLabel(
                                     ride.settlement_route,
                                     companyName,
                                   )}
                                 </Text>
-                              )
+                              ))
                             )}
                           </View>
                         )}
@@ -953,6 +980,23 @@ const makeStyles = (colors: Colors) =>
       fontSize: 11,
       color: colors.textTertiary,
       marginTop: 2,
+    },
+    settlementWarningRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      marginTop: 4,
+      paddingTop: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      borderRadius: 8,
+      backgroundColor: "rgba(226,75,74,0.12)",
+    },
+    settlementWarningText: {
+      flex: 1,
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accentRedDeep,
     },
     reviewSection: {
       borderTopWidth: 0.5,
