@@ -1,6 +1,7 @@
 export default {
   name: "M&G C&J",
   slug: "mgcj-app",
+  scheme: "mgcjapp",
   version: "1.0.0",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
@@ -42,6 +43,7 @@ export default {
       },
     ],
     "@react-native-community/datetimepicker",
+    "expo-web-browser",
   ],
   extra: {
     supabaseUrl: process.env.SUPABASE_URL,

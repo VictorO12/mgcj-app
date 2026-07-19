@@ -14,6 +14,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as WebBrowser from "expo-web-browser";
+import Constants from "expo-constants";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
@@ -66,6 +68,11 @@ const VEHICLE_MODELS: Record<string, string[]> = {
   Other:      [],
 };
 
+const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
+const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
+
+type ConnectStatus = "not_started" | "pending" | "complete";
+
 export default function DriverEditProfileScreen({ onClose }: Props) {
   const { profile, refetch } = useAuth();
   const { colors } = useTheme();
@@ -84,6 +91,12 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
+  const [payoutModel, setPayoutModel] = useState<
+    "company_settles" | "driver_direct" | null
+  >(null);
+  const [connectStatus, setConnectStatus] =
+    useState<ConnectStatus>("not_started");
+  const [connectLoading, setConnectLoading] = useState(false);
 
   const initials = name
     ? name
@@ -102,7 +115,9 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
     if (!profile) return;
     const { data } = await supabase
       .from("drivers")
-      .select("vehicle_make, vehicle_model, plate_number, vehicle_year")
+      .select(
+        "vehicle_make, vehicle_model, plate_number, vehicle_year, connect_status",
+      )
       .eq("id", profile.id)
       .single();
     if (data) {
@@ -110,8 +125,79 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
       setVehicleModel(data.vehicle_model ?? "");
       setPlateNumber(data.plate_number ?? "");
       setYear(data.vehicle_year ? String(data.vehicle_year) : "");
+      setConnectStatus((data.connect_status as ConnectStatus) ?? "not_started");
     }
+
+    if (profile.company_id) {
+      const { data: company } = await supabase
+        .from("companies")
+        .select("payout_model")
+        .eq("id", profile.company_id)
+        .single();
+      setPayoutModel(company?.payout_model ?? "company_settles");
+    }
+
     setLoadingData(false);
+  }
+
+  async function handleSetUpPayouts() {
+    if (!profile) return;
+    setConnectLoading(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error("No session");
+
+      const res = await fetch(
+        `${SUPABASE_URL}/functions/v1/create-connect-account`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            apikey: SUPABASE_ANON_KEY,
+          },
+        },
+      );
+      const result = await res.json();
+
+      if (!res.ok) {
+        Alert.alert(
+          "Couldn't start setup",
+          result.error ?? "Please try again.",
+        );
+        return;
+      }
+
+      // Stripe requires return_url/refresh_url to be real https URLs (no
+      // custom scheme support), so there's nothing for the OS to auto-close
+      // on here — the driver dismisses the browser manually when done. We
+      // re-check the real status below regardless of how it was closed.
+      await WebBrowser.openBrowserAsync(result.url);
+
+      // The return-url firing doesn't mean onboarding actually finished —
+      // re-check the real status against Stripe regardless of how the
+      // browser session closed (completed, backed out, or dismissed).
+      const statusRes = await fetch(
+        `${SUPABASE_URL}/functions/v1/check-connect-status`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            apikey: SUPABASE_ANON_KEY,
+          },
+        },
+      );
+      const statusResult = await statusRes.json();
+      if (statusRes.ok) {
+        setConnectStatus(statusResult.connect_status as ConnectStatus);
+      }
+    } catch {
+      Alert.alert("Error", "Something went wrong. Please try again.");
+    } finally {
+      setConnectLoading(false);
+    }
   }
 
   async function pickImage() {
@@ -473,6 +559,52 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
             />
           </View>
         </View>
+
+        {/* Payouts section — driver_direct companies only */}
+        {payoutModel === "driver_direct" && (
+          <>
+            <Text style={styles.sectionLabel}>Payouts</Text>
+            <View style={styles.card}>
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Status</Text>
+                <Text style={styles.fieldReadOnly}>
+                  {connectStatus === "complete"
+                    ? "Active"
+                    : connectStatus === "pending"
+                      ? "In progress"
+                      : "Not set up"}
+                </Text>
+              </View>
+              {connectStatus !== "complete" && (
+                <>
+                  <View style={styles.fieldDivider} />
+                  <TouchableOpacity
+                    style={[styles.fieldRow, connectLoading && { opacity: 0.5 }]}
+                    onPress={handleSetUpPayouts}
+                    disabled={connectLoading}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.fieldLabel, { width: undefined, flex: 1, color: colors.accentOrange }]}>
+                      {connectStatus === "pending"
+                        ? "Finish setup"
+                        : "Set up direct payouts"}
+                    </Text>
+                    {connectLoading ? (
+                      <ActivityIndicator size="small" color={colors.accentOrange} />
+                    ) : (
+                      <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+            <Text style={styles.fieldNote}>
+              {connectStatus === "complete"
+                ? "Card fares are paid to you directly. Cash fares are settled with your company."
+                : "Set this up to receive card fares directly to your bank account instead of through your company."}
+            </Text>
+          </>
+        )}
 
         {/* Preview */}
         {vehicleMake && vehicleModel && plateNumber && (
