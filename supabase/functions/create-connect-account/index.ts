@@ -167,19 +167,30 @@ Deno.serve(async (req) => {
     //
     // NOTE: Stripe rejects custom URL schemes here (`mgcjapp://...` fails
     // Account Links' own URL validation with "not a valid URL") — return_url/
-    // refresh_url must be real https URLs. Both point at a small hosted
-    // bridge page (mgcj-dashboard's public/stripe-connect-return.html) whose
-    // only job is to forward https -> mgcjapp://stripe-connect-return. The
-    // client opens this link via WebBrowser.openAuthSessionAsync with that
-    // same custom-scheme return URL, so it detects the bridge page's redirect
+    // refresh_url must be real https URLs. Both point at a bare route
+    // (mgcj-dashboard's vercel.json `redirects` entry for
+    // /stripe-connect-return) that issues a genuine HTTP 307 redirect to
+    // mgcjapp://stripe-connect-return. This matters: a first attempt used a
+    // static page whose own client-side JS (`location.replace`) tried to
+    // forward to the custom scheme, but that navigation silently never fired
+    // inside the ASWebAuthenticationSession-hosted browser (confirmed in
+    // testing 2026-07-19 — neither the automatic redirect nor a manual link
+    // tap on that page did anything, even though the same custom scheme
+    // opened fine from outside the session, e.g. Safari's address bar). A
+    // real server-level redirect (Location header) is caught by
+    // ASWebAuthenticationSession before any page content loads, which is the
+    // standard/documented mechanism (matches on the URL scheme of the
+    // redirect target) — don't go back to a client-JS bridge page for this.
+    // The client opens the Stripe URL via WebBrowser.openAuthSessionAsync
+    // with this same custom-scheme return URL, so it detects the redirect
     // and auto-closes the in-app browser. We still re-check the real account
     // status via check-connect-status regardless of how the session closed —
     // per Stripe's own guidance, the return_url redirect firing (or not)
     // never means onboarding actually completed.
     const accountLink = await stripePost('/account_links', {
       account:     accountId,
-      refresh_url: 'https://vellon-dispatch.vercel.app/stripe-connect-return.html',
-      return_url:  'https://vellon-dispatch.vercel.app/stripe-connect-return.html',
+      refresh_url: 'https://vellon-dispatch.vercel.app/stripe-connect-return',
+      return_url:  'https://vellon-dispatch.vercel.app/stripe-connect-return',
       type:        'account_onboarding',
     })
 
