@@ -122,6 +122,18 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [payoutModel, setPayoutModel] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string | null>(null);
 
+  // Lifetime settlement totals, computed server-side (driver_settlement_totals
+  // RPC) over the driver's FULL ride history — NOT derived from the `rides`
+  // state below, which is capped to the last 50 rides for list rendering and
+  // would silently under-report a driver with more rides than that.
+  const [settlementTotals, setSettlementTotals] = useState<{
+    total_fares: number;
+    total_vellon_fee: number;
+    total_stripe_fee: number;
+    total_net: number;
+    rides_count: number;
+  } | null>(null);
+
   useEffect(() => {
     fetchRides();
   }, [profile]);
@@ -138,6 +150,18 @@ export default function RideHistoryScreen({ onClose }: Props) {
         setCompanyName(data?.name ?? null);
       });
   }, [profile?.company_id, isDriver]);
+
+  async function fetchSettlementTotals() {
+    if (!isDriver || payoutModel !== "driver_direct") return;
+    const { data, error } = await supabase
+      .rpc("driver_settlement_totals")
+      .single();
+    if (!error && data) setSettlementTotals(data as typeof settlementTotals);
+  }
+
+  useEffect(() => {
+    fetchSettlementTotals();
+  }, [isDriver, payoutModel]);
 
   // Realtime: driver sees new ratings come in live
   useEffect(() => {
@@ -250,7 +274,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
 
   async function onRefresh() {
     setRefreshing(true);
-    await fetchRides();
+    await Promise.all([fetchRides(), fetchSettlementTotals()]);
     setRefreshing(false);
   }
 
@@ -319,29 +343,12 @@ export default function RideHistoryScreen({ onClose }: Props) {
     return r.status === filter;
   });
 
+  // company_settles only — driver_direct's "Fares"/"Rides" figures come from
+  // settlementTotals below (server-side, full history) instead, since this
+  // local list is capped to the last 50 rides and would silently undercount.
   const totalEarnings = rides
     .filter((r) => r.status === "completed")
     .reduce((sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0), 0);
-
-  // Net-of-fee total for driver_direct drivers only — what actually lands
-  // with the driver after Vellon's cut (and Stripe's processing fee, for
-  // card rides). Cash rides are counted at fare minus Vellon's fee too, even
-  // though that fee is invoiced to the company later rather than deducted
-  // up front — this is the eventual net, not what's in-hand today.
-  const totalNet =
-    payoutModel === "driver_direct"
-      ? rides
-          .filter((r) => r.status === "completed")
-          .reduce((sum, r) => {
-            const fare = r.fare_final ?? r.fare_estimate;
-            if (fare == null || r.platform_fee_percent_at_completion == null) {
-              return sum;
-            }
-            const vellonFee =
-              fare * (r.platform_fee_percent_at_completion / 100);
-            return sum + (fare - vellonFee - (r.stripe_fee ?? 0));
-          }, 0)
-      : null;
 
   return (
     <View style={styles.container}>
@@ -359,28 +366,66 @@ export default function RideHistoryScreen({ onClose }: Props) {
         <View style={styles.summaryStrip}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>
-              {rides.filter((r) => r.status === "completed").length}
+              {payoutModel === "driver_direct" && settlementTotals
+                ? settlementTotals.rides_count
+                : rides.filter((r) => r.status === "completed").length}
             </Text>
             <Text style={styles.summaryLabel}>Rides</Text>
           </View>
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>${totalEarnings.toFixed(2)}</Text>
+            <Text style={styles.summaryValue}>
+              $
+              {(payoutModel === "driver_direct" && settlementTotals
+                ? settlementTotals.total_fares
+                : totalEarnings
+              ).toFixed(2)}
+            </Text>
             <Text style={styles.summaryLabel}>
-              {totalNet != null ? "Fares" : "Earned"}
+              {payoutModel === "driver_direct" ? "Fares" : "Earned"}
             </Text>
           </View>
-          {totalNet != null && (
-            <>
-              <View style={styles.summaryDivider} />
-              <View style={styles.summaryItem}>
-                <Text style={[styles.summaryValue, { color: colors.accentGreen }]}>
-                  ${totalNet.toFixed(2)}
-                </Text>
-                <Text style={styles.summaryLabel}>Net to you</Text>
-              </View>
-            </>
+        </View>
+      )}
+
+      {/* driver_direct: lifetime settlement summary — mirrors the per-ride
+          breakdown below (fare → Vellon fee → net), computed server-side over
+          ALL completed rides via driver_settlement_totals, not just the last
+          50 in the `rides` list. */}
+      {isDriver && payoutModel === "driver_direct" && settlementTotals && (
+        <View style={styles.lifetimeSettlementBox}>
+          <View style={styles.settlementRow}>
+            <Text style={styles.settlementLabel}>Fare total</Text>
+            <Text style={styles.settlementValue}>
+              ${settlementTotals.total_fares.toFixed(2)}
+            </Text>
+          </View>
+          <View style={styles.settlementRow}>
+            <Text style={styles.settlementLabel}>Vellon fee total</Text>
+            <Text style={styles.settlementValueNeg}>
+              -${settlementTotals.total_vellon_fee.toFixed(2)}
+            </Text>
+          </View>
+          {settlementTotals.total_stripe_fee > 0 && (
+            <View style={styles.settlementRow}>
+              <Text style={styles.settlementLabel}>Card processing fee total</Text>
+              <Text style={styles.settlementValueNeg}>
+                -${settlementTotals.total_stripe_fee.toFixed(2)}
+              </Text>
+            </View>
           )}
+          <View style={[styles.settlementRow, styles.settlementNetRow]}>
+            <Text style={styles.settlementNetLabel}>Net total</Text>
+            <Text style={styles.settlementNetValue}>
+              ${settlementTotals.total_net.toFixed(2)}
+            </Text>
+          </View>
+          <Text style={styles.settlementNote}>
+            Vellon's fee is deducted automatically from card fares. For cash
+            fares, it isn't taken out of the ride — it's billed to{" "}
+            {companyName ?? "your company"} monthly, so make sure it's
+            accounted for when you settle up with them.
+          </Text>
         </View>
       )}
 
@@ -782,6 +827,14 @@ const makeStyles = (colors: Colors) =>
     summaryDivider: { width: 0.5, backgroundColor: colors.border },
     summaryValue: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
     summaryLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    lifetimeSettlementBox: {
+      backgroundColor: colors.surfaceAlt,
+      borderRadius: 12,
+      padding: 14,
+      marginHorizontal: 16,
+      marginTop: 12,
+      gap: 6,
+    },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: 16,
