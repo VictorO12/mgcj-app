@@ -385,47 +385,17 @@ export default function RideHistoryScreen({ onClose }: Props) {
               {payoutModel === "driver_direct" ? "Fares" : "Earned"}
             </Text>
           </View>
-        </View>
-      )}
-
-      {/* driver_direct: lifetime settlement summary — mirrors the per-ride
-          breakdown below (fare → Vellon fee → net), computed server-side over
-          ALL completed rides via driver_settlement_totals, not just the last
-          50 in the `rides` list. */}
-      {isDriver && payoutModel === "driver_direct" && settlementTotals && (
-        <View style={styles.lifetimeSettlementBox}>
-          <View style={styles.settlementRow}>
-            <Text style={styles.settlementLabel}>Fare total</Text>
-            <Text style={styles.settlementValue}>
-              ${settlementTotals.total_fares.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.settlementRow}>
-            <Text style={styles.settlementLabel}>Vellon fee total</Text>
-            <Text style={styles.settlementValueNeg}>
-              -${settlementTotals.total_vellon_fee.toFixed(2)}
-            </Text>
-          </View>
-          {settlementTotals.total_stripe_fee > 0 && (
-            <View style={styles.settlementRow}>
-              <Text style={styles.settlementLabel}>Card processing fee total</Text>
-              <Text style={styles.settlementValueNeg}>
-                -${settlementTotals.total_stripe_fee.toFixed(2)}
-              </Text>
-            </View>
+          {payoutModel === "driver_direct" && settlementTotals && (
+            <>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={[styles.summaryValue, { color: colors.accentGreen }]}>
+                  ${settlementTotals.total_net.toFixed(2)}
+                </Text>
+                <Text style={styles.summaryLabel}>Net to you</Text>
+              </View>
+            </>
           )}
-          <View style={[styles.settlementRow, styles.settlementNetRow]}>
-            <Text style={styles.settlementNetLabel}>Net total</Text>
-            <Text style={styles.settlementNetValue}>
-              ${settlementTotals.total_net.toFixed(2)}
-            </Text>
-          </View>
-          <Text style={styles.settlementNote}>
-            Vellon's fee is deducted automatically from card fares. For cash
-            fares, it isn't taken out of the ride — it's billed to{" "}
-            {companyName ?? "your company"} monthly, so make sure it's
-            accounted for when you settle up with them.
-          </Text>
         </View>
       )}
 
@@ -594,80 +564,86 @@ export default function RideHistoryScreen({ onClose }: Props) {
                         payoutModel === "driver_direct" &&
                         ride.status === "completed" && (
                           <View style={styles.settlementBox}>
-                            {ride.payment_method === "cash" ? (
-                              <Text style={styles.settlementNote}>
-                                Vellon's fee
+                            <View style={styles.settlementRow}>
+                              <Text style={styles.settlementLabel}>Fare</Text>
+                              <Text style={styles.settlementValue}>
+                                ${(ride.fare_final ?? 0).toFixed(2)}
+                              </Text>
+                            </View>
+                            <View style={styles.settlementRow}>
+                              <Text style={styles.settlementLabel}>
+                                Vellon fee
                                 {ride.platform_fee_percent_at_completion != null
                                   ? ` (${ride.platform_fee_percent_at_completion}%)`
-                                  : ""}{" "}
-                                is billed to{" "}
-                                {companyName ?? "your company"} monthly — not
-                                deducted from this ride.
+                                  : ""}
                               </Text>
-                            ) : (
+                              <Text style={styles.settlementValueNeg}>
+                                -${getVellonFee(ride)?.toFixed(2) ?? "—"}
+                              </Text>
+                            </View>
+                            {ride.payment_method === "cash" ? (
+                              <View
+                                style={[
+                                  styles.settlementRow,
+                                  styles.settlementNetRow,
+                                ]}
+                              >
+                                <Text style={styles.settlementNetLabel}>
+                                  Net to you
+                                </Text>
+                                <Text style={styles.settlementNetValue}>
+                                  $
+                                  {getVellonFee(ride) != null
+                                    ? ((ride.fare_final ?? 0) - getVellonFee(ride)!).toFixed(2)
+                                    : "—"}
+                                </Text>
+                              </View>
+                            ) : ride.stripe_fee != null ? (
                               <>
                                 <View style={styles.settlementRow}>
                                   <Text style={styles.settlementLabel}>
-                                    Fare
-                                  </Text>
-                                  <Text style={styles.settlementValue}>
-                                    ${(ride.fare_final ?? 0).toFixed(2)}
-                                  </Text>
-                                </View>
-                                <View style={styles.settlementRow}>
-                                  <Text style={styles.settlementLabel}>
-                                    Vellon fee
-                                    {ride.platform_fee_percent_at_completion !=
-                                    null
-                                      ? ` (${ride.platform_fee_percent_at_completion}%)`
-                                      : ""}
+                                    Card processing fee
                                   </Text>
                                   <Text style={styles.settlementValueNeg}>
-                                    -$
-                                    {getVellonFee(ride)?.toFixed(2) ?? "—"}
+                                    -${ride.stripe_fee.toFixed(2)}
                                   </Text>
                                 </View>
-                                {ride.stripe_fee != null ? (
-                                  <View style={styles.settlementRow}>
-                                    <Text style={styles.settlementLabel}>
-                                      Card processing fee
-                                    </Text>
-                                    <Text style={styles.settlementValueNeg}>
-                                      -${ride.stripe_fee.toFixed(2)}
-                                    </Text>
-                                  </View>
-                                ) : (
-                                  <Text style={styles.settlementPending}>
-                                    Payout still processing…
+                                <View
+                                  style={[
+                                    styles.settlementRow,
+                                    styles.settlementNetRow,
+                                  ]}
+                                >
+                                  <Text style={styles.settlementNetLabel}>
+                                    Net to you
                                   </Text>
-                                )}
-                                {ride.stripe_fee != null && (
-                                  <View
-                                    style={[
-                                      styles.settlementRow,
-                                      styles.settlementNetRow,
-                                    ]}
-                                  >
-                                    <Text style={styles.settlementNetLabel}>
-                                      Net to you
-                                    </Text>
-                                    <Text style={styles.settlementNetValue}>
-                                      ${getNet(ride)?.toFixed(2) ?? "—"}
-                                    </Text>
-                                  </View>
-                                )}
-                                {settlementRouteLabel(
-                                  ride.settlement_route,
-                                  companyName,
-                                ) && (
-                                  <Text style={styles.settlementRouteNote}>
-                                    {settlementRouteLabel(
-                                      ride.settlement_route,
-                                      companyName,
-                                    )}
+                                  <Text style={styles.settlementNetValue}>
+                                    ${getNet(ride)?.toFixed(2) ?? "—"}
                                   </Text>
-                                )}
+                                </View>
                               </>
+                            ) : (
+                              <Text style={styles.settlementPending}>
+                                Payout still processing…
+                              </Text>
+                            )}
+                            {ride.payment_method === "cash" ? (
+                              <Text style={styles.settlementRouteNote}>
+                                Billed to {companyName ?? "your company"}{" "}
+                                monthly — not deducted from this ride.
+                              </Text>
+                            ) : (
+                              settlementRouteLabel(
+                                ride.settlement_route,
+                                companyName,
+                              ) && (
+                                <Text style={styles.settlementRouteNote}>
+                                  {settlementRouteLabel(
+                                    ride.settlement_route,
+                                    companyName,
+                                  )}
+                                </Text>
+                              )
                             )}
                           </View>
                         )}
@@ -827,14 +803,6 @@ const makeStyles = (colors: Colors) =>
     summaryDivider: { width: 0.5, backgroundColor: colors.border },
     summaryValue: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
     summaryLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
-    lifetimeSettlementBox: {
-      backgroundColor: colors.surfaceAlt,
-      borderRadius: 12,
-      padding: 14,
-      marginHorizontal: 16,
-      marginTop: 12,
-      gap: 6,
-    },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: 16,
