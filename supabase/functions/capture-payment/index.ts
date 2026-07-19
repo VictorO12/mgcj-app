@@ -334,6 +334,7 @@ Deno.serve(async (req) => {
         fare_estimate:      capturedFare,
         settlement_route:   settlementRoute,
         stripe_transfer_id: stripeTransferId,
+        stripe_fee:         stripeFeeCents !== null ? stripeFeeCents / 100 : null,
       })
       .eq('id', ride_id)
 
