@@ -135,19 +135,17 @@ Deno.serve(async (req) => {
     const totalCents         = Math.round(discountedFare * 100)
     const feeCents           = Math.round(totalCents * (platformFeePercent / 100))
 
-    // If the company is fully Stripe-onboarded, route the charge to its Connect
-    // account. transfer_data[destination] MUST be set here at creation, or
-    // capture-payment's transfer_data[amount] gets rejected by Stripe. Gated on
-    // stripe_onboarded (matching capture-payment / scheduled-release) so an
-    // account id stamped during onboarding, before the account can receive
-    // transfers, doesn't start routing prematurely.
-    const { data: company } = passenger.company_id
-      ? await serviceClient
-          .from('companies')
-          .select('stripe_account_id, stripe_onboarded')
-          .eq('id', passenger.company_id)
-          .maybeSingle()
-      : { data: null }
+    // No transfer_data is ever set here, for either payout model. The driver
+    // who'll take this ride isn't known yet (assign-ride runs async, after the
+    // ride row is even inserted), so driver_direct never had a destination to
+    // name at creation. company_settles used to set transfer_data[destination]
+    // here, but that fixed the company's cut before Stripe's real processing
+    // fee was known — the fee then silently ate into Vellon's leftover share
+    // instead of the company's. Fixed 2026-07-21: both models now just hold
+    // the full amount on the platform; capture-payment captures it, reads the
+    // REAL fee, and transfers the exact remainder to whichever destination
+    // applies (company for company_settles; driver, then company, then
+    // neither for driver_direct) — see capture-payment for the shared logic.
 
     // Create PaymentIntent with manual capture (hold only)
     const intentBody: Record<string, string> = {
@@ -163,9 +161,6 @@ Deno.serve(async (req) => {
       'metadata[platform_fee_cents]':               feeCents.toString(),
       'metadata[pre_discount_fare]':                fare_amount.toString(),
       'metadata[discount_amount]':                  discountAmount.toString(),
-    }
-    if (company?.stripe_onboarded && company?.stripe_account_id) {
-      intentBody['transfer_data[destination]'] = company.stripe_account_id
     }
     const intent = await stripePost('/payment_intents', intentBody)
 

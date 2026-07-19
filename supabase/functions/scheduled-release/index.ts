@@ -453,9 +453,6 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     return false
   }
 
-  const { data: company } = await supabase.from('companies')
-    .select('stripe_account_id, stripe_onboarded').eq('id', ride.company_id).maybeSingle()
-
   // Recompute the authoritative fare server-side rather than trusting the
   // client-written fare_estimate on the ride row. Resolve the booked discount
   // code (if any) so the RPC can re-validate it at release time — an expired or
@@ -495,11 +492,10 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
     'metadata[passenger_id]':                     ride.passenger_id,
     'metadata[ride_id]':                          ride.id,
   }
-  // Route to the company's Connect account only once fully onboarded — see the
-  // matching gate in capture-payment / create-payment-intent.
-  if (company?.stripe_onboarded && company?.stripe_account_id) {
-    piBody['transfer_data[destination]'] = company.stripe_account_id
-  }
+  // No transfer_data here for either payout model — see create-payment-intent
+  // for why (fixing the company's cut before Stripe's real fee is known let
+  // the fee silently eat into Vellon's share). capture-payment handles routing
+  // the exact remainder after the real fee is known, for both models.
 
   const res    = await fetch(`${STRIPE_API}/payment_intents`, {
     method:  'POST',

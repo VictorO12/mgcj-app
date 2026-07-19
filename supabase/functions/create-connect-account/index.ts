@@ -113,6 +113,20 @@ Deno.serve(async (req) => {
         'capabilities[transfers][requested]':      'true',
         'metadata[supabase_user_id]':              user.id,
         'metadata[company_id]':                    profile.company_id ?? '',
+        // driver_direct fares are captured to the platform balance first, then
+        // transferred to this account (see capture-payment) — the charge itself
+        // never touches the driver, so a dispute lands on Vellon's balance, not
+        // theirs. Delaying this account's own payout to its real bank is a
+        // PASSIVE buffer only — it widens the window during which the driver's
+        // share hasn't left Stripe entirely yet, in case a dispute needs the
+        // Transfer reversed. Nothing currently listens for
+        // `charge.dispute.created` and reverses the Transfer automatically
+        // (stripe-webhook only handles payment_intent.*/charge.refunded) — that
+        // handler is a real follow-up, not built yet. Until it exists, this
+        // delay only buys time for a MANUAL reversal, not an automatic one. Set
+        // once at account creation; not applied to company_settles accounts.
+        'settings[payouts][schedule][interval]':   'daily',
+        'settings[payouts][schedule][delay_days]': '7',
       }
       // Omit entirely rather than sending '' — Stripe treats an empty string
       // as an invalid email format, not "no email provided". Most drivers
