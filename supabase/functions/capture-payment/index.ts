@@ -284,6 +284,20 @@ Deno.serve(async (req) => {
         : null
     }
 
+    // Snapshot the exact amount the recipient is owed, in cents, at the moment
+    // of capture. This is what the sweep (sweep-held-transfers) later pays out
+    // on a ride that couldn't be transferred now — it must send THIS number and
+    // never recompute a fee, because by then the company's platform_fee_percent
+    // may have changed and re-deriving it would retroactively resize an old
+    // ride's payout (same class of bug as the completed_at / fee-snapshot fixes).
+    // Deliberately NOT derived from platform_fee_percent_at_completion: capture
+    // can run before the completed-transition trigger stamps it, and the value
+    // must match the feeCents the transfer below actually uses. Null only when
+    // Stripe's fee couldn't be read — the sweep re-fetches the settled
+    // balance_transaction in that case.
+    const transferAmountCents: number | null =
+      stripeFeeCents !== null ? totalCents - feeCents - stripeFeeCents : null
+
     // driver_direct tries the driver first, then falls back to the company;
     // company_settles only ever has the company as a candidate.
     const destination =
@@ -296,13 +310,19 @@ Deno.serve(async (req) => {
     if (destination && chargeId && stripeFeeCents === null) {
       console.error(`Ride ${ride_id}: could not confirm Stripe's processing fee on charge ${chargeId} — skipping transfer, needs manual retry`)
       settlementRoute = 'transfer_failed'
-    } else if (destination && chargeId && stripeFeeCents !== null && (totalCents - feeCents - stripeFeeCents) > 0) {
-      const transferCents = totalCents - feeCents - stripeFeeCents
+    } else if (destination && chargeId && transferAmountCents !== null && transferAmountCents > 0) {
+      // transfer_group tags every transfer for this ride so the sweep can ask
+      // Stripe directly whether one already exists before sending another. The
+      // idempotency key alone can't cover that: Stripe expires it after 24h and
+      // caches errors under it, so it protects a fast client retry but NOT the
+      // dangerous case — transfer succeeds at Stripe, our DB write fails, and a
+      // later sweep tick pays a second time.
       const transfer = await stripeRequest('/transfers', {
-        amount:                  transferCents.toString(),
+        amount:                  transferAmountCents.toString(),
         currency:                'cad',
         destination:             destination.id,
         source_transaction:      chargeId,
+        transfer_group:          `ride_${ride_id}`,
         'metadata[ride_id]':     ride_id,
       }, `transfer-${ride_id}`)
 
@@ -335,6 +355,7 @@ Deno.serve(async (req) => {
         settlement_route:   settlementRoute,
         stripe_transfer_id: stripeTransferId,
         stripe_fee:         stripeFeeCents !== null ? stripeFeeCents / 100 : null,
+        transfer_amount_cents: transferAmountCents,
       })
       .eq('id', ride_id)
 
