@@ -149,6 +149,11 @@ export default function RideHistoryScreen({ onClose }: Props) {
     total_vellon_fee: number;
     total_stripe_fee: number;
     total_net: number;
+    // Money from rides whose Transfer was reversed after a dispute. Excluded
+    // from total_net (the driver doesn't have it) but reported separately so
+    // the loss is visible — a total that just silently shrank would read as a
+    // bug to a driver who remembers doing the ride.
+    total_reversed: number;
     rides_count: number;
   } | null>(null);
 
@@ -416,6 +421,24 @@ export default function RideHistoryScreen({ onClose }: Props) {
           )}
         </View>
       )}
+
+      {/* Reversed-funds notice. The ride itself stays counted in Rides/Fares
+          above (it was really driven, the fare was really collected) — only
+          the money is gone, so it's shown as an explicit deduction rather
+          than by quietly shrinking the totals. Keeps the strip checkable:
+          fares − vellon fee − stripe fee − reversed = net. */}
+      {isDriver &&
+        payoutModel === "driver_direct" &&
+        settlementTotals != null &&
+        settlementTotals.total_reversed > 0 && (
+          <View style={styles.reversedNoticeRow}>
+            <Ionicons name="warning" size={13} color={colors.accentRedDeep} />
+            <Text style={styles.reversedNoticeText}>
+              −${settlementTotals.total_reversed.toFixed(2)} reversed from
+              disputed rides
+            </Text>
+          </View>
+        )}
 
       {/* Filter tabs */}
       <View style={styles.filterRow}>
@@ -836,6 +859,24 @@ const makeStyles = (colors: Colors) =>
     summaryDivider: { width: 0.5, backgroundColor: colors.border },
     summaryValue: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
     summaryLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    // Sits directly under the summary strip, so it carries the strip's own
+    // horizontal padding and the same red as the per-ride problem rows.
+    reversedNoticeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingHorizontal: 24,
+      paddingVertical: 8,
+      backgroundColor: "rgba(226,75,74,0.12)",
+      borderBottomWidth: 0.5,
+      borderColor: colors.borderSubtle,
+    },
+    reversedNoticeText: {
+      flex: 1,
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accentRedDeep,
+    },
     filterRow: {
       flexDirection: "row",
       paddingHorizontal: 16,
