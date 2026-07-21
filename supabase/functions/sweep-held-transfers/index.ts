@@ -33,6 +33,13 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 //    a transfer to a weeks-old settled charge is a constraint with no
 //    upside here. Reversal linkage is preserved via stripe_transfer_id.
 //
+//  * Pays a ride whose dispute Vellon WON, and only that. Winning returns the
+//    fare, so the driver is still owed their share — but charge.disputed stays
+//    true on Stripe forever, so it can't be used as a skip on its own. The DB
+//    query admits won disputes via rides.dispute_won_at (keeping lost/open ones
+//    out of an order-by-oldest, limit-50 queue they'd otherwise clog), and the
+//    live check below re-resolves every dispute on the charge before sending.
+//
 //  * Does NOT write settlement_resolved_at. That column is dispatch's manual
 //    "I handled this" marker. A swept ride leaves the dashboard's
 //    needs-attention list by virtue of its settlement_route changing to a
@@ -129,7 +136,15 @@ Deno.serve(async () => {
     )
     .in('settlement_route', SWEEPABLE_ROUTES)
     .is('settlement_resolved_at', null)   // dispatch already paid this by hand
-    .is('stripe_dispute_id', null)        // never move money out on a disputed ride
+    // Never move money out on a disputed ride — UNLESS Vellon won it, in which
+    // case the fare came back and the driver is still owed their share. Lost
+    // and still-open disputes stay excluded here rather than being filtered
+    // later, deliberately: this query is order(completed_at asc).limit(50), so
+    // permanently-unpayable lost-dispute rides would otherwise pile up at the
+    // head of the queue and starve legitimately payable ones.
+    // dispute_won_at is only a ticket INTO the query — step 2 below still
+    // live-verifies against Stripe before any money moves.
+    .or('stripe_dispute_id.is.null,dispute_won_at.not.is.null')
     .eq('payment_status', 'succeeded')
     .not('stripe_payment_intent_id', 'is', null)
     .order('completed_at', { ascending: true })
@@ -203,10 +218,39 @@ Deno.serve(async () => {
 
       const chargeId = intent.latest_charge
       const charge = chargeId ? await stripeGet(`/charges/${chargeId}?expand[]=balance_transaction`) : null
-      if (charge?.refunded || (charge?.amount_refunded ?? 0) > 0 || charge?.disputed) {
-        console.log(`[sweep] ride ${ride.id}: charge ${chargeId} refunded/disputed — skipping`)
+      if (charge?.refunded || (charge?.amount_refunded ?? 0) > 0) {
+        console.log(`[sweep] ride ${ride.id}: charge ${chargeId} refunded — skipping`)
         summary.skipped++
         continue
+      }
+
+      // charge.disputed can NOT be used as a skip on its own: Stripe leaves it
+      // true forever once a charge has been disputed, including after a win
+      // (verified on ch_3TvT1E... — succeeded/disputed:true/refunded:false long
+      // after the dispute closed 'won'). Treating it as terminal is what made
+      // won disputes permanently unpayable. So resolve the actual outcome, and
+      // only pay when EVERY dispute on the charge is won — a charge can carry
+      // more than one, and a single open or lost dispute means the money isn't
+      // ours to send.
+      //
+      // Read live rather than trusting rides.dispute_won_at: that column is
+      // written by a webhook, and this is the last gate before money leaves.
+      if (charge?.disputed) {
+        const disputes = await stripeGet(`/disputes?charge=${chargeId}&limit=100`)
+        const rows = disputes?.data
+        if (disputes?.error || !Array.isArray(rows) || rows.length === 0) {
+          // Flagged disputed but the outcome is unreadable — fail closed.
+          console.log(`[sweep] ride ${ride.id}: charge ${chargeId} disputed but disputes unreadable (${disputes?.error?.message ?? 'no rows'}) — skipping`)
+          summary.skipped++
+          continue
+        }
+        const unresolved = rows.filter((d: { status: string }) => d.status !== 'won')
+        if (unresolved.length > 0) {
+          console.log(`[sweep] ride ${ride.id}: charge ${chargeId} has ${unresolved.length} dispute(s) not won (${unresolved.map((d: { status: string }) => d.status).join(', ')}) — skipping`)
+          summary.skipped++
+          continue
+        }
+        console.log(`[sweep] ride ${ride.id}: charge ${chargeId} disputed but all ${rows.length} dispute(s) won — payable`)
       }
 
       // ── 3. Where does it go? ──────────────────────────────────────────

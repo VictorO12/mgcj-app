@@ -265,10 +265,24 @@ Deno.serve(async (req) => {
           break
         }
 
+        // Stamp the win BEFORE the route branch below, so it lands for every
+        // route, not just the one this handler re-transfers for. This is what
+        // re-admits a still-held payout ('platform_invoiced'/'transfer_failed')
+        // to sweep-held-transfers, which is otherwise blocked forever by its
+        // `stripe_dispute_id IS NULL` filter — the driver did the ride, and
+        // winning means Vellon kept the fare and genuinely owes them their
+        // share. Deliberately does NOT clear stripe_dispute_id: that's the
+        // audit trail and vellon-ops joins its dispute_costs rows on it.
+        await serviceClient
+          .from('rides')
+          .update({ dispute_won_at: new Date().toISOString() })
+          .eq('id', ride.id)
+
         if (ride.settlement_route !== 'transfer_reversed') {
-          // Nothing was reversed for this ride (no transfer ever went out,
-          // or it's already been re-sent) — nothing to send back.
-          console.log(`Ride ${ride.id}: dispute ${dispute.id} won, but settlement_route is '${ride.settlement_route}' — nothing to re-send`)
+          // No transfer of ours to undo. Either none ever went out (the payout
+          // was still held — now handed to the sweep by the stamp above), or
+          // it's already been re-sent.
+          console.log(`Ride ${ride.id}: dispute ${dispute.id} won, settlement_route '${ride.settlement_route}' — nothing to re-send here; marked dispute_won_at for the sweep`)
           break
         }
 
