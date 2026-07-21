@@ -1,0 +1,31 @@
+-- Cron registration for sweep-held-transfers.
+--
+-- Hourly is deliberate, not arbitrary: the trigger event is a driver or
+-- company finishing Connect onboarding, which is a human action measured in
+-- days. Sweeping more often just re-queries Stripe for the same unpayable
+-- rides; less often leaves money sitting for no reason. It also pairs with
+-- the hour-bucketed idempotency key in the function.
+--
+-- Do NOT run this file as-is — the service-role JWT is project-specific and
+-- must be copied from an existing cron job in pg_cron (SELECT * FROM cron.job).
+--
+--   SELECT cron.schedule(
+--     'sweep-held-transfers',
+--     '7 * * * *',
+--     $$SELECT net.http_post(
+--       url := 'https://hhsqwmftrrmtodvvuyxq.supabase.co/functions/v1/sweep-held-transfers',
+--       headers := '{"Content-Type":"application/json","Authorization":"Bearer <service_role_jwt>"}'::jsonb,
+--       body := '{}'::jsonb
+--     )$$
+--   );
+--
+-- Minute 7 rather than 0 so it doesn't pile onto the top-of-hour slot every
+-- other cron already contends for.
+--
+-- To verify after registering:
+--   SELECT jobid, jobname, schedule FROM cron.job WHERE jobname = 'sweep-held-transfers';
+--   SELECT status, return_message, start_time FROM cron.job_run_details
+--     WHERE jobid = <jobid> ORDER BY start_time DESC LIMIT 5;
+--
+-- (Remember the nightly cleanup-cron-logs job prunes job_run_details after
+-- 3 days — check recent runs, not historical ones.)
