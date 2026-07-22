@@ -4,8 +4,8 @@ const STRIPE_SECRET_KEY      = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_WEBHOOK_SECRET  = Deno.env.get('STRIPE_WEBHOOK_SECRET')!
 const STRIPE_API             = 'https://api.stripe.com/v1'
 
-// ── Stripe helper (only charge.dispute.created needs to call back to
-// Stripe — every other event here just writes to the DB) ────────────
+// ── Stripe helpers (the dispute + refund handlers call back to Stripe to
+// reverse/re-send transfers — the plain status events just write to the DB) ──
 async function stripePost(path: string, body: Record<string, string> = {}, idempotencyKey?: string) {
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
@@ -17,6 +17,13 @@ async function stripePost(path: string, body: Record<string, string> = {}, idemp
     method: 'POST',
     headers,
     body: new URLSearchParams(body).toString(),
+  })
+  return res.json()
+}
+
+async function stripeGet(path: string) {
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    headers: { 'Authorization': `Bearer ${STRIPE_SECRET_KEY}` },
   })
   return res.json()
 }
@@ -153,17 +160,164 @@ Deno.serve(async (req) => {
       }
 
       case 'charge.refunded': {
-        const charge  = event.data.object
-        const ride_id = charge.metadata?.ride_id
+        const charge = event.data.object
 
-        if (!ride_id) break
+        // Charges do NOT inherit their PaymentIntent's metadata, so the ride_id
+        // (set only on the PI) is never on charge.metadata — look the ride up by
+        // payment_intent, the same way the dispute handlers do. (The old
+        // charge.metadata?.ride_id lookup was always empty: this handler had been
+        // a silent no-op — even the payment_status write never fired.)
+        const paymentIntentId: string | undefined =
+          typeof charge.payment_intent === 'string'
+            ? charge.payment_intent
+            : charge.payment_intent?.id
 
-        await serviceClient
+        if (!paymentIntentId) {
+          console.warn('charge.refunded — no payment_intent on charge object')
+          break
+        }
+
+        const { data: ride } = await serviceClient
           .from('rides')
-          .update({ payment_status: 'refunded' })
-          .eq('id', ride_id)
+          .select('id, settlement_route, stripe_transfer_id, transfer_amount_cents, refund_absorbed_by')
+          .eq('stripe_payment_intent_id', paymentIntentId)
+          .maybeSingle()
 
-        console.log(`Ride ${ride_id} marked as refunded`)
+        if (!ride) {
+          console.warn(`charge.refunded — no ride found for payment_intent ${paymentIntentId}`)
+          break
+        }
+
+        // The refund's REASON decides who absorbs it. vellon-ops stamps it as
+        // Stripe refund metadata at refund time, so it reaches us here without
+        // racing vellon-ops's own DB write. A refund issued straight in the
+        // Stripe dashboard (out-of-band) carries no metadata — absorbedBy is then
+        // null and we default to the driver-first clawback (protects Vellon, same
+        // as the dispute handler, and recoverable if it was meant as goodwill).
+        //
+        // Fetch the latest refund explicitly instead of reading charge.refunds
+        // from the event: that list is expansion-only on current Stripe API
+        // versions and isn't reliably in the webhook payload, and the metadata
+        // channel is load-bearing here.
+        const refundList = await stripeGet(`/refunds?charge=${charge.id}&limit=1`)
+
+        // If we couldn't actually read the refund, bail and let Stripe retry the
+        // webhook — do NOT fall through. The metadata is the reason channel, and
+        // guessing here could wrongly claw a Vellon-absorb (goodwill) refund back
+        // from the driver just because the fetch blipped. A missing `data` array
+        // means the call failed (a real but empty result is still an array).
+        if (!Array.isArray(refundList?.data) || refundList.data.length === 0) {
+          console.error(`charge.refunded — could not read refund for charge ${charge.id} (will retry):`, refundList?.error ?? 'no refund returned')
+          return new Response(JSON.stringify({ error: 'refund_fetch_failed' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+
+        const latestRefund = refundList.data[0]
+        const refundMeta   = latestRefund?.metadata ?? {}
+        const absorbedBy: string | null =
+          refundMeta.absorbed_by ?? ride.refund_absorbed_by ?? null
+
+        // Cumulative figures straight off the charge (authoritative — covers any
+        // earlier partial refunds too).
+        const refundedCents: number = charge.amount_refunded ?? 0
+        const fullyRefunded: boolean = charge.refunded === true
+
+        // Record the refund on the ride (display/reporting). Only downgrade
+        // payment_status to 'refunded' on a FULL refund — a partial leaves it
+        // 'succeeded' so it isn't mistaken for a failed/unpaid ride elsewhere.
+        const refundUpdate: Record<string, unknown> = {
+          refunded_amount_cents: refundedCents,
+          refunded_at:           new Date().toISOString(),
+          stripe_refund_id:      latestRefund?.id ?? null,
+        }
+        if (refundMeta.reason)      refundUpdate.refund_reason = refundMeta.reason
+        if (refundMeta.absorbed_by) refundUpdate.refund_absorbed_by = refundMeta.absorbed_by
+        if (fullyRefunded)          refundUpdate.payment_status = 'refunded'
+
+        await serviceClient.from('rides').update(refundUpdate).eq('id', ride.id)
+
+        // Vellon absorbs (platform_mistake / goodwill) — no clawback, the driver
+        // keeps their money. Route stays as it was; the refund is captured by the
+        // columns above.
+        if (absorbedBy === 'vellon') {
+          console.log(`Ride ${ride.id}: refund of ${refundedCents}¢ absorbed by Vellon — no transfer reversal`)
+          break
+        }
+
+        const hasOutstandingTransfer =
+          !!ride.stripe_transfer_id &&
+          ride.transfer_amount_cents != null &&
+          (ride.settlement_route === 'driver_transfer' || ride.settlement_route === 'company_transfer')
+
+        // Out-of-band refund (issued straight in the Stripe dashboard, no reason
+        // metadata): we don't know who's at fault, so we do NOT move a driver's
+        // money on a guess. Flag it as 'refund_review' for Victor to reconcile in
+        // vellon-ops (where it surfaces in the stranded-settlements list); the
+        // refund is still recorded above. If nothing was transferred out there's
+        // nothing to reconcile.
+        if (absorbedBy === null) {
+          if (hasOutstandingTransfer) {
+            await serviceClient
+              .from('rides')
+              .update({ settlement_route: 'refund_review' })
+              .eq('id', ride.id)
+            console.log(`Ride ${ride.id}: out-of-band refund of ${refundedCents}¢ — flagged refund_review (no metadata, transfer outstanding)`)
+          } else {
+            console.log(`Ride ${ride.id}: out-of-band refund of ${refundedCents}¢ recorded, no outstanding transfer (route: ${ride.settlement_route})`)
+          }
+          break
+        }
+
+        // driver_fault: claw the refund back from the transfer, DRIVER-FIRST —
+        // recover up to the driver/company's whole share, Vellon supplements only
+        // the overflow (the refund itself already left Vellon's balance, so
+        // anything we don't reverse is what Vellon eats).
+        if (!hasOutstandingTransfer) {
+          console.log(`Ride ${ride.id}: refund of ${refundedCents}¢ recorded, no outstanding transfer to reverse (route: ${ride.settlement_route})`)
+          break
+        }
+
+        // Desired cumulative reversal, driver-first: never more than the driver
+        // was actually sent. Reverse only the DELTA vs what's already been
+        // reversed on the transfer (read live from Stripe) so repeated partial
+        // refunds — and a webhook that fires on every refund — never double-claw.
+        const desiredReversed = Math.min(refundedCents, ride.transfer_amount_cents)
+
+        const transfer = await stripeGet(`/transfers/${ride.stripe_transfer_id}`)
+        const alreadyReversed: number = transfer?.amount_reversed ?? 0
+        const delta = desiredReversed - alreadyReversed
+
+        if (delta <= 0) {
+          console.log(`Ride ${ride.id}: refund clawback already satisfied (reversed ${alreadyReversed}¢ of ${desiredReversed}¢ target) — nothing to do`)
+          break
+        }
+
+        // Idempotency-Key derived from the ride + cumulative target so a webhook
+        // retry reaches Stripe as the SAME reversal, not a second one.
+        const reversal = await stripePost(
+          `/transfers/${ride.stripe_transfer_id}/reversals`,
+          { amount: delta.toString() },
+          `refund-rev-${ride.id}-${desiredReversed}`,
+        )
+
+        if (reversal.error) {
+          // Common cause: the destination account's balance no longer covers it
+          // (already paid out to their bank) — reuse the actionable reversal_failed
+          // route so it lands in dispatch/Vellon's "collect this back" queue.
+          console.error(`Ride ${ride.id}: failed to reverse ${delta}¢ of transfer ${ride.stripe_transfer_id} for refund:`, reversal.error)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'reversal_failed' })
+            .eq('id', ride.id)
+        } else {
+          console.log(`Ride ${ride.id}: reversed ${delta}¢ of transfer ${ride.stripe_transfer_id} for refund (cumulative ${desiredReversed}¢)`)
+          await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'refund_reversed', transfer_reversed_cents: desiredReversed })
+            .eq('id', ride.id)
+        }
         break
       }
 

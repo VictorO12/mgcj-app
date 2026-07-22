@@ -34,6 +34,8 @@ interface RideRecord {
   settlement_route: string | null;
   stripe_fee: number | null;
   platform_fee_percent_at_completion: number | null;
+  refunded_amount_cents: number | null;
+  transfer_reversed_cents: number | null;
 }
 
 const getStatusColors = (colors: Colors): Record<string, string> => ({
@@ -84,6 +86,10 @@ function settlementRouteLabel(
       return "Payout issue — contact Vellon support";
     case "transfer_reversed":
       return "Payout reversed — this ride's charge was disputed";
+    case "refund_reversed":
+      return "Payout reversed — this ride was refunded";
+    case "refund_review":
+      return "This ride was refunded — payout under review";
     case "reversal_failed":
       return "Dispute issue — contact Vellon support";
     case "retransfer_failed":
@@ -100,6 +106,8 @@ function isSettlementProblem(route: string | null): boolean {
   return (
     route === "transfer_failed" ||
     route === "transfer_reversed" ||
+    route === "refund_reversed" ||
+    route === "refund_review" ||
     route === "reversal_failed" ||
     route === "retransfer_failed"
   );
@@ -149,7 +157,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
     total_vellon_fee: number;
     total_stripe_fee: number;
     total_net: number;
-    // Money from rides whose Transfer was reversed after a dispute. Excluded
+    // Money reversed out of a driver's payout after the fact — a dispute
+    // (full) or a driver_fault refund clawback (possibly partial). Excluded
     // from total_net (the driver doesn't have it) but reported separately so
     // the loss is visible — a total that just silently shrank would read as a
     // bug to a driver who remembers doing the ride.
@@ -285,6 +294,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
           stripe_fee: ride.stripe_fee ?? null,
           platform_fee_percent_at_completion:
             ride.platform_fee_percent_at_completion ?? null,
+          refunded_amount_cents: ride.refunded_amount_cents ?? null,
+          transfer_reversed_cents: ride.transfer_reversed_cents ?? null,
         };
       }),
     );
@@ -435,7 +446,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
             <Ionicons name="warning" size={13} color={colors.accentRedDeep} />
             <Text style={styles.reversedNoticeText}>
               −${settlementTotals.total_reversed.toFixed(2)} reversed from
-              disputed rides
+              disputed or refunded rides
             </Text>
           </View>
         )}
@@ -668,6 +679,36 @@ export default function RideHistoryScreen({ onClose }: Props) {
                                 Payout still processing…
                               </Text>
                             )}
+                            {ride.refunded_amount_cents != null &&
+                              ride.refunded_amount_cents > 0 && (
+                                <>
+                                  <View style={styles.settlementRow}>
+                                    <Text style={styles.settlementLabel}>
+                                      Refunded to rider
+                                    </Text>
+                                    <Text style={styles.settlementValueNeg}>
+                                      -$
+                                      {(
+                                        ride.refunded_amount_cents / 100
+                                      ).toFixed(2)}
+                                    </Text>
+                                  </View>
+                                  {ride.transfer_reversed_cents != null &&
+                                    ride.transfer_reversed_cents > 0 && (
+                                      <View style={styles.settlementRow}>
+                                        <Text style={styles.settlementLabel}>
+                                          Reversed from your payout
+                                        </Text>
+                                        <Text style={styles.settlementValueNeg}>
+                                          -$
+                                          {(
+                                            ride.transfer_reversed_cents / 100
+                                          ).toFixed(2)}
+                                        </Text>
+                                      </View>
+                                    )}
+                                </>
+                              )}
                             {ride.payment_method === "cash" ? (
                               <Text style={styles.settlementRouteNote}>
                                 Billed to {companyName ?? "your company"}{" "}
