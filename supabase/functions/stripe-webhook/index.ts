@@ -224,6 +224,21 @@ Deno.serve(async (req) => {
         const refundedCents: number = charge.amount_refunded ?? 0
         const fullyRefunded: boolean = charge.refunded === true
 
+        // Every settlement write below is now error-checked and, on failure,
+        // returns 500 so Stripe RETRIES the event instead of the failure being
+        // swallowed. This handler previously fire-and-forgot its .update()s — so
+        // when the settlement_route CHECK constraint silently rejected the (then
+        // un-whitelisted) 'refund_reversed'/'refund_review' values, the Stripe
+        // reversal succeeded but the DB kept the old route with a NULL
+        // transfer_reversed_cents, and the clawback looked like it never happened.
+        const failRetry = (msg: string, err: unknown) => {
+          console.error(`charge.refunded — ${msg} (will retry):`, err)
+          return new Response(JSON.stringify({ error: 'refund_persist_failed' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+
         // Record the refund on the ride (display/reporting). Only downgrade
         // payment_status to 'refunded' on a FULL refund — a partial leaves it
         // 'succeeded' so it isn't mistaken for a failed/unpaid ride elsewhere.
@@ -236,7 +251,10 @@ Deno.serve(async (req) => {
         if (refundMeta.absorbed_by) refundUpdate.refund_absorbed_by = refundMeta.absorbed_by
         if (fullyRefunded)          refundUpdate.payment_status = 'refunded'
 
-        await serviceClient.from('rides').update(refundUpdate).eq('id', ride.id)
+        {
+          const { error } = await serviceClient.from('rides').update(refundUpdate).eq('id', ride.id)
+          if (error) return failRetry(`failed to record refund on ride ${ride.id}`, error)
+        }
 
         // Vellon absorbs (platform_mistake / goodwill) — no clawback, the driver
         // keeps their money. Route stays as it was; the refund is captured by the
@@ -246,9 +264,13 @@ Deno.serve(async (req) => {
           break
         }
 
+        // A transfer is outstanding if it went to a driver/company account. We do
+        // NOT require the transfer_amount_cents snapshot here — some rides have a
+        // real transfer with a null snapshot, and the reversible amount is read
+        // live from Stripe below. (Requiring the snapshot was a latent bug: it
+        // skipped a legitimate clawback whenever the snapshot was missing.)
         const hasOutstandingTransfer =
           !!ride.stripe_transfer_id &&
-          ride.transfer_amount_cents != null &&
           (ride.settlement_route === 'driver_transfer' || ride.settlement_route === 'company_transfer')
 
         // Out-of-band refund (issued straight in the Stripe dashboard, no reason
@@ -259,10 +281,11 @@ Deno.serve(async (req) => {
         // nothing to reconcile.
         if (absorbedBy === null) {
           if (hasOutstandingTransfer) {
-            await serviceClient
+            const { error } = await serviceClient
               .from('rides')
               .update({ settlement_route: 'refund_review' })
               .eq('id', ride.id)
+            if (error) return failRetry(`failed to flag refund_review on ride ${ride.id}`, error)
             console.log(`Ride ${ride.id}: out-of-band refund of ${refundedCents}¢ — flagged refund_review (no metadata, transfer outstanding)`)
           } else {
             console.log(`Ride ${ride.id}: out-of-band refund of ${refundedCents}¢ recorded, no outstanding transfer (route: ${ride.settlement_route})`)
@@ -279,18 +302,37 @@ Deno.serve(async (req) => {
           break
         }
 
+        // Read the transfer live: amount_reversed drives idempotent partial
+        // clawbacks, and transfer.amount is the fallback reversible base when the
+        // transfer_amount_cents snapshot is null.
+        const transfer = await stripeGet(`/transfers/${ride.stripe_transfer_id}`)
+        const transferAmount: number | null =
+          ride.transfer_amount_cents ?? (typeof transfer?.amount === 'number' ? transfer.amount : null)
+        if (transferAmount == null) {
+          return failRetry(
+            `could not determine transfer amount for ${ride.stripe_transfer_id} on ride ${ride.id}`,
+            transfer?.error ?? 'no amount on transfer',
+          )
+        }
+
         // Desired cumulative reversal, driver-first: never more than the driver
         // was actually sent. Reverse only the DELTA vs what's already been
         // reversed on the transfer (read live from Stripe) so repeated partial
         // refunds — and a webhook that fires on every refund — never double-claw.
-        const desiredReversed = Math.min(refundedCents, ride.transfer_amount_cents)
-
-        const transfer = await stripeGet(`/transfers/${ride.stripe_transfer_id}`)
+        const desiredReversed = Math.min(refundedCents, transferAmount)
         const alreadyReversed: number = transfer?.amount_reversed ?? 0
         const delta = desiredReversed - alreadyReversed
 
         if (delta <= 0) {
-          console.log(`Ride ${ride.id}: refund clawback already satisfied (reversed ${alreadyReversed}¢ of ${desiredReversed}¢ target) — nothing to do`)
+          // Already reversed enough at Stripe — make sure the DB records it. This
+          // is exactly the state the CHECK-constraint bug left behind (reversed on
+          // Stripe, never written here), so re-firing the event heals those rides.
+          const { error } = await serviceClient
+            .from('rides')
+            .update({ settlement_route: 'refund_reversed', transfer_reversed_cents: desiredReversed })
+            .eq('id', ride.id)
+          if (error) return failRetry(`failed to record already-satisfied clawback on ride ${ride.id}`, error)
+          console.log(`Ride ${ride.id}: refund clawback already satisfied (${alreadyReversed}¢ ≥ ${desiredReversed}¢ target) — recorded refund_reversed`)
           break
         }
 
@@ -307,16 +349,18 @@ Deno.serve(async (req) => {
           // (already paid out to their bank) — reuse the actionable reversal_failed
           // route so it lands in dispatch/Vellon's "collect this back" queue.
           console.error(`Ride ${ride.id}: failed to reverse ${delta}¢ of transfer ${ride.stripe_transfer_id} for refund:`, reversal.error)
-          await serviceClient
+          const { error } = await serviceClient
             .from('rides')
             .update({ settlement_route: 'reversal_failed' })
             .eq('id', ride.id)
+          if (error) return failRetry(`failed to record reversal_failed on ride ${ride.id}`, error)
         } else {
           console.log(`Ride ${ride.id}: reversed ${delta}¢ of transfer ${ride.stripe_transfer_id} for refund (cumulative ${desiredReversed}¢)`)
-          await serviceClient
+          const { error } = await serviceClient
             .from('rides')
             .update({ settlement_route: 'refund_reversed', transfer_reversed_cents: desiredReversed })
             .eq('id', ride.id)
+          if (error) return failRetry(`failed to record refund_reversed on ride ${ride.id}`, error)
         }
         break
       }
