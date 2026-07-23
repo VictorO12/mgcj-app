@@ -307,8 +307,13 @@ Deno.serve(async (req) => {
           ? { id: company.stripe_account_id, route: 'company_transfer' }
           : null
 
-    if (destination && chargeId && stripeFeeCents === null) {
-      console.error(`Ride ${ride_id}: could not confirm Stripe's processing fee on charge ${chargeId} — skipping transfer, needs manual retry`)
+    if (destination && (!chargeId || stripeFeeCents === null)) {
+      // Defensive: latest_charge is guaranteed present once a PI has reached
+      // requires_capture (the hold IS an authorized charge), so !chargeId should
+      // never fire here — but if it somehow did, or the fee is unreadable, route
+      // to transfer_failed so the sweep retries rather than stranding the
+      // captured funds with a null settlement_route (outside SWEEPABLE_ROUTES).
+      console.error(`Ride ${ride_id}: could not confirm charge (${chargeId ?? 'null'}) or Stripe's processing fee — skipping transfer, needs manual retry`)
       settlementRoute = 'transfer_failed'
     } else if (destination && chargeId && transferAmountCents !== null && transferAmountCents > 0) {
       // transfer_group tags every transfer for this ride so the sweep can ask
