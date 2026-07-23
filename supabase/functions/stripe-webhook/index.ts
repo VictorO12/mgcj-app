@@ -345,9 +345,16 @@ Deno.serve(async (req) => {
         )
 
         if (reversal.error) {
-          // Common cause: the destination account's balance no longer covers it
-          // (already paid out to their bank) — reuse the actionable reversal_failed
-          // route so it lands in dispatch/Vellon's "collect this back" queue.
+          // NOT triggered by an insufficient destination balance: Stripe lets a
+          // transfer reversal succeed even when the driver/company already paid the
+          // money out to their bank — it drives their connected-account balance
+          // negative and recovers it (reserve on future volume + automatic bank
+          // debit, since debit_negative_balances=true on these CA accounts), while
+          // crediting Vellon's platform balance immediately. So that case lands in
+          // the success branch below as refund_reversed. This path is for GENUINE
+          // reversal rejections (cross-border restriction, non-reversible transfer
+          // state, API error) — rare — routed to the actionable reversal_failed
+          // "collect this back" queue for manual recovery.
           console.error(`Ride ${ride.id}: failed to reverse ${delta}¢ of transfer ${ride.stripe_transfer_id} for refund:`, reversal.error)
           const { error } = await serviceClient
             .from('rides')
@@ -414,8 +421,12 @@ Deno.serve(async (req) => {
         )
 
         if (reversal.error) {
-          // Common cause: the destination account's balance no longer covers
-          // it (already paid out to their bank) — needs manual recovery.
+          // NOT an insufficient-balance case: a reversal succeeds even when the
+          // driver already withdrew, pushing them negative and crediting Vellon
+          // (Stripe recovers via reserve + bank debit) — that lands in the success
+          // branch as transfer_reversed. This is for genuine reversal rejections
+          // (cross-border restriction, non-reversible state, API error) — rare —
+          // needing manual recovery.
           console.error(`Ride ${ride.id}: failed to reverse transfer ${ride.stripe_transfer_id} for dispute ${dispute.id}:`, reversal.error)
           await serviceClient
             .from('rides')
