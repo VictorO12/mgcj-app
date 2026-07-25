@@ -102,6 +102,15 @@ Deno.serve(async (req) => {
     let accountId = driver.stripe_connect_account_id
 
     if (!accountId) {
+      // Payout delay is Vellon-configurable (payout_config, set from vellon-ops)
+      // rather than the old hardcoded '7'. Driver accounts use driver_delay_days.
+      // Falls back to 2 if the singleton row is somehow missing.
+      const { data: payoutCfg } = await serviceClient
+        .from('payout_config')
+        .select('driver_delay_days')
+        .eq('id', 1)
+        .maybeSingle()
+      const driverDelayDays = payoutCfg?.driver_delay_days ?? 2
       // Express account, Canada-only for now (Annapolis Valley launch market).
       // On individual identity by default — drivers are sole proprietors, not
       // registered businesses, in the common case.
@@ -125,8 +134,10 @@ Deno.serve(async (req) => {
         // handler is a real follow-up, not built yet. Until it exists, this
         // delay only buys time for a MANUAL reversal, not an automatic one. Set
         // once at account creation; not applied to company_settles accounts.
+        // Value comes from payout_config (Vellon-tunable); the actual number is
+        // spliced in below so we can retry without it if Stripe floors it.
         'settings[payouts][schedule][interval]':   'daily',
-        'settings[payouts][schedule][delay_days]': '7',
+        'settings[payouts][schedule][delay_days]': String(driverDelayDays),
       }
       // Omit entirely rather than sending '' — Stripe treats an empty string
       // as an invalid email format, not "no email provided". Most drivers
@@ -137,7 +148,23 @@ Deno.serve(async (req) => {
         accountBody.email = profile.email
       }
 
-      const account = await stripePost('/accounts', accountBody)
+      let account = await stripePost('/accounts', accountBody)
+
+      // Stripe floors delay_days at the CA country minimum (~2-3 business days).
+      // If our configured target is below that floor, Stripe rejects the whole
+      // create with a delay_days param error — retry once WITHOUT the schedule
+      // override so the account still gets created at Stripe's own minimum,
+      // rather than failing the driver's onboarding over a tuning value.
+      if (account.error?.param?.includes('delay_days')) {
+        console.warn(
+          `delay_days=${driverDelayDays} rejected by Stripe (below CA floor); ` +
+          `retrying at Stripe default minimum. ${account.error.message}`,
+        )
+        const retryBody = { ...accountBody }
+        delete retryBody['settings[payouts][schedule][delay_days]']
+        delete retryBody['settings[payouts][schedule][interval]']
+        account = await stripePost('/accounts', retryBody)
+      }
 
       if (account.error) {
         console.error('Stripe Connect account creation error:', account.error)
