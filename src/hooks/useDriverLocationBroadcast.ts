@@ -47,6 +47,11 @@ export function useDriverLocationBroadcast(driverId: string | undefined) {
           current_lat: loc.coords.latitude,
           current_lng: loc.coords.longitude,
           updated_at: new Date().toISOString(),
+          // Liveness heartbeat. Dispatch treats a driver whose last_seen_at is
+          // >60s stale as offline (phantom), and a nightly-ish reaper flips them
+          // offline after 5 min. This interval only ticks while foregrounded, so
+          // closing/backgrounding the app naturally lets the beat go stale.
+          last_seen_at: new Date().toISOString(),
         })
         .eq("id", driverId);
     }, 10000);

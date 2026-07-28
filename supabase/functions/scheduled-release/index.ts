@@ -6,6 +6,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { computeAuthoritativeFare } from '../_shared/fare.ts'
+import { livenessOrFilter, isDriverLive } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -137,6 +138,7 @@ async function releaseRide(ride: any, now: Date) {
     .eq('is_active', true)
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
+    .or(livenessOrFilter()) // exclude phantoms: online flag set but heartbeat stale
 
   if (ride.vehicle_class_id) {
     driversQuery = driversQuery.or(`vehicle_class_id.eq.${ride.vehicle_class_id},vehicle_class_id.is.null`)
@@ -407,11 +409,11 @@ async function markAtRiskAndAlert(ride: any, reason: string) {
 // ── Check if a driver is viable for this ride ─────────────────
 async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
   const { data: driver } = await supabase.from('drivers')
-    .select('id, is_active, company_id, vehicle_class_id')
+    .select('id, is_active, last_seen_at, company_id, vehicle_class_id')
     .eq('id', driverId)
     .maybeSingle()
 
-  if (!driver?.is_active) return false
+  if (!driver || !isDriverLive(driver)) return false
   if (driver.company_id !== ride.company_id) return false
   if (ride.vehicle_class_id && driver.vehicle_class_id !== null && driver.vehicle_class_id !== ride.vehicle_class_id) return false
 

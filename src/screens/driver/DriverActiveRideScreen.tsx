@@ -37,8 +37,10 @@ const TURN_ANNOUNCE_NEAR = 50;
 const TURN_INDICATOR_THRESHOLD = 300;
 // Show destination-side banner within this many metres of the target
 const DEST_SIDE_THRESHOLD = 300;
-// Throttle DB location writes to once per N ms
-const DB_WRITE_INTERVAL_MS = 8000;
+// Throttle DB location writes to once per N ms.
+// Also the passenger-facing location+ETA broadcast cadence during an active ride
+// (5s — snappy dot + ETA without draining the driver's battery on an all-day shift).
+const DB_WRITE_INTERVAL_MS = 5000;
 
 // ── Project a point distanceM metres ahead along headingDeg ──────────────
 function projectPoint(origin: LatLng, headingDeg: number, distanceM: number): LatLng {
@@ -98,6 +100,28 @@ function getDistance(a: LatLng, b: LatLng): number {
       Math.cos((b.latitude * Math.PI) / 180) *
       Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+// ── Remaining distance (m) from `loc` to the end of the route polyline ─────
+// Snaps to the nearest polyline vertex, then sums the leg lengths from there
+// to the destination. Cheap (a few hundred points) and runs each GPS tick to
+// keep the local ETA live between the throttled route refetches.
+function remainingRouteDistance(loc: LatLng, coords: LatLng[]): number | null {
+  if (coords.length < 2) return null;
+  let nearestIdx = 0;
+  let minD = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const d = getDistance(loc, coords[i]);
+    if (d < minD) {
+      minD = d;
+      nearestIdx = i;
+    }
+  }
+  let rem = getDistance(loc, coords[nearestIdx]);
+  for (let i = nearestIdx; i < coords.length - 1; i++) {
+    rem += getDistance(coords[i], coords[i + 1]);
+  }
+  return rem;
 }
 
 // ── Compass bearing from one point to another (0–360) ────────────────────
@@ -182,6 +206,11 @@ export default function DriverActiveRideScreen({
 
   const [eta, setEta] = useState<number | null>(null);
   const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
+  // Route geometry + average speed as refs, so the ~1s GPS watch callback can
+  // interpolate a fresh ETA locally without re-subscribing on every state change.
+  const routeCoordsRef = useRef<LatLng[]>([]);
+  const routeAvgSpeedRef = useRef<number | null>(null); // m/s, from the last route fetch
+  const etaSecondsRef = useRef<number | null>(null); // latest ETA broadcast to the passenger
   const [steps, setSteps] = useState<Step[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [totalDistanceM, setTotalDistanceM] = useState<number | null>(null);
@@ -341,22 +370,65 @@ export default function DriverActiveRideScreen({
             setHeading(loc.coords.heading);
           }
 
-          // Throttle DB writes to once per DB_WRITE_INTERVAL_MS
+          // Interpolate ETA locally from remaining route distance ÷ the route's
+          // average speed. Keeps the driver's ETA (and the passenger's broadcast
+          // ETA) live every tick without hitting Google between route refetches.
+          const speed = routeAvgSpeedRef.current;
+          const coordsNow = routeCoordsRef.current;
+          if (speed && speed > 0 && coordsNow.length > 1) {
+            const rem = remainingRouteDistance(coords, coordsNow);
+            if (rem != null) {
+              const secs = Math.round(rem / speed);
+              etaSecondsRef.current = secs;
+              setEta(Math.max(1, Math.ceil(secs / 60)));
+            }
+          }
+
+          // Throttle DB writes to once per DB_WRITE_INTERVAL_MS. This doubles as
+          // the passenger-facing broadcast: location, the interpolated ETA, and a
+          // liveness heartbeat (belt-and-suspenders — the reaper already spares
+          // active-ride drivers, and useDriverLocationBroadcast beats every 10s).
           const now = Date.now();
           if (profile && now - lastDbWrite.current >= DB_WRITE_INTERVAL_MS) {
             lastDbWrite.current = now;
             supabase
               .from("drivers")
-              .update({ current_lat: coords.latitude, current_lng: coords.longitude })
+              .update({
+                current_lat: coords.latitude,
+                current_lng: coords.longitude,
+                active_ride_eta_seconds: etaSecondsRef.current,
+                last_seen_at: new Date().toISOString(),
+              })
               .eq("id", profile.id)
               .then(() => {});
           }
         },
       );
 
-      // Seed initial position and route
+      // Seed the route as fast as possible so the passenger gets an ETA within
+      // ~1s of accept, instead of waiting on a cold BestForNavigation fix (which
+      // can take 15-30s indoors — the whole window shows "--" on the passenger).
+      // Two-stage:
+      //   1. getLastKnownPositionAsync() — the OS's cached fix, returns instantly
+      //      (may be null on a truly cold device, or slightly stale); fire the
+      //      first fetchRoute off it right away so an ETA broadcasts immediately.
+      //   2. A Balanced fix (coarse but ~1-5s to acquire vs. 15-30s for
+      //      BestForNavigation) refines the route moments later. The always-on
+      //      watch above stays BestForNavigation for actual turn-by-turn, and
+      //      local interpolation + the 120s refresh keep the ETA honest after.
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (lastKnown) {
+        const seed = {
+          latitude: lastKnown.coords.latitude,
+          longitude: lastKnown.coords.longitude,
+        };
+        locationRef.current = seed;
+        setLocation(seed);
+        fetchRoute(seed, targetRef.current);
+      }
+
       const initial = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.BestForNavigation,
+        accuracy: Location.Accuracy.Balanced,
       });
       const coords = {
         latitude: initial.coords.latitude,
@@ -372,16 +444,29 @@ export default function DriverActiveRideScreen({
       if (etaInterval.current) clearInterval(etaInterval.current);
       if (offRouteTimer.current) clearTimeout(offRouteTimer.current);
       if (recenterTimer.current) clearTimeout(recenterTimer.current);
+      // Clear the broadcast ETA so the next passenger this driver picks up never
+      // reads a stale value before the new route's first tick lands.
+      if (profile) {
+        supabase
+          .from("drivers")
+          .update({ active_ride_eta_seconds: null })
+          .eq("id", profile.id)
+          .then(() => {});
+      }
     };
   }, []);
 
-  // ── Refresh route every 30s ───────────────────────────────────────────
+  // ── Refresh route every 120s ──────────────────────────────────────────
+  // Just a periodic correction for traffic/step drift — the ETA itself is
+  // interpolated locally every GPS tick, and going genuinely off-route triggers
+  // an immediate on-demand reroute below. Was 30s (an expensive full Directions
+  // fetch on both driver and passenger); the local ETA lets this back off ~4x.
   useEffect(() => {
     if (etaInterval.current) clearInterval(etaInterval.current);
     etaInterval.current = setInterval(() => {
       const loc = locationRef.current;
       if (loc) fetchRoute(loc, targetRef.current);
-    }, 30000);
+    }, 120000);
     return () => {
       if (etaInterval.current) clearInterval(etaInterval.current);
     };
@@ -392,6 +477,12 @@ export default function DriverActiveRideScreen({
     setCurrentStepIndex(0);
     setRouteCoords([]);
     setSteps([]);
+    // Pause local ETA interpolation until fetchRoute (async, below) repopulates
+    // these for the new leg — otherwise the ~1s gap after a status change would
+    // interpolate against the *previous* leg's polyline and broadcast a bogus ETA.
+    routeCoordsRef.current = [];
+    routeAvgSpeedRef.current = null;
+    etaSecondsRef.current = null;
     setDistToNextTurn(null);
     setDestSide(null);
     announcedFar.current = false;
@@ -580,10 +671,34 @@ export default function DriverActiveRideScreen({
       const seconds =
         route.legs?.[0]?.duration_in_traffic?.value ??
         route.legs?.[0]?.duration?.value;
+      const distanceM = route.legs?.[0]?.distance?.value ?? null;
       setEta(seconds ? Math.ceil(seconds / 60) : null);
-      setTotalDistanceM(route.legs?.[0]?.distance?.value ?? null);
+      setTotalDistanceM(distanceM);
+      // Seed the local-interpolation refs from this authoritative fetch: the
+      // route's average speed drives the between-fetch ETA estimate.
+      etaSecondsRef.current = seconds ?? null;
+      routeAvgSpeedRef.current =
+        seconds && distanceM && seconds > 0 ? distanceM / seconds : null;
+      // Broadcast this authoritative ETA immediately, decoupled from movement.
+      // The per-tick watch write is gated on the driver moving 3m, so a freshly
+      // computed ETA from a route (re)fetch — most importantly the DROPOFF leg's
+      // ETA at the pickup→dropoff (in_progress) flip, when the driver has usually
+      // just stopped to collect the passenger — would otherwise sit unbroadcast
+      // until they moved again, leaving the passenger on the stale pickup ETA.
+      // fetchRoute runs only a handful of times per ride, so this is cheap.
+      if (profile && etaSecondsRef.current != null) {
+        supabase
+          .from("drivers")
+          .update({ active_ride_eta_seconds: etaSecondsRef.current })
+          .eq("id", profile.id)
+          .then(() => {});
+      }
       const encoded = route.overview_polyline?.points;
-      if (encoded) setRouteCoords(decodePolyline(encoded));
+      if (encoded) {
+        const decoded = decodePolyline(encoded);
+        setRouteCoords(decoded);
+        routeCoordsRef.current = decoded;
+      }
       setSteps(route.legs?.[0]?.steps ?? []);
       // Route is always recomputed from the driver's current position, so the
       // first step is the current maneuver. Reset the index or it keeps pointing

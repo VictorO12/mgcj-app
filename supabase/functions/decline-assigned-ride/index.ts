@@ -8,6 +8,7 @@
 // This function runs with the service role to do it safely, and — unlike a
 // bare unassign — records the decline and alerts dispatch so it's visible.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { isDriverLive } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -56,22 +57,22 @@ Deno.serve(async (req) => {
     // ride's vehicle_class_id (none = any class counts).
     let driversQuery = supabase
       .from('drivers')
-      .select('id, is_active')
+      .select('id, is_active, last_seen_at')
       .eq('company_id', ride.company_id)
     if (ride.vehicle_class_id) {
       driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
     }
     const { data: roster } = await driversQuery
     const totalCount = roster?.length ?? 0
-    const activeCount = (roster ?? []).filter((d: any) => d.is_active).length
+    const activeCount = (roster ?? []).filter((d: any) => isDriverLive(d)).length
 
     let newCoverage: 'uncovered' | 'at_risk' | 'covered'
     if (totalCount === 0) {
       newCoverage = 'uncovered'
     } else if (ride.preferred_driver_exclusive && ride.preferred_driver_id) {
       const { data: prefD } = await supabase.from('drivers')
-        .select('is_active').eq('id', ride.preferred_driver_id).maybeSingle()
-      newCoverage = prefD?.is_active ? 'covered' : 'at_risk'
+        .select('is_active, last_seen_at').eq('id', ride.preferred_driver_id).maybeSingle()
+      newCoverage = prefD && isDriverLive(prefD) ? 'covered' : 'at_risk'
     } else if (activeCount === 0) {
       newCoverage = 'at_risk'
     } else {

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import Constants from 'expo-constants'
 
 export interface Driver {
   id: string
@@ -29,7 +28,6 @@ export interface ActiveRide {
 }
 
 const ACTIVE_STATUSES = ['pending', 'offered', 'assigned', 'driver_arriving', 'in_progress']
-const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey
 
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true
@@ -39,7 +37,6 @@ function isRideNow(row: any): boolean {
 export function useActiveRide(passengerId: string | undefined) {
   const [ride, setRide] = useState<ActiveRide | null>(null)
   const [eta, setEta] = useState<number | null>(null)
-  const etaInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   // Holds the last known ride so we can surface it briefly on completion
   const lastRideRef = useRef<ActiveRide | null>(null)
   const [cancelledReason, setCancelledReason] = useState<string | null>(null)
@@ -118,7 +115,7 @@ export function useActiveRide(passengerId: string | undefined) {
 
     const driverId = ride.driver.id
 
-    function applyLocation(lat: number | null, lng: number | null) {
+    function applyLocation(lat: number | null, lng: number | null, etaSeconds: number | null) {
       setRide(prev => {
         if (!prev || !prev.driver) return prev
         return {
@@ -126,12 +123,12 @@ export function useActiveRide(passengerId: string | undefined) {
           driver: { ...prev.driver, current_lat: lat, current_lng: lng }
         }
       })
-      // Recalculate ETA immediately on driver location update rather than
-      // waiting for the 30s interval — makes reroutes visible within seconds.
-      const current = rideRef.current
-      if (current?.driver && lat !== null && lng !== null) {
-        calculateEta({ ...current, driver: { ...current.driver, current_lat: lat, current_lng: lng } })
-      }
+      // ETA is computed on the driver's device (traffic-aware route ETA,
+      // interpolated locally each GPS tick) and broadcast on the same drivers
+      // row — so it arrives with the location, no Google call here. This used to
+      // fire a Directions request on every single update: the app's biggest
+      // Maps cost by far.
+      setEta(etaSeconds != null ? Math.max(1, Math.ceil(etaSeconds / 60)) : null)
     }
 
     const channel = supabase
@@ -143,8 +140,8 @@ export function useActiveRide(passengerId: string | undefined) {
       }, (payload) => {
         const row = payload.new as any
         if (row.id !== driverId) return
-        console.log('[Realtime] driver location:', row.current_lat, row.current_lng)
-        applyLocation(row.current_lat, row.current_lng)
+        console.log('[Realtime] driver location:', row.current_lat, row.current_lng, '| eta_s:', row.active_ride_eta_seconds)
+        applyLocation(row.current_lat, row.current_lng, row.active_ride_eta_seconds ?? null)
       })
       .subscribe((status) => {
         console.log('[Realtime] driver channel:', status)
@@ -153,10 +150,10 @@ export function useActiveRide(passengerId: string | undefined) {
     const poll = setInterval(async () => {
       const { data } = await supabase
         .from('drivers')
-        .select('current_lat, current_lng')
+        .select('current_lat, current_lng, active_ride_eta_seconds')
         .eq('id', driverId)
         .maybeSingle()
-      if (data) applyLocation(data.current_lat, data.current_lng)
+      if (data) applyLocation(data.current_lat, data.current_lng, data.active_ride_eta_seconds ?? null)
     }, 10000)
 
     return () => {
@@ -165,29 +162,12 @@ export function useActiveRide(passengerId: string | undefined) {
     }
   }, [ride?.driver?.id])
 
-  // ── Recalculate ETA ──────────────────────────────────────────
-  // Keyed only on driver.id/status (not lat/lng) so the 30s cadence is
-  // stable instead of being torn down and rebuilt on every location tick;
-  // a ref holds the latest ride so the interval callback never reads stale data.
-  const rideRef = useRef<ActiveRide | null>(null)
-  useEffect(() => { rideRef.current = ride }, [ride])
-
+  // ── Clear stale ETA when there's no confirmed driver ─────────
+  // While a driver IS assigned, `eta` is set from their broadcast in
+  // applyLocation. When there's no confirmed driver (still 'offered', or reset
+  // by a decline/reassignment), make sure we never leave a stale ETA on screen.
   useEffect(() => {
-    if (etaInterval.current) clearInterval(etaInterval.current)
-    if (!ride?.driver?.id) {
-      // No confirmed driver yet (e.g. still 'offered', or reset by a
-      // decline/reassignment) — never leave a stale ETA on screen.
-      setEta(null)
-      return
-    }
-
-    calculateEta(rideRef.current!)
-    etaInterval.current = setInterval(() => {
-      if (rideRef.current) calculateEta(rideRef.current)
-    }, 30000)
-    return () => {
-      if (etaInterval.current) clearInterval(etaInterval.current)
-    }
+    if (!ride?.driver?.id) setEta(null)
   }, [ride?.driver?.id, ride?.status])
 
   // ── Fetch active ride ───────────────────────────────────────
@@ -207,13 +187,14 @@ export function useActiveRide(passengerId: string | undefined) {
 
     const rideRow = rides[0]
     let driver: Driver | null = null
+    let driverEtaSeconds: number | null = null
 
     // Don't reveal the candidate driver until they've actually confirmed —
     // 'offered' rides have a driver_id but it's not committed yet.
     if (rideRow.driver_id && rideRow.status !== 'offered') {
       const { data: driverRow, error: driverError } = await supabase
         .from('drivers')
-        .select('id, vehicle_make, vehicle_model, plate_number, current_lat, current_lng')
+        .select('id, vehicle_make, vehicle_model, plate_number, current_lat, current_lng, active_ride_eta_seconds')
         .eq('id', rideRow.driver_id)
         .single()
 
@@ -239,6 +220,7 @@ export function useActiveRide(passengerId: string | undefined) {
           phone: profileRow?.phone ?? null,
           avatar_url: profileRow?.avatar_url ?? null,
         }
+        driverEtaSeconds = driverRow.active_ride_eta_seconds ?? null
       }
     }
 
@@ -256,37 +238,10 @@ export function useActiveRide(passengerId: string | undefined) {
       driver,
     }
 
-    console.log('[fetchActiveRide] assembled ride:', assembled.status, '| driver:', driver?.name)
-    if (!driver) setEta(null)
+    console.log('[fetchActiveRide] assembled ride:', assembled.status, '| driver:', driver?.name, '| eta_s:', driverEtaSeconds)
+    // Seed ETA from the driver's last broadcast; Realtime/poll keeps it fresh.
+    setEta(driver && driverEtaSeconds != null ? Math.max(1, Math.ceil(driverEtaSeconds / 60)) : null)
     setRide(assembled)
-  }
-
-  // ── ETA calculation ─────────────────────────────────────────
-  async function calculateEta(currentRide: ActiveRide) {
-    if (!currentRide.driver?.current_lat || !currentRide.driver?.current_lng) {
-      console.log('[ETA] skipped — no driver location yet for status:', currentRide.status)
-      return
-    }
-
-    const target = currentRide.status === 'in_progress'
-      ? { lat: currentRide.dropoff_lat, lng: currentRide.dropoff_lng }
-      : { lat: currentRide.pickup_lat, lng: currentRide.pickup_lng }
-
-    try {
-      const url =
-        `https://maps.googleapis.com/maps/api/directions/json` +
-        `?origin=${currentRide.driver.current_lat},${currentRide.driver.current_lng}` +
-        `&destination=${target.lat},${target.lng}` +
-        `&key=${MAPS_KEY}`
-
-      const res = await fetch(url)
-      const json = await res.json()
-      const seconds = json.routes?.[0]?.legs?.[0]?.duration?.value
-      console.log('[ETA] status:', currentRide.status, '| status_code:', json.status, '| seconds:', seconds)
-      setEta(seconds != null ? Math.max(1, Math.ceil(seconds / 60)) : null)
-    } catch (e) {
-      console.error('[ETA] fetch error:', e)
-    }
   }
 
   // ── Status label ────────────────────────────────────────────

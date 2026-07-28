@@ -1,4 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { livenessOrFilter } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -188,6 +189,7 @@ async function assignRide(
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
     .not('push_token', 'is', null)
+    .or(livenessOrFilter()) // exclude phantoms: online flag set but heartbeat stale
 
   if (ride.vehicle_class_id) {
     driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)

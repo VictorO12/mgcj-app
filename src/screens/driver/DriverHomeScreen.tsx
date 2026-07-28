@@ -282,9 +282,13 @@ export default function DriverHomeScreen({
     if (goingOnline && location) {
       update.current_lat = location.latitude;
       update.current_lng = location.longitude;
+      // Stamp the heartbeat immediately so dispatch sees them as live before
+      // useDriverLocationBroadcast's first 10s tick lands.
+      update.last_seen_at = new Date().toISOString();
     } else if (!goingOnline) {
       update.current_lat = null;
       update.current_lng = null;
+      update.last_seen_at = null;
     }
     const { error } = await supabase
       .from("drivers")

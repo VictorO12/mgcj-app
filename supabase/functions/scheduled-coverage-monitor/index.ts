@@ -10,6 +10,7 @@
 // Cron: */10 * * * * (register in Supabase dashboard pg_cron)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { isDriverLive } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -27,6 +28,18 @@ Deno.serve(async () => {
   try {
     const now = new Date()
     console.log(`[coverage-monitor] now=${now.toISOString()}`)
+
+    // Layer 2: reap drivers who left the app online but stopped heartbeating
+    // (>5 min), flipping them offline + clearing location — skipping any driver
+    // on an active ride. Runs before the coverage recompute below so the
+    // recomputed coverage_status reflects the reap in the same pass. Piggybacks
+    // on this 10-min cron instead of a dedicated one to avoid growing the
+    // pg_cron/pg_net audit tables. Layer 1 (the 60s liveness filter on every
+    // dispatch read) already keeps phantoms out of assignment in real time;
+    // this is about roster/state honesty.
+    const { data: reaped, error: reapErr } = await supabase.rpc('reap_stale_drivers')
+    if (reapErr) console.error('[coverage-monitor] reap error:', JSON.stringify(reapErr))
+    else if (reaped) console.log(`[coverage-monitor] reaped ${reaped} stale driver(s)`)
 
     const { data: rides, error } = await supabase
       .from('rides')
@@ -77,7 +90,7 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
   if (!ride.company_id) return 'uncovered'
 
   let q = supabase.from('drivers')
-    .select('id, is_active')
+    .select('id, is_active, last_seen_at')
     .eq('company_id', ride.company_id)
 
   if (ride.vehicle_class_id) {
@@ -86,14 +99,14 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
 
   const { data: roster } = await q
   const totalCount  = roster?.length ?? 0
-  const activeCount = (roster ?? []).filter((d: any) => d.is_active).length
+  const activeCount = (roster ?? []).filter((d: any) => isDriverLive(d)).length
 
   if (totalCount === 0) return 'uncovered'
 
   if (ride.preferred_driver_exclusive && ride.preferred_driver_id) {
     const { data: prefD } = await supabase.from('drivers')
-      .select('is_active').eq('id', ride.preferred_driver_id).maybeSingle()
-    return prefD?.is_active ? 'covered' : 'at_risk'
+      .select('is_active, last_seen_at').eq('id', ride.preferred_driver_id).maybeSingle()
+    return prefD && isDriverLive(prefD) ? 'covered' : 'at_risk'
   }
 
   return activeCount > 0 ? 'covered' : 'at_risk'
