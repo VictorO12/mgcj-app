@@ -113,6 +113,10 @@ function isSettlementProblem(route: string | null): boolean {
   );
 }
 
+// Loaded a page at a time via .range() rather than a single big fetch — see
+// fetchRides below. "Load more" appends the next page.
+const PAGE_SIZE = 20;
+
 interface Props {
   onClose: () => void;
 }
@@ -125,6 +129,9 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
   const [filter, setFilter] = useState<"all" | "completed" | "cancelled">(
     "all",
   );
@@ -140,7 +147,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
   const isDriver = profile?.role === "driver";
-  const fetchRidesRef = useRef<() => Promise<void>>();
+  const fetchRidesRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   // Settlement breakdowns only mean anything for driver_direct drivers — a
   // company_settles driver is paid wage-style outside the app, so there's no
@@ -150,8 +157,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
 
   // Lifetime settlement totals, computed server-side (driver_settlement_totals
   // RPC) over the driver's FULL ride history — NOT derived from the `rides`
-  // state below, which is capped to the last 50 rides for list rendering and
-  // would silently under-report a driver with more rides than that.
+  // state below, which only holds whatever pages have been loaded (starts at
+  // PAGE_SIZE) and would silently under-report a driver with more rides.
   const [settlementTotals, setSettlementTotals] = useState<{
     total_fares: number;
     total_vellon_fee: number;
@@ -167,7 +174,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
   } | null>(null);
 
   useEffect(() => {
-    fetchRides();
+    fetchRides(0, "initial");
   }, [profile]);
 
   useEffect(() => {
@@ -191,9 +198,37 @@ export default function RideHistoryScreen({ onClose }: Props) {
     if (!error && data) setSettlementTotals(data as typeof settlementTotals);
   }
 
+  // company_settles drivers have no settlement RPC, but the summary strip
+  // still needs a lifetime rides/earnings count that isn't capped to
+  // whatever page of the paginated list happens to be loaded. Cheap: just
+  // two numeric columns, no joins.
+  const [companySettlesTotals, setCompanySettlesTotals] = useState<{
+    rides_count: number;
+    total_fares: number;
+  } | null>(null);
+
+  async function fetchCompanySettlesTotals() {
+    if (!isDriver || !profile || payoutModel !== "company_settles") return;
+    const { data, error } = await supabase
+      .from("rides")
+      .select("fare_estimate, fare_final")
+      .eq("driver_id", profile.id)
+      .eq("status", "completed");
+    if (!error && data) {
+      setCompanySettlesTotals({
+        rides_count: data.length,
+        total_fares: data.reduce(
+          (sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0),
+          0,
+        ),
+      });
+    }
+  }
+
   useEffect(() => {
     fetchSettlementTotals();
-  }, [isDriver, payoutModel]);
+    fetchCompanySettlesTotals();
+  }, [isDriver, payoutModel, profile?.id]);
 
   // Realtime: driver sees new ratings come in live
   useEffect(() => {
@@ -225,90 +260,94 @@ export default function RideHistoryScreen({ onClose }: Props) {
     };
   }, [profile, isDriver]);
 
-  async function fetchRides() {
+  // Single round trip: the other party's name and the ride's review rating
+  // are pulled via embedded FK selects instead of a query per ride (that
+  // per-ride fan-out — up to 50 sequential requests — was the main cause of
+  // slow load times). Paged via .range() instead of fetching everything.
+  async function fetchRides(targetPage: number, mode: "initial" | "refresh" | "more") {
     if (!profile) return;
-    setLoading(true);
+    if (mode === "initial") setLoading(true);
+    if (mode === "more") setLoadingMore(true);
 
-    const query = supabase
+    const from = targetPage * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    let query = supabase
       .from("rides")
-      .select("*")
+      .select(
+        `id, status, pickup_address, dropoff_address, fare_estimate,
+         fare_final, payment_method, created_at, driver_id, passenger_id,
+         settlement_route, stripe_fee, platform_fee_percent_at_completion,
+         refunded_amount_cents, transfer_reversed_cents,
+         driver:drivers!rides_driver_id_fkey(profiles(name)),
+         passenger:profiles!rides_passenger_id_fkey(name),
+         ride_reviews(rating)`,
+      )
       .in("status", ["completed", "cancelled"])
       .order("created_at", { ascending: false })
-      .limit(50);
+      .range(from, to);
 
-    if (isDriver) {
-      query.eq("driver_id", profile.id);
-    } else {
-      query.eq("passenger_id", profile.id);
-    }
+    query = isDriver
+      ? query.eq("driver_id", profile.id)
+      : query.eq("passenger_id", profile.id);
 
-    const { data: rideRows, error } = await query;
-    if (error || !rideRows) {
-      setLoading(false);
+    const { data, error } = await query;
+    if (error || !data) {
+      if (mode === "initial") setLoading(false);
+      if (mode === "more") setLoadingMore(false);
       return;
     }
 
-    const completedIds = rideRows
-      .filter((r) => r.status === "completed")
-      .map((r) => r.id);
+    const mapped: RideRecord[] = data.map((ride: any) => {
+      const rating = ride.ride_reviews?.[0]?.rating ?? null;
+      const hasReview = rating != null;
+      const otherName = isDriver
+        ? ride.passenger?.name ?? null
+        : ride.driver?.profiles?.name ?? null;
+      return {
+        id: ride.id,
+        status: ride.status,
+        pickup_address: ride.pickup_address,
+        dropoff_address: ride.dropoff_address,
+        fare_estimate: ride.fare_estimate,
+        fare_final: ride.fare_final,
+        payment_method: ride.payment_method,
+        created_at: ride.created_at,
+        other_party_name: otherName,
+        other_party_id: (isDriver ? ride.passenger_id : ride.driver_id) ?? null,
+        review_rating: !isDriver && hasReview ? rating : null,
+        received_rating: isDriver && hasReview ? rating : null,
+        driver_id: ride.driver_id ?? null,
+        settlement_route: ride.settlement_route ?? null,
+        stripe_fee: ride.stripe_fee ?? null,
+        platform_fee_percent_at_completion:
+          ride.platform_fee_percent_at_completion ?? null,
+        refunded_amount_cents: ride.refunded_amount_cents ?? null,
+        transfer_reversed_cents: ride.transfer_reversed_cents ?? null,
+      };
+    });
 
-    let reviewMap: Record<string, number> = {};
-    if (completedIds.length > 0) {
-      const { data: reviews } = await supabase
-        .from("ride_reviews")
-        .select("ride_id, rating")
-        .in("ride_id", completedIds);
-      reviews?.forEach((rv) => {
-        reviewMap[rv.ride_id] = rv.rating;
-      });
-    }
-
-    const enriched = await Promise.all(
-      rideRows.map(async (ride) => {
-        const otherId = isDriver ? ride.passenger_id : ride.driver_id;
-        let otherName: string | null = null;
-        if (otherId) {
-          const { data: p } = await supabase
-            .from("profiles")
-            .select("name")
-            .eq("id", otherId)
-            .maybeSingle();
-          otherName = p?.name ?? null;
-        }
-        const hasReview = reviewMap[ride.id] != null;
-        return {
-          id: ride.id,
-          status: ride.status,
-          pickup_address: ride.pickup_address,
-          dropoff_address: ride.dropoff_address,
-          fare_estimate: ride.fare_estimate,
-          fare_final: ride.fare_final,
-          payment_method: ride.payment_method,
-          created_at: ride.created_at,
-          other_party_name: otherName,
-          other_party_id: otherId ?? null,
-          review_rating: !isDriver && hasReview ? reviewMap[ride.id] : null,
-          received_rating: isDriver && hasReview ? reviewMap[ride.id] : null,
-          driver_id: ride.driver_id ?? null,
-          settlement_route: ride.settlement_route ?? null,
-          stripe_fee: ride.stripe_fee ?? null,
-          platform_fee_percent_at_completion:
-            ride.platform_fee_percent_at_completion ?? null,
-          refunded_amount_cents: ride.refunded_amount_cents ?? null,
-          transfer_reversed_cents: ride.transfer_reversed_cents ?? null,
-        };
-      }),
-    );
-
-    setRides(enriched);
-    setLoading(false);
+    setRides((prev) => (mode === "more" ? [...prev, ...mapped] : mapped));
+    setHasMore(data.length === PAGE_SIZE);
+    setPage(targetPage);
+    if (mode === "initial") setLoading(false);
+    if (mode === "more") setLoadingMore(false);
   }
 
-  fetchRidesRef.current = fetchRides;
+  fetchRidesRef.current = () => fetchRides(0, "refresh");
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    await fetchRides(page + 1, "more");
+  }
 
   async function onRefresh() {
     setRefreshing(true);
-    await Promise.all([fetchRides(), fetchSettlementTotals()]);
+    await Promise.all([
+      fetchRides(0, "refresh"),
+      fetchSettlementTotals(),
+      fetchCompanySettlesTotals(),
+    ]);
     setRefreshing(false);
   }
 
@@ -377,13 +416,6 @@ export default function RideHistoryScreen({ onClose }: Props) {
     return r.status === filter;
   });
 
-  // company_settles only — driver_direct's "Fares"/"Rides" figures come from
-  // settlementTotals below (server-side, full history) instead, since this
-  // local list is capped to the last 50 rides and would silently undercount.
-  const totalEarnings = rides
-    .filter((r) => r.status === "completed")
-    .reduce((sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0), 0);
-
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -402,7 +434,8 @@ export default function RideHistoryScreen({ onClose }: Props) {
             <Text style={styles.summaryValue}>
               {payoutModel === "driver_direct" && settlementTotals
                 ? settlementTotals.rides_count
-                : rides.filter((r) => r.status === "completed").length}
+                : (companySettlesTotals?.rides_count ??
+                  rides.filter((r) => r.status === "completed").length)}
             </Text>
             <Text style={styles.summaryLabel}>Rides</Text>
           </View>
@@ -412,7 +445,13 @@ export default function RideHistoryScreen({ onClose }: Props) {
               $
               {(payoutModel === "driver_direct" && settlementTotals
                 ? settlementTotals.total_fares
-                : totalEarnings
+                : (companySettlesTotals?.total_fares ??
+                  rides
+                    .filter((r) => r.status === "completed")
+                    .reduce(
+                      (sum, r) => sum + (r.fare_final ?? r.fare_estimate ?? 0),
+                      0,
+                    ))
               ).toFixed(2)}
             </Text>
             <Text style={styles.summaryLabel}>
@@ -484,6 +523,21 @@ export default function RideHistoryScreen({ onClose }: Props) {
               ? "Your completed rides will appear here"
               : "Your trip history will appear here"}
           </Text>
+          {hasMore && (
+            <TouchableOpacity
+              style={styles.loadMoreBtn}
+              onPress={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <ActivityIndicator color={colors.accentOrange} size="small" />
+              ) : (
+                <Text style={styles.loadMoreBtnText}>
+                  None on this page — load more
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       ) : (
         <ScrollView
@@ -837,6 +891,20 @@ export default function RideHistoryScreen({ onClose }: Props) {
             ))}
           </View>
 
+          {hasMore && (
+            <TouchableOpacity
+              style={styles.loadMoreBtn}
+              onPress={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <ActivityIndicator color={colors.accentOrange} size="small" />
+              ) : (
+                <Text style={styles.loadMoreBtnText}>Load more rides</Text>
+              )}
+            </TouchableOpacity>
+          )}
+
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
@@ -1102,4 +1170,17 @@ const makeStyles = (colors: Colors) =>
     },
     rateBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentAmber },
     noRatingText: { fontSize: 12, color: colors.textTertiary, fontStyle: "italic" },
+    loadMoreBtn: {
+      alignSelf: "center",
+      marginTop: 16,
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+      borderWidth: 0.5,
+      borderColor: colors.borderSubtle,
+      minWidth: 140,
+      alignItems: "center",
+    },
+    loadMoreBtnText: { fontSize: 13, fontWeight: "600", color: colors.accentOrange },
   });
