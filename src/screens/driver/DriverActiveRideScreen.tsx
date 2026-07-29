@@ -42,6 +42,23 @@ const DEST_SIDE_THRESHOLD = 300;
 // (5s — snappy dot + ETA without draining the driver's battery on an all-day shift).
 const DB_WRITE_INTERVAL_MS = 5000;
 
+// Off-route recalculation: how far off the route line (m) and for how long (ms)
+// before we recompute. Tightened from 80 m / 5 s once the route geometry moved to
+// full-resolution step polylines — the old slack was partly compensating for the
+// decimated overview line reading falsely far from an on-road driver.
+const OFF_ROUTE_THRESHOLD = 50;
+const OFF_ROUTE_DEBOUNCE_MS = 3000;
+// When the maneuver *after* the next one is closer than this (m), fold it into the
+// near-turn voice prompt ("turn left, then turn right"), the way map apps do.
+const COMBINE_TURN_DISTANCE = 150;
+// Show the on-screen "then …" preview only when the maneuver after the next one is
+// within this many metres — a persistent "then" for a turn 4 km out reads as two
+// imminent turns and is *less* intuitive. Looser than the voice threshold.
+const VISUAL_THEN_DISTANCE = 400;
+// Text-to-speech locale for turn-by-turn voice. Single source so it can become a
+// driver preference later without hunting down every Speech.speak call.
+const SPEECH_LANG = "en-US";
+
 // ── Project a point distanceM metres ahead along headingDeg ──────────────
 function projectPoint(origin: LatLng, headingDeg: number, distanceM: number): LatLng {
   const R = 6371000;
@@ -183,6 +200,7 @@ interface Step {
   duration: { text: string };
   maneuver?: string;
   end_location: { lat: number; lng: number };
+  polyline?: { points: string };
 }
 
 interface Props {
@@ -234,6 +252,10 @@ export default function DriverActiveRideScreen({
   const voiceMutedRef = useRef(false);
   const announcedFar = useRef(false);
   const announcedNear = useRef(false);
+  // When a near-turn prompt chains in the following maneuver ("…then turn right"),
+  // remember which step index we already voiced, so advancing into it doesn't
+  // immediately re-announce it. Robust across reroutes (which reset the index to 0).
+  const chainedIntoIndexRef = useRef<number>(-1);
 
   // Turn indicator
   const [distToNextTurn, setDistToNextTurn] = useState<number | null>(null);
@@ -526,12 +548,23 @@ export default function DriverActiveRideScreen({
       if (!voiceMutedRef.current && navModeRef.current) {
         if (dist < TURN_ANNOUNCE_NEAR && !announcedNear.current) {
           announcedNear.current = true;
-          Speech.speak(stripHtml(step.html_instructions), { language: "en-US" });
+          // If the maneuver right after this one is close behind it, chain them
+          // into a single prompt ("turn left, then turn right") so the driver can
+          // set up for both — map-app behaviour, and free since steps are loaded.
+          const upcoming = steps[currentStepIndex + 1];
+          const chain =
+            upcoming && upcoming.distance?.value != null &&
+            upcoming.distance.value < COMBINE_TURN_DISTANCE;
+          if (chain) chainedIntoIndexRef.current = currentStepIndex + 1;
+          const phrase = chain
+            ? `${stripHtml(step.html_instructions)}, then ${stripHtml(upcoming!.html_instructions)}`
+            : stripHtml(step.html_instructions);
+          Speech.speak(phrase, { language: SPEECH_LANG });
         } else if (dist < TURN_ANNOUNCE_FAR && !announcedFar.current) {
           announcedFar.current = true;
           const rounded = dist >= 100 ? Math.round(dist / 10) * 10 : Math.round(dist);
           Speech.speak(`In ${rounded} meters, ${stripHtml(step.html_instructions)}`, {
-            language: "en-US",
+            language: SPEECH_LANG,
           });
         }
       }
@@ -549,7 +582,7 @@ export default function DriverActiveRideScreen({
         const label = distToDest >= 100
           ? `${Math.round(distToDest / 10) * 10} meters`
           : `${Math.round(distToDest)} meters`;
-        Speech.speak(`Destination on your ${side} in ${label}`, { language: "en-US" });
+        Speech.speak(`Destination on your ${side} in ${label}`, { language: SPEECH_LANG });
       }
     } else {
       setDestSide(null);
@@ -567,7 +600,7 @@ export default function DriverActiveRideScreen({
     const t = setTimeout(() => {
       const step = steps[currentStepIndex];
       if (step && navModeRef.current) {
-        Speech.speak(stripHtml(step.html_instructions), { language: "en-US" });
+        Speech.speak(stripHtml(step.html_instructions), { language: SPEECH_LANG });
       }
     }, 1200);
     return () => clearTimeout(t);
@@ -581,9 +614,15 @@ export default function DriverActiveRideScreen({
     // firstStepKey effect handles index=0 on new route load;
     // this effect handles subsequent step advances (index > 0).
     if (currentStepIndex === 0) return;
+    // If we just voiced this step as the "…then" tail of the previous near-turn
+    // prompt, advancing into it here would repeat it back-to-back — skip once.
+    if (currentStepIndex === chainedIntoIndexRef.current) {
+      chainedIntoIndexRef.current = -1;
+      return;
+    }
     const step = steps[currentStepIndex];
     if (step && !voiceMutedRef.current && navModeRef.current) {
-      Speech.speak(stripHtml(step.html_instructions), { language: "en-US" });
+      Speech.speak(stripHtml(step.html_instructions), { language: SPEECH_LANG });
     }
   }, [currentStepIndex]);
 
@@ -599,8 +638,10 @@ export default function DriverActiveRideScreen({
       const d = getDistance(location, point);
       if (d < minDist) minDist = d;
     }
-    // Only reroute if consistently off-route for 8 s (avoids GPS jitter false positives)
-    if (minDist > 80) {
+    // Only reroute if consistently off-route for OFF_ROUTE_DEBOUNCE_MS (avoids GPS
+    // jitter false positives). Both threshold and debounce tightened now that the
+    // route line is full-resolution, so being this far off is genuinely off-route.
+    if (minDist > OFF_ROUTE_THRESHOLD) {
       if (!offRouteTimer.current) {
         offRouteTimer.current = setTimeout(() => {
           offRouteTimer.current = null;
@@ -613,13 +654,13 @@ export default function DriverActiveRideScreen({
           announcedFar.current = false;
           announcedNear.current = false;
           if (!voiceMutedRef.current) {
-            Speech.speak("Rerouting. Finding best route.", { language: "en-US" });
+            Speech.speak("Rerouting. Finding best route.", { language: SPEECH_LANG });
           }
           fetchRoute(locationRef.current, targetRef.current).finally(() => {
             isRerouting.current = false;
             setShowRerouting(false);
           });
-        }, 5000);
+        }, OFF_ROUTE_DEBOUNCE_MS);
       }
     } else {
       // Back on route — cancel any pending reroute timer
@@ -693,13 +734,35 @@ export default function DriverActiveRideScreen({
           .eq("id", profile.id)
           .then(() => {});
       }
-      const encoded = route.overview_polyline?.points;
-      if (encoded) {
-        const decoded = decodePolyline(encoded);
+      const legSteps: Step[] = route.legs?.[0]?.steps ?? [];
+      // Build the route geometry from the per-step polylines rather than
+      // route.overview_polyline. The overview line is decimated (few vertices),
+      // which the drawn route AND the 80 m off-route test both read off — so on a
+      // long straight a driver dead-on the road can sit >80 m from the nearest
+      // coarse vertex (false "Rerouting"), and on a curve the line visibly cuts
+      // the corner. The step polylines are full-resolution and already in this
+      // same response, so this costs nothing extra. Fall back to overview only if
+      // steps carry no geometry.
+      let decoded: LatLng[] = [];
+      for (const s of legSteps) {
+        if (!s.polyline?.points) continue;
+        const seg = decodePolyline(s.polyline.points);
+        if (!seg.length) continue;
+        // Consecutive steps share a vertex — drop the duplicate seam point.
+        if (decoded.length && getDistance(decoded[decoded.length - 1], seg[0]) < 1) {
+          decoded.push(...seg.slice(1));
+        } else {
+          decoded.push(...seg);
+        }
+      }
+      if (decoded.length < 2 && route.overview_polyline?.points) {
+        decoded = decodePolyline(route.overview_polyline.points);
+      }
+      if (decoded.length > 1) {
         setRouteCoords(decoded);
         routeCoordsRef.current = decoded;
       }
-      setSteps(route.legs?.[0]?.steps ?? []);
+      setSteps(legSteps);
       // Route is always recomputed from the driver's current position, so the
       // first step is the current maneuver. Reset the index or it keeps pointing
       // at a stale (often out-of-bounds) step after the 30s refresh, blanking the banner.
@@ -909,6 +972,7 @@ export default function DriverActiveRideScreen({
   }
 
   const currentStep = steps[currentStepIndex];
+  const nextStep = steps[currentStepIndex + 1];
   const paymentIsCash = !ride.payment_method || ride.payment_method === "cash";
 
   return (
@@ -1069,13 +1133,21 @@ export default function DriverActiveRideScreen({
             <Text style={styles.navDistance}>
               {distToNextTurn !== null ? formatDist(distToNextTurn) : currentStep.distance.text}
             </Text>
+            {nextStep && nextStep.distance?.value != null &&
+             nextStep.distance.value < VISUAL_THEN_DISTANCE && (
+              <View style={styles.navThenRow}>
+                <Text style={styles.navThenLabel}>then</Text>
+                <Ionicons
+                  name={manoeuvreIcon(nextStep.maneuver) as any}
+                  size={13}
+                  color={colors.textSecondary}
+                />
+                <Text style={styles.navThenText} numberOfLines={1}>
+                  {stripHtml(nextStep.html_instructions)}
+                </Text>
+              </View>
+            )}
           </View>
-          {eta !== null && (
-            <View style={styles.navEtaBox}>
-              <Text style={styles.navEtaNum}>{eta}</Text>
-              <Text style={styles.navEtaUnit}>min</Text>
-            </View>
-          )}
         </View>
       )}
 
@@ -1091,11 +1163,6 @@ export default function DriverActiveRideScreen({
             />
             <Text style={styles.statusLabel}>{statusLabel()}</Text>
           </View>
-          {eta !== null && (
-            <View style={styles.etaBadge}>
-              <Text style={styles.etaText}>{eta} min</Text>
-            </View>
-          )}
         </View>
       )}
 
@@ -1127,7 +1194,7 @@ export default function DriverActiveRideScreen({
               // Speak current step immediately so driver knows where to go
               const step = steps[currentStepIndex];
               if (step && !voiceMutedRef.current) {
-                Speech.speak(stripHtml(step.html_instructions), { language: "en-US" });
+                Speech.speak(stripHtml(step.html_instructions), { language: SPEECH_LANG });
               }
             } else {
               Speech.stop();
@@ -1190,7 +1257,16 @@ export default function DriverActiveRideScreen({
               {isPickingUp ? ride.pickup_address : ride.dropoff_address}
             </Text>
           </View>
-          <Text style={styles.etaLarge}>{eta !== null ? `${eta}m` : "--"}</Text>
+          <View style={styles.etaBlock}>
+            {eta !== null ? (
+              <>
+                <Text style={styles.etaLarge}>{eta}</Text>
+                <Text style={styles.etaUnit}>min</Text>
+              </>
+            ) : (
+              <Text style={styles.etaLarge}>--</Text>
+            )}
+          </View>
         </View>
 
         {/* Passenger card — collapsible */}
@@ -1441,17 +1517,23 @@ const makeStyles = (colors: Colors) =>
       lineHeight: 22,
     },
     navDistance: { fontSize: 13, color: colors.textSecondary, marginTop: 3 },
-    navEtaBox: {
+    navThenRow: {
+      flexDirection: "row",
       alignItems: "center",
-      backgroundColor: colors.background,
-      borderRadius: 10,
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderWidth: 0.5,
-      borderColor: colors.borderStrong,
+      gap: 5,
+      marginTop: 5,
+      paddingTop: 5,
+      borderTopWidth: 0.5,
+      borderTopColor: colors.border,
     },
-    navEtaNum: { fontSize: 22, fontWeight: "700", color: colors.accentAmber },
-    navEtaUnit: { fontSize: 10, color: colors.textSecondary },
+    navThenLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.textFaint,
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
+    },
+    navThenText: { flex: 1, fontSize: 13, color: colors.textSecondary },
     topBar: {
       position: "absolute",
       top: Platform.OS === "ios" ? 56 : 40,
@@ -1475,15 +1557,6 @@ const makeStyles = (colors: Colors) =>
     },
     statusDot: { width: 8, height: 8, borderRadius: 4 },
     statusLabel: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
-    etaBadge: {
-      backgroundColor: colors.backgroundOverlay,
-      borderRadius: 16,
-      paddingVertical: 8,
-      paddingHorizontal: 14,
-      borderWidth: 0.5,
-      borderColor: colors.borderStrong,
-    },
-    etaText: { fontSize: 13, fontWeight: "700", color: colors.accentAmber },
     navControls: {
       position: "absolute",
       right: 16,
@@ -1599,7 +1672,9 @@ const makeStyles = (colors: Colors) =>
     destLabel: { fontSize: 11, color: colors.textSecondary },
     destSideInline: { fontSize: 11, color: colors.accentGreen, fontWeight: "600" },
     destAddress: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
-    etaLarge: { fontSize: 22, fontWeight: "700", color: colors.accentAmber },
+    etaBlock: { alignItems: "center", minWidth: 40 },
+    etaLarge: { fontSize: 22, fontWeight: "700", color: colors.accentAmber, lineHeight: 24 },
+    etaUnit: { fontSize: 10, fontWeight: "600", color: colors.textSecondary },
     passengerCard: {
       flexDirection: "row",
       alignItems: "center",

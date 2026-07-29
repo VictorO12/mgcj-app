@@ -93,6 +93,7 @@ There is no router living in `src/navigation/`. Navigation happens two ways:
 
 - Dark theme color palette is hardcoded per-screen (`#111827` background, `#E8500A` passenger/brand orange, `#1D9E75` driver/online green, `#A855F7` purple for anything scheduled-ride-related) — no centralized theme file yet.
 - Polyline decoding is duplicated three times (`src/lib/decodePolyline.ts`, inline in `DriverActiveRideScreen.tsx`, inline in `PassengerHomeScreen.tsx`) rather than imported from the shared lib — all three implementations are identical.
+- **Driver nav route geometry comes from the per-step polylines, not `overview_polyline`** (`DriverActiveRideScreen.tsx` `fetchRoute`, 2026-07-27): the Directions `overview_polyline` is decimated, and driving *and* the off-route test both read off it caused false "Rerouting…" on long straights (an on-road driver sat >80 m from the nearest coarse vertex) and corner-cutting on curves. Fix concatenates `steps[].polyline.points` (full-res, same response, $0) with the shared seam-vertex deduped; overview is only a fallback. Off-route thresholds were then tightened to 50 m / 3 s (were 80 m / 5 s, slack for the coarse line). Don't revert to `overview_polyline` for either purpose.
 
 ---
 
