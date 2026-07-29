@@ -10,7 +10,7 @@ import {
   Platform,
   Image,
   Alert,
-  KeyboardAvoidingView,
+  Keyboard,
   Dimensions,
   Animated,
 } from "react-native";
@@ -44,6 +44,7 @@ import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
 import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 import { useTheme } from "../../theme/ThemeContext";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Colors } from "../../theme/colors";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
@@ -117,12 +118,32 @@ export default function PassengerHomeScreen() {
     useActiveRide(profile?.id);
   useNotifications();
   const { colors, resolvedTheme } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(
-    () => makeStyles(colors, resolvedTheme),
-    [colors, resolvedTheme],
+    () => makeStyles(colors, resolvedTheme, insets.bottom),
+    [colors, resolvedTheme, insets.bottom],
   );
 
   const mapRef = useRef<MapView>(null);
+
+  // Keyboard-aware bottom sheet. Expo SDK 54 forces Android edge-to-edge, so
+  // the window no longer resizes under the keyboard and KeyboardAvoidingView
+  // has nothing to shrink into — the sheet (position:absolute, bottom:0) would
+  // sit behind the keyboard. Instead we lift it by the real keyboard height.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvt, (e) =>
+      setKeyboardHeight(e.endCoordinates.height),
+    );
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   // Micro-interactions (RN Animated — no native module, works today).
   const bookScale = useRef(new Animated.Value(1)).current;
   const pressBookIn = () =>
@@ -1205,13 +1226,15 @@ export default function PassengerHomeScreen() {
 
       {/* ── BOTTOM SHEET ── */}
       {!hasActiveRide && (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.kavContainer}
-          keyboardVerticalOffset={0}
-        >
+        <View style={[styles.kavContainer, { bottom: keyboardHeight }]}>
           <View
-            style={[styles.sheet, sheet === "confirm" && styles.sheetConfirm]}
+            style={[
+              styles.sheet,
+              sheet === "confirm" && styles.sheetConfirm,
+              // Keyboard covers the nav bar, so drop the extra bottom padding
+              // and just leave a small gap above the keyboard.
+              keyboardHeight > 0 && styles.sheetKeyboardOpen,
+            ]}
           >
             <View style={styles.grabber} />
             {/* Input card — always visible except in confirm */}
@@ -1935,7 +1958,7 @@ export default function PassengerHomeScreen() {
               </>
             )}
           </View>
-        </KeyboardAvoidingView>
+        </View>
       )}
 
       {hasActiveRide && (
@@ -2075,7 +2098,7 @@ function decodePolyline(encoded: string): LatLng[] {
   return coords;
 }
 
-const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
+const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset: number = 0) => {
   const isDark = resolvedTheme === "dark";
   // Soft elevation presets. Dark surfaces swallow drop shadows, so there we
   // lean on a tighter, higher-opacity shadow purely to lift floating controls
@@ -2264,7 +2287,9 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       borderColor: colors.borderStrong,
       paddingHorizontal: 20,
       paddingTop: 10,
-      paddingBottom: Platform.OS === "ios" ? 36 : 24,
+      // Lift bottom content clear of the home indicator / Android gesture &
+      // 3-button nav bars (edge-to-edge is mandatory in Expo SDK 54).
+      paddingBottom: (Platform.OS === "ios" ? 36 : 24) + bottomInset,
       ...sheetShadow,
     },
     // Applied only to the confirm step: caps the sheet's own box at the
@@ -2274,6 +2299,11 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     sheetConfirm: {
       maxHeight: SCREEN_HEIGHT * 0.78,
       flexShrink: 1,
+    },
+    // When the keyboard is up it sits over the nav bar, so the big bottom
+    // inset would only push content needlessly high — collapse to a small gap.
+    sheetKeyboardOpen: {
+      paddingBottom: 12,
     },
     grabber: {
       alignSelf: "center",
@@ -2624,6 +2654,10 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
       paddingHorizontal: 10,
       alignItems: "center",
       position: "relative",
+      // Android draws a bordered view's background as a sharp-cornered rect
+      // inset inside the rounded border (box-in-a-box). Clipping to the radius
+      // fixes it. iOS keeps overflow visible so the drop shadow still renders.
+      overflow: Platform.OS === "android" ? "hidden" : "visible",
       shadowColor: "#000",
       shadowOpacity: 0.08,
       shadowRadius: 6,
@@ -2632,7 +2666,10 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark") => {
     },
     classCardSelected: {
       borderColor: colors.accentOrange,
-      backgroundColor: "rgba(232,80,10,0.06)",
+      // Must be OPAQUE: Android renders a translucent background as a sharp
+      // rectangle that doesn't reach the rounded border (box-in-a-box). These
+      // are the flattened equivalents of a ~6% orange tint per theme.
+      backgroundColor: isDark ? "#2A1E17" : "#FEF5F0",
     },
     classCardUnavailable: {
       opacity: 0.4,

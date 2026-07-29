@@ -11,6 +11,7 @@ import {
   Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Profile } from "../types";
 import { useTheme, type ThemeMode } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
@@ -47,6 +48,7 @@ export default function ProfileMenu({
   onOpenAssigned,
 }: Props) {
   const { themeMode, setThemeMode, colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const slideY = useRef(new Animated.Value(600)).current;
   const opacity = useRef(new Animated.Value(0)).current;
@@ -220,6 +222,7 @@ export default function ProfileMenu({
       animationType="none"
       onRequestClose={onClose}
       statusBarTranslucent
+      navigationBarTranslucent
     >
       <View style={styles.root}>
         <TouchableWithoutFeedback onPress={onClose}>
@@ -352,7 +355,8 @@ export default function ProfileMenu({
             <Text style={styles.signOutText}>Sign out</Text>
           </TouchableOpacity>
 
-          <View style={{ height: Platform.OS === "ios" ? 34 : 16 }} />
+          {/* Clear the home indicator / Android nav bar (edge-to-edge, SDK 54) */}
+          <View style={{ height: Math.max(insets.bottom, Platform.OS === "ios" ? 34 : 16) }} />
         </Animated.View>
       </View>
     </Modal>

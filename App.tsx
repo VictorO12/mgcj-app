@@ -1,5 +1,7 @@
 import React, { useEffect } from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StripeProvider } from "@stripe/stripe-react-native";
@@ -104,13 +106,17 @@ export default function App() {
   }
 
   return (
-    <ThemeProvider>
-      <StripeProvider publishableKey={STRIPE_KEY}>
-        <AuthProvider>
-          <RootNavigator />
-        </AuthProvider>
-      </StripeProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <StripeProvider publishableKey={STRIPE_KEY}>
+            <AuthProvider>
+              <RootNavigator />
+            </AuthProvider>
+          </StripeProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
