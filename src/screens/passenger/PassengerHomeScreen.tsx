@@ -15,6 +15,7 @@ import {
   Animated,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import AnimatedMarker from "../../components/AnimatedMarker";
 import DateTimePicker, {
   DateTimePickerAndroid,
 } from "@react-native-community/datetimepicker";
@@ -1035,16 +1036,17 @@ export default function PassengerHomeScreen() {
       >
         {!hasActiveRide &&
           activeDrivers.map((d) => (
-            <Marker
+            <AnimatedMarker
               key={d.id}
               coordinate={{ latitude: d.current_lat, longitude: d.current_lng }}
               anchor={{ x: 0.5, y: 0.5 }}
+              snapMeters={1000}
               onPress={() => openDriverProfile(d.id)}
             >
               <View style={styles.driverMarker}>
                 <Text style={styles.driverMarkerText}>🚗</Text>
               </View>
-            </Marker>
+            </AnimatedMarker>
           ))}
         {!hasActiveRide && pickupCoords && pickupText !== "My location" && (
           <Marker coordinate={pickupCoords} pinColor={colors.accentBlue} title="Pickup" />
@@ -1057,11 +1059,15 @@ export default function PassengerHomeScreen() {
           />
         )}
         {hasActiveRide && driverCoords && (
-          <Marker coordinate={driverCoords} anchor={{ x: 0.5, y: 0.5 }}>
+          <AnimatedMarker
+            coordinate={driverCoords}
+            anchor={{ x: 0.5, y: 0.5 }}
+            snapMeters={1000}
+          >
             <View style={styles.driverMarkerMine}>
               <Text style={styles.driverMarkerText}>🚗</Text>
             </View>
-          </Marker>
+          </AnimatedMarker>
         )}
         {hasActiveRide && !isInProgress && pickupPin && (
           <Marker coordinate={pickupPin} anchor={{ x: 0.5, y: 1 }}>

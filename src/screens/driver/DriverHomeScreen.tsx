@@ -12,6 +12,7 @@ import {
   Image,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import AnimatedMarker from "../../components/AnimatedMarker";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -336,11 +337,17 @@ export default function DriverHomeScreen({
         customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
       >
         {location && isOnline && (
-          <Marker coordinate={location} anchor={{ x: 0.5, y: 0.5 }} title="You">
+          <AnimatedMarker
+            coordinate={location}
+            anchor={{ x: 0.5, y: 0.5 }}
+            title="You"
+            duration={800}
+            snapMeters={150}
+          >
             <View style={styles.myMarker}>
               <Text style={{ fontSize: 18 }}>🚗</Text>
             </View>
-          </Marker>
+          </AnimatedMarker>
         )}
       </MapView>
 

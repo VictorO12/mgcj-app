@@ -13,6 +13,7 @@ import {
   Image,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import AnimatedMarker from "../../components/AnimatedMarker";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { setAudioModeAsync } from "expo-audio";
@@ -1075,18 +1076,22 @@ export default function DriverActiveRideScreen({
 
         {/* Custom driver location marker — stands out against blue traffic lines */}
         {location && (
-          <Marker
+          <AnimatedMarker
             coordinate={location}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={heading}
+            // Non-nav: de-jitter own GPS with a short glide. Nav: snap (0) and
+            // let animateCamera carry the smoothness, so the dot never trails.
+            duration={navMode ? 0 : 800}
+            snapMeters={150}
           >
             <View style={styles.driverMarkerOuter}>
               <View style={styles.driverMarkerInner}>
                 <Ionicons name="navigate" size={16} color="#fff" />
               </View>
             </View>
-          </Marker>
+          </AnimatedMarker>
         )}
       </MapView>
 
