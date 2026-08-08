@@ -8,6 +8,7 @@ export interface Driver {
   plate_number: string | null
   current_lat: number | null
   current_lng: number | null
+  heading: number | null
   name: string | null
   phone: string | null
   avatar_url: string | null
@@ -115,12 +116,12 @@ export function useActiveRide(passengerId: string | undefined) {
 
     const driverId = ride.driver.id
 
-    function applyLocation(lat: number | null, lng: number | null, etaSeconds: number | null) {
+    function applyLocation(lat: number | null, lng: number | null, etaSeconds: number | null, heading: number | null) {
       setRide(prev => {
         if (!prev || !prev.driver) return prev
         return {
           ...prev,
-          driver: { ...prev.driver, current_lat: lat, current_lng: lng }
+          driver: { ...prev.driver, current_lat: lat, current_lng: lng, heading }
         }
       })
       // ETA is computed on the driver's device (traffic-aware route ETA,
@@ -141,7 +142,7 @@ export function useActiveRide(passengerId: string | undefined) {
         const row = payload.new as any
         if (row.id !== driverId) return
         console.log('[Realtime] driver location:', row.current_lat, row.current_lng, '| eta_s:', row.active_ride_eta_seconds)
-        applyLocation(row.current_lat, row.current_lng, row.active_ride_eta_seconds ?? null)
+        applyLocation(row.current_lat, row.current_lng, row.active_ride_eta_seconds ?? null, row.heading ?? null)
       })
       .subscribe((status) => {
         console.log('[Realtime] driver channel:', status)
@@ -150,10 +151,10 @@ export function useActiveRide(passengerId: string | undefined) {
     const poll = setInterval(async () => {
       const { data } = await supabase
         .from('drivers')
-        .select('current_lat, current_lng, active_ride_eta_seconds')
+        .select('current_lat, current_lng, heading, active_ride_eta_seconds')
         .eq('id', driverId)
         .maybeSingle()
-      if (data) applyLocation(data.current_lat, data.current_lng, data.active_ride_eta_seconds ?? null)
+      if (data) applyLocation(data.current_lat, data.current_lng, data.active_ride_eta_seconds ?? null, data.heading ?? null)
     }, 10000)
 
     return () => {
@@ -194,7 +195,7 @@ export function useActiveRide(passengerId: string | undefined) {
     if (rideRow.driver_id && rideRow.status !== 'offered') {
       const { data: driverRow, error: driverError } = await supabase
         .from('drivers')
-        .select('id, vehicle_make, vehicle_model, plate_number, current_lat, current_lng, active_ride_eta_seconds')
+        .select('id, vehicle_make, vehicle_model, plate_number, current_lat, current_lng, heading, active_ride_eta_seconds')
         .eq('id', rideRow.driver_id)
         .single()
 
@@ -216,6 +217,7 @@ export function useActiveRide(passengerId: string | undefined) {
           plate_number: driverRow.plate_number,
           current_lat: driverRow.current_lat,
           current_lng: driverRow.current_lng,
+          heading: driverRow.heading ?? null,
           name: profileRow?.name ?? null,
           phone: profileRow?.phone ?? null,
           avatar_url: profileRow?.avatar_url ?? null,

@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import AnimatedMarker from "../../components/AnimatedMarker";
+import CarMarker from "../../components/CarMarker";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -147,6 +148,11 @@ export default function DriverHomeScreen({
 
   const [isOnline, setIsOnline] = useState(false);
   const [location, setLocation] = useState<LatLng | null>(null);
+  // Compass, not GPS course: this screen takes a single position fix and never
+  // watches, so there's no movement to derive a bearing from. The magnetometer
+  // keeps the car pointing where the phone is facing even while parked, and
+  // costs no location fixes.
+  const [compassHeading, setCompassHeading] = useState<number | null>(null);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
@@ -252,6 +258,34 @@ export default function DriverHomeScreen({
     })();
   }, []);
 
+  // Gated on `location`, which only gets set after the permission prompt above
+  // resolves — watchHeadingAsync throws if it starts first, and there'd be no
+  // retry, leaving the car pointing north forever.
+  useEffect(() => {
+    if (!location) return;
+    let sub: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await Location.watchHeadingAsync((h) => {
+          // trueHeading is -1 until the compass is calibrated; magHeading is
+          // close enough for an icon at this zoom.
+          const deg = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          if (deg >= 0) setCompassHeading(deg);
+        });
+        if (cancelled) s.remove();
+        else sub = s;
+      } catch {
+        // No magnetometer (simulator, some devices) — car just points north.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      sub?.remove();
+    };
+    // `location` is set exactly once on this screen, so this subscribes once.
+  }, [location]);
+
   useEffect(() => {
     if (!profile) return;
     supabase
@@ -332,21 +366,30 @@ export default function DriverHomeScreen({
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         initialRegion={VALLEY_REGION}
-        showsUserLocation
+        // No blue dot: the driver's own car marker is their position indicator,
+        // and showing both put two markers on the same coordinate.
+        showsUserLocation={false}
         showsMyLocationButton={false}
         customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
       >
-        {location && isOnline && (
+        {location && (
           <AnimatedMarker
             coordinate={location}
             anchor={{ x: 0.5, y: 0.5 }}
             title="You"
             duration={800}
             snapMeters={150}
+            heading={compassHeading}
           >
-            <View style={styles.myMarker}>
-              <Text style={{ fontSize: 18 }}>🚗</Text>
-            </View>
+            {/* Offline still shows the car — it's the only position indicator
+                on this map now that the blue dot is off — just greyed out. */}
+            <CarMarker
+              size={44}
+              body={isOnline ? colors.accentGreen : colors.carBody}
+              glass={colors.carGlass}
+              stroke={colors.carStroke}
+              opacity={isOnline ? 1 : 0.75}
+            />
           </AnimatedMarker>
         )}
       </MapView>
@@ -1001,13 +1044,6 @@ const makeStyles = (colors: Colors) =>
       borderColor: colors.borderStrong,
       alignItems: "center",
       justifyContent: "center",
-    },
-    myMarker: {
-      backgroundColor: colors.surface,
-      borderRadius: 20,
-      padding: 5,
-      borderWidth: 1.5,
-      borderColor: colors.accentGreen,
     },
     bottomSheet: {
       position: "absolute",

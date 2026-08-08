@@ -35,6 +35,9 @@ interface DriverProfile {
   plate_number: string | null;
   average_rating: number | null;
   review_count: number;
+  /** Per-star tallies over ALL reviews, e.g. { "5": 12, "4": 3 }. */
+  rating_counts: Record<string, number>;
+  /** Most recent 20 only — use review_count/rating_counts for totals. */
   reviews: Review[];
 }
 
@@ -154,66 +157,32 @@ export default function DriverProfileSheet({
     setLoading(true);
     setDriver(null);
 
-    const [profileRes, vehicleRes, reviewsRes] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select("name, avatar_url")
-        .eq("id", id)
-        .maybeSingle(),
-      supabase
-        .from("drivers")
-        .select("vehicle_make, vehicle_model, plate_number")
-        .eq("id", id)
-        .maybeSingle(),
-      supabase
-        .from("ride_reviews")
-        .select("id, rating, comment, created_at, passenger_id")
-        .eq("driver_id", id)
-        .order("created_at", { ascending: false })
-        .limit(20),
-    ]);
+    // One definer RPC rather than direct table reads: RLS only lets a passenger
+    // SELECT a driver's `profiles` row once they've shared a ride, so tapping a
+    // driver on the map used to come back with no name, avatar or reviews. The
+    // RPC also returns aggregates over every review and folds in the reviewers'
+    // names, replacing a query-per-review round trip.
+    const { data, error } = await supabase.rpc("driver_public_profile", {
+      p_driver_id: id,
+    });
 
-    const rawReviews = reviewsRes.data ?? [];
-
-    const enrichedReviews: Review[] = await Promise.all(
-      rawReviews.map(async (r) => {
-        let passengerName: string | null = null;
-        let passengerAvatarUrl: string | null = null;
-        if (r.passenger_id) {
-          const { data: p } = await supabase
-            .from("profiles")
-            .select("name, avatar_url")
-            .eq("id", r.passenger_id)
-            .maybeSingle();
-          passengerName = p?.name ?? null;
-          passengerAvatarUrl = p?.avatar_url ?? null;
-        }
-        return {
-          id: r.id,
-          rating: r.rating,
-          comment: r.comment,
-          created_at: r.created_at,
-          passenger_name: passengerName,
-          passenger_avatar_url: passengerAvatarUrl,
-        };
-      }),
-    );
-
-    const avgRating =
-      enrichedReviews.length > 0
-        ? enrichedReviews.reduce((sum, r) => sum + r.rating, 0) /
-          enrichedReviews.length
-        : null;
+    if (error || !data) {
+      console.error("[DriverProfileSheet] profile load failed:", error);
+      setDriver(null);
+      setLoading(false);
+      return;
+    }
 
     setDriver({
-      name: profileRes.data?.name ?? null,
-      avatar_url: profileRes.data?.avatar_url ?? null,
-      vehicle_make: vehicleRes.data?.vehicle_make ?? null,
-      vehicle_model: vehicleRes.data?.vehicle_model ?? null,
-      plate_number: vehicleRes.data?.plate_number ?? null,
-      average_rating: avgRating ? Math.round(avgRating * 10) / 10 : null,
-      review_count: enrichedReviews.length,
-      reviews: enrichedReviews,
+      name: data.name ?? null,
+      avatar_url: data.avatar_url ?? null,
+      vehicle_make: data.vehicle_make ?? null,
+      vehicle_model: data.vehicle_model ?? null,
+      plate_number: data.plate_number ?? null,
+      average_rating: data.average_rating != null ? Number(data.average_rating) : null,
+      review_count: data.review_count ?? 0,
+      rating_counts: data.rating_counts ?? {},
+      reviews: (data.reviews ?? []) as Review[],
     });
 
     setLoading(false);
@@ -221,7 +190,9 @@ export default function DriverProfileSheet({
 
   function ratingBarPct(star: number) {
     if (!driver || driver.review_count === 0) return 0;
-    const count = driver.reviews.filter((r) => r.rating === star).length;
+    // Off the full tallies, not the 20 loaded reviews — the bars used to be
+    // computed from the page and disagreed with the total next to them.
+    const count = driver.rating_counts[String(star)] ?? 0;
     return (count / driver.review_count) * 100;
   }
 

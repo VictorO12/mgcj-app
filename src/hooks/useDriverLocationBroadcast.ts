@@ -7,6 +7,17 @@ import { supabase } from "../lib/supabase";
 // used to own this interval, but DriverApp unmounts it whenever an assigned
 // ride or active ride screen is shown — silently stopping location updates
 // (and passenger ETA) for the whole assigned/driver_arriving window.
+/**
+ * A GPS course worth broadcasting, or null. See the call site for why speed is
+ * part of the test.
+ */
+function courseOrNull(coords: Location.LocationObjectCoords): number | null {
+  const { heading, speed } = coords;
+  if (heading == null || heading < 0) return null;
+  if (speed == null || speed < 1) return null;
+  return heading;
+}
+
 export function useDriverLocationBroadcast(driverId: string | undefined) {
   const [isOnline, setIsOnline] = useState(false);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -46,6 +57,14 @@ export function useDriverLocationBroadcast(driverId: string | undefined) {
         .update({
           current_lat: loc.coords.latitude,
           current_lng: loc.coords.longitude,
+          // GPS course, for the directional car icon on the passenger map.
+          // Gated on speed, not just on the iOS -1 sentinel: Android's
+          // Location.getBearing() returns a plain 0.0 when it has no bearing,
+          // which would pass a `>= 0` check and point every parked car due
+          // north. Below ~1 m/s (and this is a one-shot fix, so course is
+          // often absent anyway) write null and let the passenger client
+          // derive the bearing from position deltas instead.
+          heading: courseOrNull(loc.coords),
           updated_at: new Date().toISOString(),
           // Liveness heartbeat. Dispatch treats a driver whose last_seen_at is
           // >60s stale as offline (phantom), and a nightly-ish reaper flips them

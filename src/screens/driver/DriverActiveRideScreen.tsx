@@ -244,6 +244,8 @@ export default function DriverActiveRideScreen({
   // phone happens to be physically oriented.
   const [heading, setHeading] = useState(0);
   const headingRef = useRef(0);
+  // Whether headingRef holds a course we've seen backed by real movement.
+  const headingValidRef = useRef(false);
   const [navMode, setNavMode] = useState(false);
   const navModeRef = useRef(false);
   const [updating, setUpdating] = useState(false);
@@ -391,6 +393,13 @@ export default function DriverActiveRideScreen({
           if (loc.coords.heading !== null && loc.coords.heading >= 0) {
             headingRef.current = loc.coords.heading;
             setHeading(loc.coords.heading);
+            // Only a course backed by actual movement is worth broadcasting.
+            // headingRef starts at 0, and Android reports a bare 0.0 bearing
+            // when it has none — broadcasting either would point the
+            // passenger's car icon due north during the en-route window.
+            if (loc.coords.speed != null && loc.coords.speed >= 1) {
+              headingValidRef.current = true;
+            }
           }
 
           // Interpolate ETA locally from remaining route distance ÷ the route's
@@ -419,6 +428,9 @@ export default function DriverActiveRideScreen({
               .update({
                 current_lat: coords.latitude,
                 current_lng: coords.longitude,
+                // Same course that rotates the nav camera — free to broadcast,
+                // and it points the passenger's car icon.
+                heading: headingValidRef.current ? headingRef.current : null,
                 active_ride_eta_seconds: etaSecondsRef.current,
                 last_seen_at: new Date().toISOString(),
               })
@@ -1080,7 +1092,7 @@ export default function DriverActiveRideScreen({
             coordinate={location}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            rotation={heading}
+            heading={heading}
             // Non-nav: de-jitter own GPS with a short glide. Nav: snap (0) and
             // let animateCamera carry the smoothness, so the dot never trails.
             duration={navMode ? 0 : 800}

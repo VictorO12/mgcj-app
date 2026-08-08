@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import AnimatedMarker from "../../components/AnimatedMarker";
+import CarMarker from "../../components/CarMarker";
 import DateTimePicker, {
   DateTimePickerAndroid,
 } from "@react-native-community/datetimepicker";
@@ -88,9 +89,14 @@ interface ActiveDriver {
   id: string;
   current_lat: number;
   current_lng: number;
-  name: string | null;
+  heading: number | null;
+  last_seen_at: string | null;
   vehicle_make: string | null;
 }
+
+// Matches the 60s dispatch-side liveness threshold in
+// supabase/functions/_shared/presence.ts.
+const DRIVER_STALE_MS = 60_000;
 
 const VALLEY_REGION = {
   latitude: 45.0773,
@@ -493,7 +499,13 @@ export default function PassengerHomeScreen() {
   useEffect(() => {
     if (!ride) {
       fetchActiveDrivers();
-      const interval = setInterval(fetchActiveDrivers, 15000);
+      // 6s, not 15s: the passenger's RLS policy on `drivers` is
+      // USING (is_active = true ...), so when a driver goes offline the UPDATE
+      // fails the policy on the new row and Realtime never delivers it. The
+      // subscription below only ever catches location/status changes on
+      // still-online drivers — this poll is the only thing that can retire a
+      // car that went offline.
+      const interval = setInterval(fetchActiveDrivers, 6000);
       return () => clearInterval(interval);
     }
     setActiveDrivers([]);
@@ -553,33 +565,37 @@ export default function PassengerHomeScreen() {
   async function fetchActiveDrivers() {
     const { data: drivers } = await supabase
       .from("drivers")
-      .select("id, current_lat, current_lng, vehicle_make")
+      .select("id, current_lat, current_lng, heading, last_seen_at, vehicle_make")
       .eq("is_active", true)
       .not("current_lat", "is", null);
     if (!drivers || drivers.length === 0) {
       setActiveDrivers([]);
       return;
     }
-    const driverIds = drivers.map((d) => d.id);
+    // `is_active` is a manual toggle, so a driver who force-quits the app stays
+    // "online" with a frozen position until the 5-min reaper. Mirror the
+    // backend's 60s liveness filter (functions/_shared/presence.ts) so a
+    // phantom isn't shown a car on the map — and, as there, a NULL heartbeat
+    // counts as live so drivers on builds that predate it stay visible.
+    const liveCutoff = Date.now() - DRIVER_STALE_MS;
+    const live = drivers.filter(
+      (d) => !d.last_seen_at || new Date(d.last_seen_at).getTime() >= liveCutoff,
+    );
+    if (live.length === 0) {
+      setActiveDrivers([]);
+      return;
+    }
+    const driverIds = live.map((d) => d.id);
     const { data: busyRides } = await supabase
       .from("rides")
       .select("driver_id")
       .in("status", BUSY_STATUSES)
       .in("driver_id", driverIds);
     const busyDriverIds = new Set((busyRides ?? []).map((r) => r.driver_id));
-    const availableDrivers = drivers.filter((d) => !busyDriverIds.has(d.id));
-    const withNames = await Promise.all(
-      availableDrivers.map(async (d) => {
-        const { data: p } = await supabase
-          .from("profiles")
-          .select("name")
-          .eq("id", d.id)
-          .maybeSingle();
-        return { ...d, name: p?.name ?? null };
-      }),
-    );
     setActiveDrivers(
-      withNames.filter((d) => d.current_lat && d.current_lng) as ActiveDriver[],
+      live.filter(
+        (d) => !busyDriverIds.has(d.id) && d.current_lat && d.current_lng,
+      ) as ActiveDriver[],
     );
   }
 
@@ -1062,11 +1078,16 @@ export default function PassengerHomeScreen() {
               coordinate={{ latitude: d.current_lat, longitude: d.current_lng }}
               anchor={{ x: 0.5, y: 0.5 }}
               snapMeters={1000}
+              heading={d.heading}
               onPress={() => openDriverProfile(d.id)}
             >
-              <View style={styles.driverMarker}>
-                <Text style={styles.driverMarkerText}>🚗</Text>
-              </View>
+              <CarMarker
+                size={38}
+                body={colors.carBody}
+                glass={colors.carGlass}
+                stroke={colors.carStroke}
+                opacity={0.92}
+              />
             </AnimatedMarker>
           ))}
         {!hasActiveRide && pickupCoords && pickupText !== "My location" && (
@@ -1084,10 +1105,16 @@ export default function PassengerHomeScreen() {
             coordinate={driverCoords}
             anchor={{ x: 0.5, y: 0.5 }}
             snapMeters={1000}
+            heading={ride?.driver?.heading ?? null}
           >
-            <View style={styles.driverMarkerMine}>
-              <Text style={styles.driverMarkerText}>🚗</Text>
-            </View>
+            {/* Your driver: brand orange and a size up, so it reads instantly
+                against the neutral ambient cars. */}
+            <CarMarker
+              size={46}
+              body={colors.accentOrange}
+              glass={colors.carGlass}
+              stroke={colors.carStroke}
+            />
           </AnimatedMarker>
         )}
         {hasActiveRide && !isInProgress && pickupPin && (
@@ -2234,21 +2261,6 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
       justifyContent: "center",
       ...floatShadow,
     },
-    driverMarker: {
-      backgroundColor: colors.surface,
-      borderRadius: 20,
-      padding: 6,
-      borderWidth: 1.5,
-      borderColor: colors.borderStrong,
-    },
-    driverMarkerMine: {
-      backgroundColor: colors.surfaceOrangeTint,
-      borderRadius: 20,
-      padding: 6,
-      borderWidth: 1.5,
-      borderColor: colors.accentOrange,
-    },
-    driverMarkerText: { fontSize: 16 },
     pinWrap: { alignItems: "center" },
     pin: {
       width: 28,

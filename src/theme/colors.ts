@@ -32,6 +32,13 @@ export interface Colors {
   accentPurpleTextSubtle: string;
   surfacePurpleTint: string;
   surfaceOrangeTint: string;
+
+  // Map vehicle icons (CarMarker). The car sits directly on the map with no
+  // plate behind it, so these are tuned against customMapStyle, not against
+  // surface/background.
+  carBody: string;
+  carGlass: string;
+  carStroke: string;
 }
 
 const accentTokens = {
@@ -72,6 +79,11 @@ export const darkColors: Colors = {
   accentPurpleTextSubtle: "#C084FC",
   surfacePurpleTint: "#2D1B4E",
   surfaceOrangeTint: "#2A1A0E",
+
+  // Pale body on the dark map style; near-black glass and a dark hairline.
+  carBody: "#E2E8F0",
+  carGlass: "#1F2937",
+  carStroke: "rgba(2,6,23,0.45)",
 };
 
 export const lightColors: Colors = {
@@ -99,4 +111,10 @@ export const lightColors: Colors = {
   accentPurpleTextSubtle: "#9333EA",
   surfacePurpleTint: "#F3E8FF",
   surfaceOrangeTint: "#FFF1E6",
+
+  // Slate body on the light map style, with a light hairline to lift it off
+  // pale roads.
+  carBody: "#475569",
+  carGlass: "#111827",
+  carStroke: "rgba(255,255,255,0.7)",
 };
