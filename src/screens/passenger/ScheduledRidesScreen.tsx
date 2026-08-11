@@ -9,16 +9,19 @@ import {
   Alert,
   Platform,
   RefreshControl,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import ScheduleDateTimePicker from "../../components/ScheduleDateTimePicker";
 
 interface ScheduledRide {
   id: string;
   status: string;
+  driver_id: string | null;
   pickup_address: string;
   dropoff_address: string;
   fare_estimate: number | null;
@@ -56,6 +59,9 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [editingRide, setEditingRide] = useState<ScheduledRide | null>(null);
+  const [editDate, setEditDate] = useState<Date | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchRides();
@@ -125,6 +131,7 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
         return {
           id: ride.id,
           status: ride.status,
+          driver_id: ride.driver_id,
           pickup_address: ride.pickup_address,
           dropoff_address: ride.dropoff_address,
           fare_estimate: ride.fare_estimate,
@@ -173,6 +180,49 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
       return;
     }
     setRides((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  function openEdit(ride: ScheduledRide) {
+    setEditingRide(ride);
+    setEditDate(new Date(ride.scheduled_at));
+  }
+
+  function closeEdit() {
+    setEditingRide(null);
+    setEditDate(null);
+  }
+
+  async function saveEdit() {
+    if (!editingRide || !editDate) return;
+    if (editDate.getTime() <= Date.now()) {
+      Alert.alert("Pick a future time", "The new pickup time has to be later than now.");
+      return;
+    }
+    setSaving(true);
+    // Guard on status='scheduled' + driver_id null: editing is only offered
+    // for unclaimed rides, so a driver can't have committed to the old time
+    // out from under this write.
+    const { error } = await supabase
+      .from("rides")
+      .update({
+        scheduled_at: editDate.toISOString(),
+        notified_30min: false,
+        notified_15min: false,
+        // Conservative placeholder until scheduled-coverage-monitor's next
+        // tick recomputes the real value for the new time.
+        coverage_status: "uncovered",
+      })
+      .eq("id", editingRide.id)
+      .eq("passenger_id", profile?.id)
+      .eq("status", "scheduled")
+      .is("driver_id", null);
+    setSaving(false);
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+    closeEdit();
+    fetchRides();
   }
 
   function formatDate(iso: string) {
@@ -330,24 +380,76 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                   </View>
                 )}
 
-                {/* Cancel button */}
-                <TouchableOpacity
-                  style={[styles.cancelBtn, isCancelling && { opacity: 0.5 }]}
-                  onPress={() => confirmCancel(ride)}
-                  disabled={isCancelling}
-                  activeOpacity={0.8}
-                >
-                  {isCancelling ? (
-                    <ActivityIndicator color={colors.accentRed} size="small" />
-                  ) : (
-                    <Text style={styles.cancelBtnText}>Cancel ride</Text>
+                {/* Edit + Cancel buttons */}
+                <View style={styles.actionRow}>
+                  {isUnclaimed && (
+                    <TouchableOpacity
+                      style={styles.editBtn}
+                      onPress={() => openEdit(ride)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="create-outline" size={14} color={colors.accentPurple} />
+                      <Text style={styles.editBtnText}>Edit time</Text>
+                    </TouchableOpacity>
                   )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.cancelBtn,
+                      isUnclaimed && { flex: 1 },
+                      isCancelling && { opacity: 0.5 },
+                    ]}
+                    onPress={() => confirmCancel(ride)}
+                    disabled={isCancelling}
+                    activeOpacity={0.8}
+                  >
+                    {isCancelling ? (
+                      <ActivityIndicator color={colors.accentRed} size="small" />
+                    ) : (
+                      <Text style={styles.cancelBtnText}>Cancel ride</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
             );
           })}
         </ScrollView>
       )}
+
+      {/* Edit sheet */}
+      <Modal
+        visible={!!editingRide}
+        animationType="slide"
+        transparent
+        onRequestClose={closeEdit}
+      >
+        <View style={styles.editOverlay}>
+          <View style={styles.editSheet}>
+            <View style={styles.editHeader}>
+              <Text style={styles.editTitle}>Edit pickup time</Text>
+              <TouchableOpacity style={styles.editCloseBtn} onPress={closeEdit}>
+                <Ionicons name="close" size={20} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              {editingRide && (
+                <ScheduleDateTimePicker value={editDate} onChange={setEditDate} />
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+              onPress={saveEdit}
+              disabled={saving || !editDate}
+              activeOpacity={0.85}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.saveBtnText}>Save changes</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -516,8 +618,29 @@ const makeStyles = (colors: Colors) =>
       fontSize: 13,
       color: colors.textSecondary,
     },
-    cancelBtn: {
+    actionRow: {
+      flexDirection: "row",
+      gap: 8,
       marginTop: 4,
+    },
+    editBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 5,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.3)",
+      backgroundColor: "rgba(168,85,247,0.07)",
+    },
+    editBtnText: {
+      color: colors.accentPurple,
+      fontSize: 13,
+      fontWeight: "600",
+    },
+    cancelBtn: {
       paddingVertical: 10,
       borderRadius: 10,
       borderWidth: 0.5,
@@ -529,5 +652,49 @@ const makeStyles = (colors: Colors) =>
       color: colors.accentRed,
       fontSize: 13,
       fontWeight: "600",
+    },
+    editOverlay: {
+      flex: 1,
+      justifyContent: "flex-end",
+      backgroundColor: "rgba(0,0,0,0.5)",
+    },
+    editSheet: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      padding: 16,
+      paddingBottom: Platform.OS === "ios" ? 34 : 20,
+      maxHeight: "85%",
+    },
+    editHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 14,
+    },
+    editTitle: {
+      fontSize: 17,
+      fontWeight: "700",
+      color: colors.textPrimary,
+    },
+    editCloseBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    saveBtn: {
+      marginTop: 14,
+      paddingVertical: 14,
+      borderRadius: 12,
+      alignItems: "center",
+      backgroundColor: colors.accentPurple,
+    },
+    saveBtnText: {
+      color: "#fff",
+      fontSize: 15,
+      fontWeight: "700",
     },
   });
