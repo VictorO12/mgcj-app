@@ -631,7 +631,7 @@ async function sendPassengerReminders(now: Date) {
 
 async function sendSms(phone: string, message: string) {
   try {
-    await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-sms`, {
+    const res = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-sms`, {
       method:  'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -639,6 +639,13 @@ async function sendSms(phone: string, message: string) {
       },
       body: JSON.stringify({ phone, message }),
     })
+    // A rejected send (unverified number on the Twilio trial, bad number,
+    // no credit) comes back as a 400, which `fetch` resolves happily. The
+    // caller marks the reminder sent either way — deliberate, a cron
+    // shouldn't retry a reminder forever — but it shouldn't be silent.
+    if (!res.ok) {
+      console.error(`[sms] send-sms returned ${res.status}:`, await res.text())
+    }
   } catch (e) { console.error('[sms]', e) }
 }
 
