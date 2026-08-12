@@ -1270,7 +1270,7 @@ export default function DriverActiveRideScreen({
                 </Text>
               )}
             </View>
-            <Text style={styles.destAddress} numberOfLines={1}>
+            <Text style={styles.destAddress} numberOfLines={2}>
               {isPickingUp ? ride.pickup_address : ride.dropoff_address}
             </Text>
           </View>
@@ -1380,7 +1380,7 @@ export default function DriverActiveRideScreen({
                 <View
                   style={[styles.fareRouteDot, { backgroundColor: colors.accentBlue }]}
                 />
-                <Text style={styles.fareRouteText} numberOfLines={1}>
+                <Text style={styles.fareRouteText} numberOfLines={2}>
                   {ride.pickup_address}
                 </Text>
               </View>
@@ -1392,7 +1392,7 @@ export default function DriverActiveRideScreen({
                     { backgroundColor: colors.accentOrange, borderRadius: 3 },
                   ]}
                 />
-                <Text style={styles.fareRouteText} numberOfLines={1}>
+                <Text style={styles.fareRouteText} numberOfLines={2}>
                   {ride.dropoff_address}
                 </Text>
               </View>

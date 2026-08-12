@@ -247,7 +247,7 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
       <View style={styles.routeCard}>
         <View style={styles.routeRow}>
           <View style={[styles.routeDot, { backgroundColor: colors.accentBlue }]} />
-          <Text style={styles.routeText} numberOfLines={1}>
+          <Text style={styles.routeText} numberOfLines={2}>
             {ride.pickup_address}
           </Text>
         </View>
@@ -261,7 +261,7 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
               { backgroundColor: colors.accentOrange, borderRadius: 3 },
             ]}
           />
-          <Text style={styles.routeText} numberOfLines={1}>
+          <Text style={styles.routeText} numberOfLines={2}>
             {ride.dropoff_address}
           </Text>
         </View>

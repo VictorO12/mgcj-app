@@ -581,7 +581,10 @@ async function sendPassengerReminders(now: Date) {
       }
       if (pax?.phone) {
         await sendSms(pax.phone,
-          `M&G C&J: Your ride at ${when} — your driver will be on the way to ${ride.pickup_address} very soon.`
+          // Plain hyphen, not an em dash: "—" is outside GSM-7, which forces
+          // the whole message to UCS-2 and halves the segment size to 70
+          // chars. With "-" the full pickup address still fits one segment.
+          `M&G C&J: Your ride at ${when} - your driver will be on the way to ${ride.pickup_address} very soon.`
         )
       }
       await supabase.from('rides').update({ notified_30min: true }).eq('id', ride.id)
@@ -598,7 +601,7 @@ async function sendPassengerReminders(now: Date) {
       }
       if (pax?.phone) {
         await sendSms(pax.phone,
-          `M&G C&J: Your ride is at ${when}. Be ready at ${ride.pickup_address} — your driver is on the way shortly.`
+          `M&G C&J: Your ride is at ${when}. Be ready at ${ride.pickup_address} - your driver is on the way shortly.`
         )
       }
       await supabase.from('rides').update({ notified_15min: true }).eq('id', ride.id)

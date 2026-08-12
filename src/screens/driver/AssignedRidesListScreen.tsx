@@ -583,7 +583,7 @@ function RideCard({
       <View style={styles.route}>
         <View style={styles.routeRow}>
           <View style={[styles.dot, { backgroundColor: colors.accentBlue }]} />
-          <Text style={styles.routeText} numberOfLines={1}>
+          <Text style={styles.routeText} numberOfLines={2}>
             {ride.pickup_address}
           </Text>
         </View>
@@ -597,7 +597,7 @@ function RideCard({
               { backgroundColor: colors.accentOrange, borderRadius: 3 },
             ]}
           />
-          <Text style={styles.routeText} numberOfLines={1}>
+          <Text style={styles.routeText} numberOfLines={2}>
             {ride.dropoff_address}
           </Text>
         </View>

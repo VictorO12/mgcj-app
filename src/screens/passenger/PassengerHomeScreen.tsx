@@ -72,6 +72,10 @@ interface PaymentMethod {
 interface PlacePrediction {
   place_id: string;
   description: string;
+  structured_formatting?: {
+    main_text?: string;
+    secondary_text?: string;
+  };
 }
 interface LatLng {
   latitude: number;
@@ -90,6 +94,26 @@ interface ResolvedPlace {
   coords: LatLng;
   source: "gps" | "search";
 }
+// Places descriptions all end in ", Canada" (we restrict to country:ca), which
+// tells a Nova Scotian driver nothing and pushes the reminder SMS into a
+// second segment.
+function stripCountry(description: string): string {
+  return description.replace(/,\s*Canada\s*$/i, "");
+}
+
+// reverseGeocodeAsync splits the street line differently per platform: Android
+// puts the civic number in `name` and the road in `street`, iOS often returns
+// the whole thing in `name` and repeats the road in `street`. Joining blindly
+// gives "9064, Commercial St" or "9064 Commercial St, Commercial St".
+function streetLine(name?: string | null, street?: string | null): string {
+  const n = name?.trim() ?? "";
+  const s = street?.trim() ?? "";
+  if (!n) return s;
+  if (!s || n.includes(s)) return n;
+  if (/^\d+[A-Za-z]?$/.test(n)) return `${n} ${s}`;
+  return `${n}, ${s}`;
+}
+
 interface VehicleClass {
   id: string;
   name: string;
@@ -419,12 +443,20 @@ export default function PassengerHomeScreen() {
       );
       try {
         const [place] = await Location.reverseGeocodeAsync(coords);
-        const address = place
-          ? [place.name, place.street].filter(Boolean).join(", ")
+        // Store the full address for the driver's ride card; the input row
+        // shows the short form, same split as a searched place.
+        const display = place ? streetLine(place.name, place.street) : "";
+        const label = place
+          ? [display, place.city, place.region].filter(Boolean).join(", ")
           : "";
-        if (address) {
-          setPickupPlace({ label: address, display: address, coords, source: "gps" });
-          setPickupText(address);
+        if (label) {
+          setPickupPlace({
+            label,
+            display: display || label,
+            coords,
+            source: "gps",
+          });
+          setPickupText(display || label);
         }
       } catch {
         // Keep the coordinate-labelled pickup committed above.
@@ -587,19 +619,23 @@ export default function PassengerHomeScreen() {
       const loc = (await res.json()).result?.geometry?.location;
       if (!loc) return;
       const coords = { latitude: loc.lat, longitude: loc.lng };
-      const label = prediction.description.split(",")[0];
+      // Keep the whole description as the stored address — the civic number
+      // is in the same response and the driver needs it. The input row still
+      // shows just the venue/street so the sheet stays readable.
       const place: ResolvedPlace = {
-        label,
-        display: label,
+        label: stripCountry(prediction.description),
+        display:
+          prediction.structured_formatting?.main_text ||
+          prediction.description.split(",")[0],
         coords,
         source: "search",
       };
       if (activeField === "pickup") {
         setPickupPlace(place);
-        setPickupText(label);
+        setPickupText(place.display);
       } else {
         setDropoffPlace(place);
-        setDropoffText(label);
+        setDropoffText(place.display);
       }
       setPredictions([]);
       setActiveField(null);
@@ -1465,10 +1501,11 @@ export default function PassengerHomeScreen() {
                     <View
                       style={[styles.routeDot, { backgroundColor: colors.accentBlue }]}
                     />
-                    {/* Show the resolved places, not the search-box text —
-                        the confirm sheet must state exactly what gets booked. */}
-                    <Text style={styles.confirmDestText} numberOfLines={1}>
-                      {pickupPlace?.display ?? pickupText}
+                    {/* Full address, not the short input-row form: this is the
+                        last place a passenger can catch that they picked the
+                        Sobeys in Truro. Two lines so the civic number shows. */}
+                    <Text style={styles.confirmDestText} numberOfLines={2}>
+                      {pickupPlace?.label ?? pickupText}
                     </Text>
                   </View>
                   <View style={styles.confirmRouteLine} />
@@ -1479,8 +1516,8 @@ export default function PassengerHomeScreen() {
                         { backgroundColor: colors.accentOrange, borderRadius: 3 },
                       ]}
                     />
-                    <Text style={styles.confirmDestText} numberOfLines={1}>
-                      {dropoffPlace?.display ?? dropoffText}
+                    <Text style={styles.confirmDestText} numberOfLines={2}>
+                      {dropoffPlace?.label ?? dropoffText}
                     </Text>
                   </View>
                 </View>
@@ -2297,6 +2334,7 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
     routeDot: { width: 10, height: 10, borderRadius: 5 },
     confirmDestText: {
       fontSize: 15,
+      lineHeight: 20,
       color: colors.textOnSurfaceLight,
       flex: 1,
       fontWeight: "500",
