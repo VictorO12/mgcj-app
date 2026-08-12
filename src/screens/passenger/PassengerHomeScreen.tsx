@@ -77,6 +77,19 @@ interface LatLng {
   latitude: number;
   longitude: number;
 }
+// A location is only ever "resolved" as a label+coords pair, set together from
+// a Places prediction or the GPS fix. Free typing in the search box updates the
+// display string only — it can never leave the stored address pointing at some
+// older set of coordinates (the ride card said one place, the driver was routed
+// to another).
+interface ResolvedPlace {
+  /** What gets stored as the ride's address — must describe `coords`. */
+  label: string;
+  /** What the passenger sees in the inputs (e.g. the friendly "My location"). */
+  display: string;
+  coords: LatLng;
+  source: "gps" | "search";
+}
 interface VehicleClass {
   id: string;
   name: string;
@@ -185,8 +198,10 @@ export default function PassengerHomeScreen() {
     return () => loop.stop();
   }, [driversPulse]);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
-  const [pickupCoords, setPickupCoords] = useState<LatLng | null>(null);
-  const [dropoffCoords, setDropoffCoords] = useState<LatLng | null>(null);
+  const [pickupPlace, setPickupPlace] = useState<ResolvedPlace | null>(null);
+  const [dropoffPlace, setDropoffPlace] = useState<ResolvedPlace | null>(null);
+  // Display strings only — what's in the search box / input rows. The booking
+  // insert never reads these; it reads the resolved places above.
   const [pickupText, setPickupText] = useState("My location");
   const [dropoffText, setDropoffText] = useState("");
   const [activeField, setActiveField] = useState<"pickup" | "dropoff" | null>(
@@ -194,6 +209,10 @@ export default function PassengerHomeScreen() {
   );
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  // Has the passenger typed since opening the search box? Opening a field
+  // pre-fills it with the resolved address and no predictions, which would
+  // otherwise trip the "pick a location" hint before they've done anything.
+  const [searchTouched, setSearchTouched] = useState(false);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [vehicleClasses, setVehicleClasses] = useState<VehicleClass[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
@@ -382,17 +401,34 @@ export default function PassengerHomeScreen() {
         longitude: loc.coords.longitude,
       };
       setUserLocation(coords);
-      setPickupCoords(coords);
+      // Commit the pickup before the reverse geocode, not after: that call
+      // rejects in the wild (no network, no Play services) and a passenger
+      // with no resolved pickup can never reach the confirm sheet. The label
+      // falls back to the coordinates in words so the driver's ride card
+      // always carries something locatable — never the "My location" alias.
+      setPickupPlace({
+        label: `Current location (${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)})`,
+        display: "My location",
+        coords,
+        source: "gps",
+      });
+      setPickupText("My location");
       mapRef.current?.animateToRegion(
         { ...coords, latitudeDelta: 0.08, longitudeDelta: 0.08 },
         800,
       );
-      const [place] = await Location.reverseGeocodeAsync(coords);
-      if (place)
-        setPickupText(
-          [place.name, place.street].filter(Boolean).join(", ") ||
-            "My location",
-        );
+      try {
+        const [place] = await Location.reverseGeocodeAsync(coords);
+        const address = place
+          ? [place.name, place.street].filter(Boolean).join(", ")
+          : "";
+        if (address) {
+          setPickupPlace({ label: address, display: address, coords, source: "gps" });
+          setPickupText(address);
+        }
+      } catch {
+        // Keep the coordinate-labelled pickup committed above.
+      }
     })();
   }, []);
 
@@ -509,6 +545,15 @@ export default function PassengerHomeScreen() {
     );
   }
 
+  // Typed-but-unresolved text is only ever allowed to live inside the open
+  // search box. Any move away from it (closing, switching fields) snaps both
+  // inputs back to the addresses actually backed by coordinates.
+  function snapTextsToResolved() {
+    setPickupText(pickupPlace?.display ?? "My location");
+    setDropoffText(dropoffPlace?.display ?? "");
+    setSearchTouched(false);
+  }
+
   function openDriverProfile(driverId: string) {
     setSelectedDriverId(driverId);
     setDriverProfileVisible(true);
@@ -542,21 +587,34 @@ export default function PassengerHomeScreen() {
       const loc = (await res.json()).result?.geometry?.location;
       if (!loc) return;
       const coords = { latitude: loc.lat, longitude: loc.lng };
+      const label = prediction.description.split(",")[0];
+      const place: ResolvedPlace = {
+        label,
+        display: label,
+        coords,
+        source: "search",
+      };
       if (activeField === "pickup") {
-        setPickupCoords(coords);
-        setPickupText(prediction.description.split(",")[0]);
+        setPickupPlace(place);
+        setPickupText(label);
       } else {
-        setDropoffCoords(coords);
-        setDropoffText(prediction.description.split(",")[0]);
+        setDropoffPlace(place);
+        setDropoffText(label);
       }
       setPredictions([]);
       setActiveField(null);
-      const pickup = activeField === "pickup" ? coords : pickupCoords;
-      const dropoff = activeField === "dropoff" ? coords : dropoffCoords;
+      setSearchTouched(false);
+      const pickup = activeField === "pickup" ? place : pickupPlace;
+      const dropoff = activeField === "dropoff" ? place : dropoffPlace;
       if (pickup && dropoff) {
+        // The field we didn't just resolve may still be showing abandoned
+        // free text from an earlier search — snap it back to its real label
+        // so the confirm sheet can't show an address we aren't booking.
+        if (activeField === "pickup") setDropoffText(dropoff.display);
+        else setPickupText(pickup.display);
         setSheet("confirm");
-        getFareEstimate(pickup, dropoff);
-        mapRef.current?.fitToCoordinates([pickup, dropoff], {
+        getFareEstimate(pickup.coords, dropoff.coords);
+        mapRef.current?.fitToCoordinates([pickup.coords, dropoff.coords], {
           edgePadding: { top: 80, right: 60, bottom: 380, left: 60 },
           animated: true,
         });
@@ -706,8 +764,25 @@ export default function PassengerHomeScreen() {
   }
 
   async function confirmBooking() {
-    if (!pickupCoords || !dropoffCoords || !profile) {
-      Alert.alert("Missing info", "Please set both pickup and dropoff.");
+    if (!pickupPlace || !dropoffPlace || !profile) {
+      Alert.alert(
+        "Missing info",
+        "Please choose both a pickup and a dropoff from the suggestions.",
+      );
+      return;
+    }
+    // Backstop: the displayed address must be the one we're about to book.
+    // Every path out of the search box already snaps the text back to the
+    // resolved label, so this should be unreachable — if it ever fires, we'd
+    // rather stop than route a driver somewhere the passenger didn't ask for.
+    if (
+      pickupText.trim() !== pickupPlace.display.trim() ||
+      dropoffText.trim() !== dropoffPlace.display.trim()
+    ) {
+      Alert.alert(
+        "Confirm your addresses",
+        "Please pick your pickup and dropoff from the suggestion list so we send the driver to the right place.",
+      );
       return;
     }
     if (isScheduled && !scheduledDate) {
@@ -788,10 +863,10 @@ export default function PassengerHomeScreen() {
                 apikey: SUPABASE_ANON_KEY,
               },
               body: JSON.stringify({
-                pickup_lat: pickupCoords.latitude,
-                pickup_lng: pickupCoords.longitude,
-                dropoff_lat: dropoffCoords.latitude,
-                dropoff_lng: dropoffCoords.longitude,
+                pickup_lat: pickupPlace.coords.latitude,
+                pickup_lng: pickupPlace.coords.longitude,
+                dropoff_lat: dropoffPlace.coords.latitude,
+                dropoff_lng: dropoffPlace.coords.longitude,
                 discount_code: discountCodeInput.trim() || null,
               }),
             },
@@ -827,12 +902,12 @@ export default function PassengerHomeScreen() {
           company_id: profile.company_id,
           vehicle_class_id: selectedClassId,
           status: scheduledAt ? "scheduled" : "pending",
-          pickup_address: pickupText,
-          pickup_lat: pickupCoords.latitude,
-          pickup_lng: pickupCoords.longitude,
-          dropoff_address: dropoffText,
-          dropoff_lat: dropoffCoords.latitude,
-          dropoff_lng: dropoffCoords.longitude,
+          pickup_address: pickupPlace.label,
+          pickup_lat: pickupPlace.coords.latitude,
+          pickup_lng: pickupPlace.coords.longitude,
+          dropoff_address: dropoffPlace.label,
+          dropoff_lat: dropoffPlace.coords.latitude,
+          dropoff_lng: dropoffPlace.coords.longitude,
           fare_estimate: discountedFare,
           pre_discount_fare: fareEstimate,
           discount_amount: discountAmount,
@@ -874,12 +949,12 @@ export default function PassengerHomeScreen() {
       company_id: profile.company_id,
       vehicle_class_id: selectedClassId,
       status: scheduledAt ? "scheduled" : "pending",
-      pickup_address: pickupText,
-      pickup_lat: pickupCoords.latitude,
-      pickup_lng: pickupCoords.longitude,
-      dropoff_address: dropoffText,
-      dropoff_lat: dropoffCoords.latitude,
-      dropoff_lng: dropoffCoords.longitude,
+      pickup_address: pickupPlace.label,
+      pickup_lat: pickupPlace.coords.latitude,
+      pickup_lng: pickupPlace.coords.longitude,
+      dropoff_address: dropoffPlace.label,
+      dropoff_lat: dropoffPlace.coords.latitude,
+      dropoff_lng: dropoffPlace.coords.longitude,
       fare_estimate: roundedCashFare,
       pre_discount_fare: fareEstimate,
       discount_amount: cashDiscount.discountAmount,
@@ -912,7 +987,10 @@ export default function PassengerHomeScreen() {
 
   function resetBookingUI() {
     setDropoffText("");
-    setDropoffCoords(null);
+    setDropoffPlace(null);
+    // Pickup keeps its resolved place (usually the GPS fix) for the next
+    // booking, so snap its text back in case a search was abandoned.
+    setPickupText(pickupPlace?.display ?? "My location");
     setFareEstimate(null);
     setFareDiscountAmount(0);
     setFareDiscountType(null);
@@ -921,6 +999,7 @@ export default function PassengerHomeScreen() {
     setSheet(null);
     setPredictions([]);
     setActiveField(null);
+    setSearchTouched(false);
     setIsScheduled(false);
     setScheduledDate(null);
     if (userLocation)
@@ -931,6 +1010,13 @@ export default function PassengerHomeScreen() {
   }
 
   const hasActiveRide = !!ride;
+  const searchQuery = activeField === "dropoff" ? dropoffText : pickupText;
+  const searchHint =
+    predictions.length > 0
+      ? `Tap a suggestion to set your ${activeField === "dropoff" ? "destination" : "pickup"}.`
+      : searchQuery.trim().length < 3
+        ? "Keep typing to see suggestions."
+        : "No matches. Pick the closest spot you can find, then tell your driver the details when they call.";
   const interstitialGateOpen =
     !hasActiveRide &&
     sheet === null &&
@@ -997,12 +1083,18 @@ export default function PassengerHomeScreen() {
               />
             </AnimatedMarker>
           ))}
-        {!hasActiveRide && pickupCoords && pickupText !== "My location" && (
-          <Marker coordinate={pickupCoords} pinColor={colors.accentBlue} title="Pickup" />
-        )}
-        {!hasActiveRide && dropoffCoords && (
+        {/* The GPS pickup is already shown by the blue user-location dot, so
+            only pin a pickup the passenger searched for. */}
+        {!hasActiveRide && pickupPlace?.source === "search" && (
           <Marker
-            coordinate={dropoffCoords}
+            coordinate={pickupPlace.coords}
+            pinColor={colors.accentBlue}
+            title="Pickup"
+          />
+        )}
+        {!hasActiveRide && dropoffPlace && (
+          <Marker
+            coordinate={dropoffPlace.coords}
             pinColor={colors.accentOrange}
             title="Drop-off"
           />
@@ -1177,6 +1269,7 @@ export default function PassengerHomeScreen() {
                 <TouchableOpacity
                   style={styles.inputRow}
                   onPress={() => {
+                    snapTextsToResolved();
                     setActiveField("pickup");
                     setSheet("search");
                   }}
@@ -1199,6 +1292,7 @@ export default function PassengerHomeScreen() {
                 <TouchableOpacity
                   style={styles.inputRow}
                   onPress={() => {
+                    snapTextsToResolved();
                     setActiveField("dropoff");
                     setSheet("search");
                   }}
@@ -1242,9 +1336,12 @@ export default function PassengerHomeScreen() {
                   placeholderTextColor={colors.textSecondary}
                   autoFocus
                   onChangeText={(t) => {
+                    // Display text only — coordinates come from a tapped
+                    // prediction, never from what's typed here.
                     activeField === "dropoff"
                       ? setDropoffText(t)
                       : setPickupText(t);
+                    setSearchTouched(true);
                     searchPlaces(t);
                   }}
                   value={activeField === "dropoff" ? dropoffText : pickupText}
@@ -1254,6 +1351,7 @@ export default function PassengerHomeScreen() {
                 )}
                 <TouchableOpacity
                   onPress={() => {
+                    snapTextsToResolved();
                     setSheet(null);
                     setActiveField(null);
                     setPredictions([]);
@@ -1262,6 +1360,13 @@ export default function PassengerHomeScreen() {
                   <Ionicons name="close" size={18} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
+            )}
+
+            {/* Search hint. A location only counts once it's picked from the
+                list — typed text is thrown away on close — so say that out
+                loud instead of letting the input silently snap back. */}
+            {sheet === "search" && searchTouched && !searchLoading && (
+              <Text style={styles.searchHint}>{searchHint}</Text>
             )}
 
             {/* Predictions list */}
@@ -1310,6 +1415,7 @@ export default function PassengerHomeScreen() {
                       onPress={() => {
                         setDropoffText(d.label.replace(/^.{2}/, "").trim());
                         setActiveField("dropoff");
+                        setSearchTouched(true);
                         searchPlaces(d.address);
                         setSheet("search");
                       }}
@@ -1359,8 +1465,10 @@ export default function PassengerHomeScreen() {
                     <View
                       style={[styles.routeDot, { backgroundColor: colors.accentBlue }]}
                     />
+                    {/* Show the resolved places, not the search-box text —
+                        the confirm sheet must state exactly what gets booked. */}
                     <Text style={styles.confirmDestText} numberOfLines={1}>
-                      {pickupText}
+                      {pickupPlace?.display ?? pickupText}
                     </Text>
                   </View>
                   <View style={styles.confirmRouteLine} />
@@ -1372,7 +1480,7 @@ export default function PassengerHomeScreen() {
                       ]}
                     />
                     <Text style={styles.confirmDestText} numberOfLines={1}>
-                      {dropoffText}
+                      {dropoffPlace?.display ?? dropoffText}
                     </Text>
                   </View>
                 </View>
@@ -2101,6 +2209,15 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
       marginBottom: 10,
     },
     searchInput: { flex: 1, fontSize: 15, color: colors.textPrimary },
+
+    searchHint: {
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.textTertiary,
+      paddingHorizontal: 4,
+      marginTop: -2,
+      marginBottom: 10,
+    },
 
     predictionsList: { maxHeight: 240 },
     predictionRow: {
