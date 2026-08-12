@@ -548,7 +548,7 @@ async function sendPassengerReminders(now: Date) {
 
   const { data: rides } = await supabase
     .from('rides')
-    .select('id, passenger_id, scheduled_at, pickup_address, notified_30min, notified_15min')
+    .select('id, passenger_id, company_id, scheduled_at, pickup_address, notified_30min, notified_15min')
     .not('scheduled_at', 'is', null)
     .not('passenger_id', 'is', null)
     .gte('scheduled_at', now.toISOString())
@@ -556,6 +556,22 @@ async function sendPassengerReminders(now: Date) {
     .not('status', 'in', '("completed","cancelled")')
 
   if (!rides || rides.length === 0) return
+
+  // One lookup per company per run, not per ride.
+  const companyNames = new Map<string, string | null>()
+  async function smsPrefix(companyId: string | null): Promise<string> {
+    if (!companyId) return ''
+    if (!companyNames.has(companyId)) {
+      const { data } = await supabase
+        .from('companies').select('name').eq('id', companyId).maybeSingle()
+      companyNames.set(companyId, data?.name ?? null)
+    }
+    const name = companyNames.get(companyId)
+    // No name, no prefix. The passenger booked with a taxi company, not with
+    // Vellon (the vendor), so there's no sensible fallback to substitute —
+    // and any hardcoded carrier name is the bug this replaced.
+    return name ? `${name}: ` : ''
+  }
 
   for (const ride of rides) {
     const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
@@ -583,8 +599,11 @@ async function sendPassengerReminders(now: Date) {
         await sendSms(pax.phone,
           // Plain hyphen, not an em dash: "—" is outside GSM-7, which forces
           // the whole message to UCS-2 and halves the segment size to 70
-          // chars. With "-" the full pickup address still fits one segment.
-          `M&G C&J: Your ride at ${when} - your driver will be on the way to ${ride.pickup_address} very soon.`
+          // chars. With "-" the full pickup address still fits one segment,
+          // and send-sms normalises any smart punctuation the company name
+          // drags in. Roughly 40 chars of prefix are free at a typical
+          // address length before this tips into a second segment.
+          `${await smsPrefix(ride.company_id)}Your ride at ${when} - your driver will be on the way to ${ride.pickup_address} very soon.`
         )
       }
       await supabase.from('rides').update({ notified_30min: true }).eq('id', ride.id)
@@ -601,7 +620,7 @@ async function sendPassengerReminders(now: Date) {
       }
       if (pax?.phone) {
         await sendSms(pax.phone,
-          `M&G C&J: Your ride is at ${when}. Be ready at ${ride.pickup_address} - your driver is on the way shortly.`
+          `${await smsPrefix(ride.company_id)}Your ride is at ${when}. Be ready at ${ride.pickup_address} - your driver is on the way shortly.`
         )
       }
       await supabase.from('rides').update({ notified_15min: true }).eq('id', ride.id)
