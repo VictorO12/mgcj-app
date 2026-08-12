@@ -110,6 +110,11 @@ function streetLine(name?: string | null, street?: string | null): string {
   const s = street?.trim() ?? "";
   if (!n) return s;
   if (!s || n.includes(s)) return n;
+  // The two can also disagree only in abbreviation ("9064 Commercial St" vs
+  // "Commercial Street"), which a plain containment test misses. Treat a name
+  // that carries a number and shares the road's first word as complete.
+  const road = s.split(/\s+/)[0];
+  if (/\d/.test(n) && road.length > 2 && n.includes(road)) return n;
   if (/^\d+[A-Za-z]?$/.test(n)) return `${n} ${s}`;
   return `${n}, ${s}`;
 }
