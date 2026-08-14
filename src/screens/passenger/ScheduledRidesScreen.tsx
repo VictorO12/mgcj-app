@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
@@ -169,14 +170,16 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
 
   async function cancelRide(id: string) {
     setCancelling(id);
-    const { error } = await supabase
-      .from("rides")
-      .update({ status: "cancelled", cancelled_reason: "passenger_cancelled" })
-      .eq("id", id)
-      .eq("passenger_id", profile?.id);
+    // Goes through settle-ride, not a direct .update(): a scheduled card ride
+    // can be carrying a live Stripe authorization, and a bare status write
+    // left that hold in place until Stripe expired it ~7 days later.
+    const { error } = await invokeFunction("settle-ride", {
+      ride_id: id,
+      action: "cancel",
+    });
     setCancelling(null);
     if (error) {
-      Alert.alert("Error", error.message);
+      Alert.alert("Couldn't cancel", error);
       return;
     }
     setRides((prev) => prev.filter((r) => r.id !== id));

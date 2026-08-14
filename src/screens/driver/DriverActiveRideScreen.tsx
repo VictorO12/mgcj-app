@@ -19,6 +19,7 @@ import * as Speech from "expo-speech";
 import { setAudioModeAsync } from "expo-audio";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
 import { useTheme } from "../../theme/ThemeContext";
@@ -856,6 +857,77 @@ export default function DriverActiveRideScreen({
   }, [ride.status]);
 
   // ── Status advance ────────────────────────────────────────────────────
+  // ── Driver exits from a live ride ────────────────────────────────────
+  // Deliberately asymmetric with the passenger's cancel button. A driver
+  // cannot cancel a passenger's ride: before pickup they RELEASE it (it goes
+  // straight back into dispatch and the passenger keeps their ride), and the
+  // only terminal driver action is a no-show, which the server gates on being
+  // physically at the pickup for a minimum wait. Ungated, "no-show" is just a
+  // cherry-pick button for dumping a fare that looked bad on arrival.
+  const [exiting, setExiting] = useState(false);
+
+  async function releaseRide() {
+    Alert.alert(
+      "Release this ride?",
+      "It goes back to dispatch to be offered to another driver. The passenger keeps their booking.",
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Release",
+          style: "destructive",
+          onPress: async () => {
+            setExiting(true);
+            const { error } = await invokeFunction("settle-ride", {
+              ride_id: ride.id,
+              action: "driver_release",
+            });
+            setExiting(false);
+            if (error) {
+              Alert.alert("Couldn't release", error);
+              return;
+            }
+            onRideComplete();
+          },
+        },
+      ],
+    );
+  }
+
+  async function reportNoShow() {
+    Alert.alert(
+      "Passenger didn't show?",
+      "This ends the ride. The passenger isn't charged, and it's recorded on their account.",
+      [
+        { text: "Keep waiting", style: "cancel" },
+        {
+          text: "Report no-show",
+          style: "destructive",
+          onPress: async () => {
+            setExiting(true);
+            const { data, error } = await invokeFunction("settle-ride", {
+              ride_id: ride.id,
+              action: "no_show",
+            });
+            setExiting(false);
+            if (error) {
+              // The server owns the wait-time and distance rules, so its
+              // message is the one worth showing verbatim.
+              const remaining = data?.wait_remaining_mins;
+              Alert.alert(
+                "Can't report yet",
+                remaining
+                  ? `${error} — about ${remaining} more minute${remaining === 1 ? "" : "s"}.`
+                  : error,
+              );
+              return;
+            }
+            onRideComplete();
+          },
+        },
+      ],
+    );
+  }
+
   async function advanceStatus() {
     const next = nextStatus();
     if (!next) return;
@@ -1355,6 +1427,32 @@ export default function DriverActiveRideScreen({
             </>
           )}
         </TouchableOpacity>
+
+        {/* Driver exit — release before pickup, no-show after arriving.
+            Never shown mid-ride: an in-progress ride ends by completing it. */}
+        {(ride.status === "assigned" || ride.status === "driver_arriving") && (
+          <TouchableOpacity
+            style={[styles.exitBtn, exiting && { opacity: 0.6 }]}
+            onPress={ride.status === "assigned" ? releaseRide : reportNoShow}
+            disabled={exiting || updating}
+            activeOpacity={0.7}
+          >
+            {exiting ? (
+              <ActivityIndicator color="#9CA3AF" size="small" />
+            ) : (
+              <>
+                <Ionicons
+                  name={ride.status === "assigned" ? "return-up-back" : "person-remove-outline"}
+                  size={16}
+                  color="#9CA3AF"
+                />
+                <Text style={styles.exitBtnText}>
+                  {ride.status === "assigned" ? "Release ride" : "Passenger didn't show"}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* ── FARE MODAL (cash only) ── */}
@@ -1764,6 +1862,17 @@ const makeStyles = (colors: Colors) =>
       paddingVertical: 16,
     },
     actionBtnText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+    // Intentionally quiet next to the primary action: these are exits, not
+    // the thing the driver is meant to reach for.
+    exitBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingVertical: 12,
+      marginTop: 4,
+    },
+    exitBtnText: { fontSize: 14, fontWeight: "500", color: "#9CA3AF" },
     // Custom driver location dot — high contrast against blue traffic overlay
     driverMarkerOuter: {
       width: 36,

@@ -25,6 +25,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
 import { useActiveRide } from "../../hooks/useActiveRide";
 import { supabase } from "../../lib/supabase";
+import { invokeFunction } from "../../lib/invokeFunction";
 import RideTrackingSheet from "../../components/RideTrackingSheet";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
@@ -1020,10 +1021,15 @@ export default function PassengerHomeScreen() {
 
   async function cancelRide() {
     if (!ride) return;
-    await supabase
-      .from("rides")
-      .update({ status: "cancelled", cancelled_reason: "passenger_cancelled" })
-      .eq("id", ride.id);
+    // settle-ride releases the card hold before ending the ride — see the
+    // note in ScheduledRidesScreen.cancelRide.
+    const { error } = await invokeFunction("settle-ride", {
+      ride_id: ride.id,
+      action: "cancel",
+    });
+    if (error) {
+      Alert.alert("Couldn't cancel", error);
+    }
   }
 
   function resetBookingUI() {
