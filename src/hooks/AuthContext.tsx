@@ -124,10 +124,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (profile?.role === "driver" && userId) {
       // Clear local token before nulling DB so the Realtime handler doesn't
       // mistake a deliberate sign-out for a kicked-out-by-another-device event.
+      const localToken = await SecureStore.getItemAsync(
+        "@driver_device_token",
+      ).catch(() => null);
       await SecureStore.deleteItemAsync("@driver_device_token").catch(() => {});
-      await supabase.from("drivers").update({ device_token: null }).eq("id", userId);
+      // Compare-and-clear. A device being kicked out runs this same path, and
+      // by then the NEW device has already written its own device_token — an
+      // unconditional null would wipe the incoming session's claim and leave
+      // the account unlocked. Only surrender the token if it is still ours.
+      if (localToken) {
+        await supabase
+          .from("drivers")
+          .update({ device_token: null })
+          .eq("id", userId)
+          .eq("device_token", localToken);
+      }
     }
-    await supabase.auth.signOut();
+    // scope:'local' — supabase-js defaults to 'global', which deletes EVERY
+    // auth.sessions row for the user, on every device. That is what made the
+    // single-device lock destructive: the old device's kick-out revoked the
+    // new device's session too, and because PostgREST validates a JWT locally
+    // (signature + exp only, never auth.sessions) neither app noticed. They
+    // kept reading, writing and heartbeating on orphaned tokens, and the only
+    // thing that broke was GoTrue's /user endpoint — i.e. exactly the two
+    // functions that call getUser(): capture-payment and create-payment-intent.
+    // Signing out means signing out THIS device.
+    await supabase.auth.signOut({ scope: "local" });
     setProfile(null);
     sessionRef.current = null;
     fetchingForRef.current = null;

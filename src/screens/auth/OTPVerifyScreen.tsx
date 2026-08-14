@@ -125,7 +125,7 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         // before signing out so the home screen never becomes visible.
         await supabase.from("profiles").delete().eq("id", userId);
         releaseLoading();
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         setLoading(false);
         Alert.alert(
           "Invalid invite code",
@@ -208,7 +208,7 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     if (!existing && !isNewUser) {
       // Sign-in attempt but no profile exists — number not registered
       console.log("[OTP] sign-in blocked: no profile for this number");
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       setLoading(false);
       Alert.alert(
         "No account found",

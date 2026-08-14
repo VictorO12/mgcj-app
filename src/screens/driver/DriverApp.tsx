@@ -118,6 +118,10 @@ export default function DriverApp() {
     pendingRideRef.current = pendingRide;
   }, [pendingRide]);
 
+  // Set when another device claims this account while a ride is in flight.
+  // The kick is deferred, never skipped — see performKickOut below.
+  const pendingKickRef = useRef(false);
+
   // Refs so the realtime callback can check "am I free?" without stale closures
   const activeRideRef = useRef<ActiveRide | null>(null);
   useEffect(() => {
@@ -244,14 +248,24 @@ export default function DriverApp() {
     if (!profile) return;
 
     async function handleKickedOut() {
-      if (activeRideRef.current) return;
-      Alert.alert(
-        "Signed out",
-        "Your account was signed in on another device.",
-        [{ text: "OK" }],
-      );
-      await SecureStore.deleteItemAsync("@driver_device_token");
-      await signOut();
+      // Mid-ride, the sign-out is deferred rather than skipped. Skipping it
+      // used to leave the driver in a half-dead session: this device's
+      // auth.sessions row was already gone (the other device's sign-in saw to
+      // that), so the UI and the heartbeat kept working on an orphaned JWT
+      // while capture-payment 401'd — the driver could drive the trip but
+      // never end it, stranding the passenger's hold until a sweep cancelled
+      // it hours later. Warn now, eject when the ride is actually over.
+      if (activeRideRef.current) {
+        if (pendingKickRef.current) return;
+        pendingKickRef.current = true;
+        Alert.alert(
+          "Signed in on another device",
+          "You'll be signed out here once you finish this ride.",
+          [{ text: "OK" }],
+        );
+        return;
+      }
+      await performKickOut();
     }
 
     // Realtime: watch own drivers row for device_token changes
@@ -276,19 +290,34 @@ export default function DriverApp() {
       )
       .subscribe();
 
-    // AppState: verify token on foreground resume (catches offline case)
-    const appStateSub = AppState.addEventListener("change", async (state) => {
-      if (state !== "active") return;
+    // Poll the authoritative token. Realtime is the fast path but it is not a
+    // guarantee — a backgrounded socket, Expo Go on Android, or a device that
+    // was simply offline when the other login happened all miss the event.
+    const driverId = profile.id;
+    async function verifyDeviceToken() {
       const { data } = await supabase
         .from("drivers")
         .select("device_token")
-        .eq("id", profile.id)
+        .eq("id", driverId)
         .maybeSingle();
       const newToken = data?.device_token;
       const localToken = await SecureStore.getItemAsync("@driver_device_token");
+      // A missing local token means this device never claimed the account, so
+      // there is nothing to be kicked out of — no sign-in race to guard.
       if (localToken && newToken && newToken !== localToken) {
         handleKickedOut();
       }
+    }
+
+    // Cold start: AppState is already "active" when the app mounts, so the
+    // listener below never fires for a launch. Without this, a device that was
+    // displaced while closed comes back up believing it still holds the lock.
+    verifyDeviceToken();
+
+    // AppState: verify token on foreground resume (catches offline case)
+    const appStateSub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      verifyDeviceToken();
     });
 
     return () => {
@@ -597,6 +626,27 @@ export default function DriverApp() {
     setActiveRide({ ...activeRide, status: newStatus });
   }
 
+  async function performKickOut() {
+    pendingKickRef.current = false;
+    Alert.alert(
+      "Signed out",
+      "Your account was signed in on another device.",
+      [{ text: "OK" }],
+    );
+    await SecureStore.deleteItemAsync("@driver_device_token").catch(() => {});
+    await signOut();
+  }
+
+  // Drain the deferred kick wherever the ride ends. There are several places
+  // activeRide gets cleared (completion, the realtime completed/cancelled
+  // branch, a row delete, a refetch finding nothing), so watch the state
+  // rather than trying to remember them all.
+  useEffect(() => {
+    if (!activeRide && pendingKickRef.current) {
+      performKickOut();
+    }
+  }, [activeRide]);
+
   function handleRideComplete() {
     setActiveRide(null);
     fetchConfirmedScheduledRides();
@@ -661,6 +711,7 @@ export default function DriverApp() {
         ride={activeRide}
         onRideComplete={handleRideComplete}
         onStatusChange={handleRideStatusChange}
+        kickPendingRef={pendingKickRef}
       />
     );
   }
