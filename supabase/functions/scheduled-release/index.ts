@@ -23,6 +23,7 @@ const MAPS_KEY          = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
 // §2 constants — global defaults, per-company tuning deferred
 const MAX_LEAD_MINS       = 75  // fetch window width AND release ceiling
 const MIN_LEAD_MINS       = 10  // release floor
+const CARD_RETRY_MINS     = 10  // min spacing between card-verification attempts
 const POOL_SLICE_K        = 3   // Kth-nearest driver for churn slack
 const CHURN_BUFFER_MINS   = 8   // runway for decline / no-ack cycles
 const ARRIVAL_BUFFER_MINS = 3   // driver arrives slightly before pickup time
@@ -135,46 +136,29 @@ async function releaseRide(ride: any, now: Date) {
   //
   // Only two latch states stop us trying: a terminal card decline, and a ride
   // that has already been switched to cash.
-  const latch = ride.payment_check_status
+  //
+  // Retries are spaced by CARD_RETRY_MINS. This cron ticks every 2 minutes and
+  // the window is 75, so an unthrottled ladder would fire ~37 declined
+  // authorizations at one card — enough to look like card testing to Stripe
+  // Radar and to earn network penalties for the passenger. The last attempt
+  // before the release floor is always allowed, so a ride never falls back to
+  // cash without a final try.
+  const latch      = ride.payment_check_status
+  const lastAt     = ride.payment_check_last_at ? new Date(ride.payment_check_last_at).getTime() : 0
+  const sinceMins  = (now.getTime() - lastAt) / 60_000
+  const dueForRetry = sinceMins >= CARD_RETRY_MINS
   if (
     ride.payment_method === 'card' &&
     !ride.stripe_payment_intent_id &&
     latch !== 'hard_failed' &&
-    latch !== 'cash_fallback'
+    latch !== 'cash_fallback' &&
+    dueForRetry
   ) {
     const newPiId = await ensurePaymentIntent(ride)
     // ensurePaymentIntent persists the PI id to the row; mirror it onto the
     // in-memory ride too. Without this the cash-fallback test below reads a
     // stale null and switches a ride that just got a valid hold to cash.
     if (newPiId) ride.stripe_payment_intent_id = newPiId
-  }
-
-  // Cash fallback: a card ride reaching release with no PaymentIntent has
-  // exhausted every card attempt. Make that a real state instead of letting
-  // it proceed as a card ride that cannot be charged — previously the driver
-  // completed it and hit "No payment intent found for this ride", and the
-  // "please pay cash" push described a state the data model couldn't hold
-  // (guard_ride_payment_method blocks the flip from the client by design).
-  //
-  // Routed through settle-ride rather than flipped inline so there is exactly
-  // one implementation of "release the hold and switch this ride to cash",
-  // including the passenger AND driver notifications — the driver has to know
-  // to collect before they arrive, not at completion.
-  if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id) {
-    console.warn(`[ride ${ride.id}] no PaymentIntent at release — switching to cash`)
-    try {
-      await fetch(SETTLE_RIDE_URL, {
-        method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization:  `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-        },
-        body: JSON.stringify({ ride_id: ride.id, action: 'cash_fallback', reason: 'card_unavailable' }),
-      })
-      ride.payment_method = 'cash'
-    } catch (err) {
-      console.error(`[ride ${ride.id}] cash fallback failed:`, err)
-    }
   }
 
   // Build available driver pool (same eligibility criteria as assign-ride)
@@ -303,6 +287,50 @@ async function computeReleaseThreshold(
 
 // ── Dispatch to the right release path ───────────────────────
 async function executeRelease(ride: any, targetDriveMins: number | null) {
+  // Cash fallback: a card ride reaching release with no PaymentIntent has
+  // exhausted every card attempt. It lives HERE, not in releaseRide's
+  // per-tick body — there it fired on the first decline, up to 75 minutes
+  // before pickup, converting the ride to cash instantly and making the
+  // retry ladder dead code (observed 2026-08-13: one generic_decline at
+  // T-25m flipped the ride straight to cash_fallback). A card is only out of
+  // chances at the moment we actually release.
+  //
+  // The last-chance attempt is here rather than in releaseRide's throttled
+  // gate because release happens at `minsUntil <= threshold`, and threshold is
+  // per-ride (10–75 min). Keying a guaranteed final try off MIN_LEAD_MINS
+  // would never fire for a ride that releases at T-30, leaving the ladder
+  // one-shot in practice. Release itself is the real deadline.
+  if (
+    ride.payment_method === 'card' &&
+    !ride.stripe_payment_intent_id &&
+    ride.payment_check_status !== 'hard_failed' &&
+    ride.payment_check_status !== 'cash_fallback'
+  ) {
+    const lastChancePi = await ensurePaymentIntent(ride)
+    if (lastChancePi) ride.stripe_payment_intent_id = lastChancePi
+  }
+
+  // Routed through settle-ride rather than flipped inline so there is exactly
+  // one implementation of "release the hold and switch this ride to cash",
+  // including the passenger AND driver notifications — the driver has to know
+  // to collect before they arrive, not at completion.
+  if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id) {
+    console.warn(`[ride ${ride.id}] no PaymentIntent at release — switching to cash`)
+    try {
+      await fetch(SETTLE_RIDE_URL, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+        },
+        body: JSON.stringify({ ride_id: ride.id, action: 'cash_fallback', reason: 'card_unavailable' }),
+      })
+      ride.payment_method = 'cash'
+    } catch (err) {
+      console.error(`[ride ${ride.id}] cash fallback failed:`, err)
+    }
+  }
+
   if (!ride.preferred_driver_id) {
     await releaseToPool(ride)
     return
