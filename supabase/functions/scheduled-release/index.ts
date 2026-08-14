@@ -15,6 +15,7 @@ const supabase = createClient(
 
 const EXPO_PUSH_URL     = 'https://exp.host/--/api/v2/push/send'
 const ASSIGN_RIDE_URL   = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
+const SETTLE_RIDE_URL   = `${Deno.env.get('SUPABASE_URL')}/functions/v1/settle-ride`
 const STRIPE_API        = 'https://api.stripe.com/v1'
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? ''
 const MAPS_KEY          = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
@@ -122,11 +123,57 @@ Deno.serve(async () => {
 async function releaseRide(ride: any, now: Date) {
   const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
 
-  // §9.1: Ensure PaymentIntent for card rides before release
-  if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id && ride.payment_status !== 'failed') {
-    const piOk = await ensurePaymentIntent(ride)
-    if (!piOk) {
-      console.warn(`[ride ${ride.id}] PI creation failed — proceeding as cash-fallback`)
+  // §9.1: Ensure PaymentIntent for card rides before release.
+  //
+  // Gated on payment_check_status, NOT payment_status. The old gate was
+  // `payment_status !== 'failed'` — and nothing anywhere ever cleared
+  // 'failed', so a single decline permanently disabled PI creation for that
+  // ride while the push still told the passenger to "update your card."
+  // Updating it could never trigger a retry. payment_status is also already
+  // doing double duty as Stripe PI state (stripe-webhook) and capture state
+  // (capture-payment); the latch is separate so those can't interfere.
+  //
+  // Only two latch states stop us trying: a terminal card decline, and a ride
+  // that has already been switched to cash.
+  const latch = ride.payment_check_status
+  if (
+    ride.payment_method === 'card' &&
+    !ride.stripe_payment_intent_id &&
+    latch !== 'hard_failed' &&
+    latch !== 'cash_fallback'
+  ) {
+    const newPiId = await ensurePaymentIntent(ride)
+    // ensurePaymentIntent persists the PI id to the row; mirror it onto the
+    // in-memory ride too. Without this the cash-fallback test below reads a
+    // stale null and switches a ride that just got a valid hold to cash.
+    if (newPiId) ride.stripe_payment_intent_id = newPiId
+  }
+
+  // Cash fallback: a card ride reaching release with no PaymentIntent has
+  // exhausted every card attempt. Make that a real state instead of letting
+  // it proceed as a card ride that cannot be charged — previously the driver
+  // completed it and hit "No payment intent found for this ride", and the
+  // "please pay cash" push described a state the data model couldn't hold
+  // (guard_ride_payment_method blocks the flip from the client by design).
+  //
+  // Routed through settle-ride rather than flipped inline so there is exactly
+  // one implementation of "release the hold and switch this ride to cash",
+  // including the passenger AND driver notifications — the driver has to know
+  // to collect before they arrive, not at completion.
+  if (ride.payment_method === 'card' && !ride.stripe_payment_intent_id) {
+    console.warn(`[ride ${ride.id}] no PaymentIntent at release — switching to cash`)
+    try {
+      await fetch(SETTLE_RIDE_URL, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+        },
+        body: JSON.stringify({ ride_id: ride.id, action: 'cash_fallback', reason: 'card_unavailable' }),
+      })
+      ride.payment_method = 'cash'
+    } catch (err) {
+      console.error(`[ride ${ride.id}] cash fallback failed:`, err)
     }
   }
 
@@ -427,7 +474,26 @@ async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
 }
 
 // ── §9.1: Create the manual-capture PaymentIntent ─────────────
-async function ensurePaymentIntent(ride: any): Promise<boolean> {
+// Stripe decline codes that no amount of retrying will fix. Everything else
+// (insufficient_funds, processing_error, try_again_later, ...) is soft and
+// stays retryable by the verification ladder.
+const HARD_DECLINE_CODES = new Set([
+  'lost_card', 'stolen_card', 'pickup_card', 'expired_card', 'incorrect_number',
+  'invalid_account', 'card_not_supported', 'currency_not_supported',
+  'restricted_card', 'revocation_of_authorization', 'revocation_of_all_authorizations',
+  'stop_payment_order', 'no_card_on_file',
+  // 3DS: an off-session retry can never satisfy this — the passenger has to
+  // open the app and authenticate. Terminal for the automatic ladder, but it
+  // warrants different passenger copy than "your card was declined"; that
+  // distinction belongs with the ladder's messaging, not here.
+  'authentication_required',
+])
+
+function isHardDecline(code: string): boolean {
+  return HARD_DECLINE_CODES.has(code)
+}
+
+async function ensurePaymentIntent(ride: any): Promise<string | null> {
   const { data: pax } = await supabase.from('profiles')
     .select('stripe_customer_id, push_token').eq('id', ride.passenger_id).maybeSingle()
 
@@ -446,7 +512,13 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
 
   if (!pax?.stripe_customer_id || !stripePaymentMethodId) {
     console.error(`[ride ${ride.id}] no saved card — PI creation skipped`)
-    await supabase.from('rides').update({ payment_status: 'failed' }).eq('id', ride.id)
+    await supabase.from('rides').update({
+      payment_status:         'failed',
+      payment_check_status:   'hard_failed',
+      payment_check_last_at:  new Date().toISOString(),
+      payment_check_last_code: 'no_card_on_file',
+      payment_check_attempts: (ride.payment_check_attempts ?? 0) + 1,
+    }).eq('id', ride.id)
     await sendPush(pax?.push_token,
       '⚠️ Payment method needed',
       'Please add a card or your ride will be paid by cash.',
@@ -511,13 +583,23 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
 
   if (intent.error) {
     console.error(`[ride ${ride.id}] PI creation failed:`, JSON.stringify(intent.error))
-    await supabase.from('rides').update({ payment_status: 'failed' }).eq('id', ride.id)
+    // Classify: a soft decline is worth retrying, a hard one never is —
+    // retrying a lost/stolen/expired card is pure noise and pushes up the
+    // account's decline rate for nothing.
+    const code: string = intent.error.decline_code ?? intent.error.code ?? 'unknown'
+    await supabase.from('rides').update({
+      payment_status:          'failed',
+      payment_check_status:    isHardDecline(code) ? 'hard_failed' : 'soft_failed',
+      payment_check_last_at:   new Date().toISOString(),
+      payment_check_last_code: code,
+      payment_check_attempts:  (ride.payment_check_attempts ?? 0) + 1,
+    }).eq('id', ride.id)
     await sendPush(pax?.push_token,
       '⚠️ Card payment failed',
       'Your card was declined. Your ride will proceed — please pay cash or update your card.',
       { rideId: ride.id }
     )
-    return false
+    return null
   }
 
   // Persist the recomputed fare alongside the PI so the app, receipt and
@@ -526,6 +608,10 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
   const rideUpdate: Record<string, unknown> = {
     stripe_payment_intent_id: intent.id,
     payment_status:           'pending',
+    payment_check_status:     'verified',
+    payment_check_last_at:    new Date().toISOString(),
+    payment_check_last_code:  null,
+    payment_check_attempts:   (ride.payment_check_attempts ?? 0) + 1,
   }
   if (fareResult.discountedFare > 0) {
     rideUpdate.fare_estimate     = fareResult.discountedFare
@@ -536,7 +622,7 @@ async function ensurePaymentIntent(ride: any): Promise<boolean> {
   }
   await supabase.from('rides').update(rideUpdate).eq('id', ride.id)
   console.log(`[ride ${ride.id}] PI created: ${intent.id} — $${authoritativeFare}`)
-  return true
+  return intent.id
 }
 
 // ── Passenger T-30 / T-15 reminders ─────────────────────────

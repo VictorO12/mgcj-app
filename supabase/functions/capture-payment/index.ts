@@ -47,32 +47,43 @@ Deno.serve(async (req) => {
       })
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } }
-    )
+    // Capture is normally driver-triggered on ride completion. It is ALSO
+    // swept server-side by expire-pending-rides for completed card rides the
+    // driver's app never captured (crash / dead battery / no signal) — that
+    // caller presents the service-role key, not a driver JWT. Without this
+    // branch, capture would remain dependent on one phone staying alive.
+    const isSystem = authHeader.replace('Bearer ', '') === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-    // ── Verify the caller is a driver ───────────────────────────
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
+    let user: { id: string } | null = null
+    if (!isSystem) {
+      const supabase = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      )
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
+      // ── Verify the caller is a driver ─────────────────────────
+      const { data: { user: authUser }, error: userError } = await supabase.auth.getUser()
+      if (userError || !authUser) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      user = authUser
 
-    if (profile?.role !== 'driver') {
-      return new Response(JSON.stringify({ error: 'Forbidden — drivers only' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single()
+
+      if (profile?.role !== 'driver') {
+        return new Response(JSON.stringify({ error: 'Forbidden — drivers only' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
     }
 
     // ── Parse request body ──────────────────────────────────────
@@ -104,7 +115,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Guard checks ────────────────────────────────────────────
-    if (ride.driver_id !== user.id) {
+    if (!isSystem && ride.driver_id !== user!.id) {
       return new Response(JSON.stringify({ error: 'Forbidden — not your ride' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
