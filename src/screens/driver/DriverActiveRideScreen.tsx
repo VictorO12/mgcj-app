@@ -209,14 +209,23 @@ interface Props {
   ride: ActiveRide;
   onRideComplete: () => void;
   onStatusChange: (newStatus: string) => void;
+  /**
+   * True when another device has already claimed this account and DriverApp is
+   * holding the sign-out until this ride ends. The 401 we get from
+   * capture-payment is that same event seen from the payment side, so the
+   * screen stays quiet about it and lets the deferred kick — which is about to
+   * fire the moment the ride clears — deliver the one accurate message.
+   */
+  kickPendingRef?: React.MutableRefObject<boolean>;
 }
 
 export default function DriverActiveRideScreen({
   ride,
   onRideComplete,
   onStatusChange,
+  kickPendingRef,
 }: Props) {
-  const { profile } = useAuth();
+  const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const mapRef = useRef<MapView>(null);
@@ -940,50 +949,85 @@ export default function DriverActiveRideScreen({
 
     if (next === "completed") {
       if (ride.payment_method === "card") {
-        // ── Card ride: capture the payment hold then complete ───
+        // ── Card ride: capture the payment hold, then complete ───
+        // Completion is a fact about the world; capture is a payment concern.
+        // This used to return early whenever capture failed, which left the
+        // ride in_progress with a live hold: the driver could not end a trip
+        // that had already happened, the passenger stayed in an active ride,
+        // and nothing recovered it until a sweep cancelled the hold hours
+        // later and nobody got paid. So the write below happens either way —
+        // Sweep B in expire-pending-rides re-attempts capture on a 10-minute
+        // fuse for exactly this shape (status completed, card, payment_status
+        // pending/failed, PI present), and capture-payment is idempotent.
         setUpdating(true);
-        try {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (!session) throw new Error("No session");
+        {
+          // Capture in its own scope so that a thrown error (DNS, socket drop)
+          // lands in the same place as a returned one and cannot skip the
+          // completion write below.
+          let captureError: string | null = null;
+          let authExpired = false;
+          try {
+            const r = await invokeFunction(
+              "capture-payment",
+              { ride_id: ride.id },
+              "Could not capture payment.",
+            );
+            captureError = r.error;
+            authExpired = r.authExpired;
+          } catch (err) {
+            console.error("Capture error:", err);
+            captureError = "Couldn't reach the payment service.";
+          }
 
-          const res = await fetch(
-            `${SUPABASE_URL}/functions/v1/capture-payment`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${session.access_token}`,
-                apikey: SUPABASE_ANON_KEY,
-              },
-              body: JSON.stringify({ ride_id: ride.id }),
-            },
-          );
+          // fare_final is deliberately not written here: guard_ride_fare_fields
+          // freezes the fare columns against driver edits, and capture-payment
+          // writes back the Stripe-authorized amount itself so receipts and
+          // analytics agree with what was actually charged.
+          const { error: completeError } = await supabase
+            .from("rides")
+            .update({ status: "completed" })
+            .eq("id", ride.id);
 
-          const result = await res.json();
+          setUpdating(false);
 
-          if (!res.ok) {
-            setUpdating(false);
+          if (completeError) {
+            // The one case where the driver genuinely has to retry: the ride
+            // is still in_progress. Say so instead of claiming it ended.
+            console.error("Complete error:", completeError);
             Alert.alert(
-              "Payment capture failed",
-              result.error ?? "Could not capture payment. Please try again.",
+              "Couldn't end the ride",
+              "Check your signal and tap complete again.",
             );
             return;
           }
 
-          // Payment captured — mark ride complete
-          await supabase
-            .from("rides")
-            .update({ status: "completed", fare_final: ride.fare_estimate })
-            .eq("id", ride.id);
+          if (captureError) {
+            if (authExpired && kickPendingRef?.current) {
+              // Deferred kick already queued — say nothing. performKickOut
+              // alerts and signs out as soon as onRideComplete clears the ride.
+            } else if (authExpired) {
+              // Not a payment problem at all — this device's session was
+              // revoked, so getUser() rejects us while PostgREST (signature +
+              // exp only) still accepts the same JWT. The ride is already
+              // written above; only now is it safe to send them to re-auth.
+              Alert.alert(
+                "Ride ended — please sign in again",
+                "Your session expired on this device. The fare will be collected automatically; sign in again to keep receiving rides.",
+                [
+                  { text: "Later", style: "cancel" },
+                  { text: "Sign in again", onPress: () => signOut() },
+                ],
+              );
+            } else {
+              Alert.alert(
+                "Ride ended — payment pending",
+                `${captureError} The fare will be collected automatically, so there's nothing more to do here.`,
+                [{ text: "OK" }],
+              );
+            }
+          }
 
-          setUpdating(false);
           onRideComplete();
-        } catch (err) {
-          console.error("Capture error:", err);
-          setUpdating(false);
-          Alert.alert("Error", "Something went wrong. Please try again.");
         }
         return;
       }

@@ -5,6 +5,15 @@ export interface InvokeResult<T = any> {
   data: T | null;
   /** Human-readable message, already unwrapped from the error body. */
   error: string | null;
+  /**
+   * True when the function rejected us at the door rather than refusing the
+   * work: the JWT no longer maps to a live `auth.sessions` row, so anything
+   * calling `supabase.auth.getUser()` (capture-payment, create-payment-intent)
+   * 401s while PostgREST — which only checks signature + expiry — keeps
+   * working. Callers should treat this as "re-authenticate", never as a
+   * failure of the thing they asked for.
+   */
+  authExpired: boolean;
 }
 
 /**
@@ -24,17 +33,22 @@ export async function invokeFunction<T = any>(
 
   if (!error) {
     // A 200 can still carry an { error } body from a soft failure.
-    return { data: data ?? null, error: (data as any)?.error ?? null };
+    return { data: data ?? null, error: (data as any)?.error ?? null, authExpired: false };
   }
 
   const res: Response | undefined = (error as any)?.context;
+  const authExpired = res?.status === 401;
   if (res && typeof res.json === "function") {
     try {
       const parsed = await res.json();
-      return { data: parsed ?? null, error: parsed?.error ?? error.message ?? fallback };
+      return {
+        data: parsed ?? null,
+        error: parsed?.error ?? error.message ?? fallback,
+        authExpired,
+      };
     } catch {
       // Non-JSON body (a gateway/timeout page) — nothing better than the throw.
     }
   }
-  return { data: null, error: error.message ?? fallback };
+  return { data: null, error: error.message ?? fallback, authExpired };
 }

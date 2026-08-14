@@ -892,35 +892,32 @@ export default function PassengerHomeScreen() {
         let discountCodeId: string | null = null;
         if (!scheduledAt) {
           const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (!session) throw new Error("No session");
-          const res = await fetch(
-            `${SUPABASE_URL}/functions/v1/create-payment-intent`,
+            data: intentData,
+            error: intentError,
+            authExpired,
+          } = await invokeFunction(
+            "create-payment-intent",
             {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${session.access_token}`,
-                apikey: SUPABASE_ANON_KEY,
-              },
-              body: JSON.stringify({
-                pickup_lat: pickupPlace.coords.latitude,
-                pickup_lng: pickupPlace.coords.longitude,
-                dropoff_lat: dropoffPlace.coords.latitude,
-                dropoff_lng: dropoffPlace.coords.longitude,
-                discount_code: discountCodeInput.trim() || null,
-              }),
+              pickup_lat: pickupPlace.coords.latitude,
+              pickup_lng: pickupPlace.coords.longitude,
+              dropoff_lat: dropoffPlace.coords.latitude,
+              dropoff_lng: dropoffPlace.coords.longitude,
+              discount_code: discountCodeInput.trim() || null,
             },
+            "Could not process payment. Please try a different card or pay with cash.",
           );
-          const intentData = await res.json();
-          if (!res.ok) {
+          if (intentError) {
             setBookingLoading(false);
+            // A 401 here is an auth problem wearing a payment problem's
+            // clothes: this function calls getUser(), so a revoked session
+            // fails it while every PostgREST read on screen keeps working.
+            // Telling the passenger to try another card would send them
+            // round a loop no card can win.
             Alert.alert(
-              "Payment failed",
-              intentData.message ??
-                intentData.error ??
-                "Could not process payment. Please try a different card or pay with cash.",
+              authExpired ? "Please sign in again" : "Payment failed",
+              authExpired
+                ? "Your session expired on this device. Sign out and back in, then book again."
+                : (intentData?.message ?? intentError),
             );
             return;
           }
