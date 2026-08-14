@@ -33,12 +33,15 @@ interface Props {
   onClose: () => void;
   hasActiveRide: boolean;
   onAccepted: () => void;
+  /** Ride handed back to dispatch — parent must re-read its active-ride state. */
+  onReleased?: () => void;
 }
 
 export default function AssignedRidesListScreen({
   onClose,
   hasActiveRide,
   onAccepted,
+  onReleased,
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -255,15 +258,25 @@ export default function AssignedRidesListScreen({
 
   async function declineRide(ride: AssignedRide) {
     const isScheduled = !!ride.scheduled_at;
+    // decline-assigned-ride has a narrow contract: it 409s on
+    // confirmed_by_driver, and on any status other than 'scheduled'. Everything
+    // outside that — the driver already accepted, or the ride came through a
+    // preferred-driver offer and sits at 'offered'/'assigned' — goes to
+    // settle-ride, which returns it to 'scheduled' rather than dispatching it
+    // early and leaves the passenger's payment hold untouched.
+    const isReleaseOfAccepted =
+      isScheduled &&
+      (ride.confirmed_by_driver || ride.status !== "scheduled");
+    const verb = ride.confirmed_by_driver ? "Release" : "Decline";
     Alert.alert(
-      "Decline ride?",
+      `${verb} this ride?`,
       isScheduled
-        ? "This ride will be released and dispatch will be notified to reassign it."
+        ? "It goes back to dispatch to be offered to another driver. The passenger keeps their booking."
         : "This ride will be returned to the queue and dispatch will be notified.",
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "Keep it", style: "cancel" },
         {
-          text: "Decline",
+          text: verb,
           style: "destructive",
           onPress: async () => {
             setActionLoading(ride.id + "-decline");
@@ -274,7 +287,11 @@ export default function AssignedRidesListScreen({
               const accessToken = session?.access_token;
               if (!accessToken) throw new Error("Not signed in");
               const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
-              const fnName = isScheduled ? "decline-assigned-ride" : "assign-ride";
+              const fnName = isReleaseOfAccepted
+                ? "settle-ride"
+                : isScheduled
+                  ? "decline-assigned-ride"
+                  : "assign-ride";
               const res = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
                 method: "POST",
                 headers: {
@@ -282,14 +299,16 @@ export default function AssignedRidesListScreen({
                   Authorization: `Bearer ${accessToken}`,
                 },
                 body: JSON.stringify(
-                  isScheduled
-                    ? { ride_id: ride.id }
-                    : { ride_id: ride.id, declined_by_driver_id: profile?.id },
+                  isReleaseOfAccepted
+                    ? { ride_id: ride.id, action: "driver_release" }
+                    : isScheduled
+                      ? { ride_id: ride.id }
+                      : { ride_id: ride.id, declined_by_driver_id: profile?.id },
                 ),
               });
               const result = await res.json();
               if (!res.ok || result?.error) {
-                throw new Error(result?.error ?? "Failed to decline");
+                throw new Error(result?.error ?? `Failed to ${verb.toLowerCase()}`);
               }
             } catch (e: any) {
               setActionLoading(null);
@@ -298,6 +317,12 @@ export default function AssignedRidesListScreen({
             }
             setActionLoading(null);
             setRides((prev) => prev.filter((r) => r.id !== ride.id));
+            // A confirmed scheduled ride is DriverApp's `activeRide` — it
+            // drives the countdown card and its "Start ride" button. Without
+            // this the card survives the release, pointing at a ride whose
+            // driver_id is now null (and realtime won't correct it: the
+            // driver_id=eq.<me> filter stops matching the moment it clears).
+            onReleased?.();
           },
         },
       ],
@@ -611,9 +636,11 @@ function RideCard({
 
       {/* Actions */}
       <View style={styles.actions}>
-        {/* Only show Decline on unconfirmed, already-assigned rides — an
-            open-board card has nothing assigned to decline */}
-        {!open && !ride.confirmed_by_driver && (
+        {/* Decline before accepting; Release after. A confirmed scheduled ride
+            is the driver's only way to hand it back — the in-ride Release
+            button lives on a screen they can't reach until pickup time. An
+            open-board card has nothing assigned to give back. */}
+        {!open && (!ride.confirmed_by_driver || !!ride.scheduled_at) && (
           <TouchableOpacity
             style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
             onPress={onDecline}
@@ -623,7 +650,9 @@ function RideCard({
             {isDeclining ? (
               <ActivityIndicator color={colors.accentRed} size="small" />
             ) : (
-              <Text style={styles.declineBtnText}>Decline</Text>
+              <Text style={styles.declineBtnText}>
+                {ride.confirmed_by_driver ? "Release" : "Decline"}
+              </Text>
             )}
           </TouchableOpacity>
         )}

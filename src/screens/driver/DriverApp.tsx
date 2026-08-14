@@ -675,6 +675,13 @@ export default function DriverApp() {
           fetchActiveRide();
           fetchConfirmedScheduledRides();
         }}
+        onReleased={() => {
+          // Stay on the list — the driver may be triaging several rides — but
+          // re-read active state so the released ride stops being `activeRide`.
+          setStartedScheduledRideId(null);
+          fetchActiveRide();
+          fetchConfirmedScheduledRides();
+        }}
       />
     );
   }
