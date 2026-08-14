@@ -275,8 +275,14 @@ export default function DriverActiveRideScreen({
   // Throttle DB location writes
   const lastDbWrite = useRef<number>(0);
 
-  // Bottom panel collapse
-  const [panelExpanded, setPanelExpanded] = useState(true);
+  // Bottom panel collapse. Starts collapsed: the driver only needs the
+  // destination + primary action while moving, and the exits (release /
+  // no-show) shouldn't sit under a thumb until they're deliberately opened.
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  // Measured, so anything anchored above the sheet keeps the same small gap
+  // in both states instead of tracking hardcoded offsets per height.
+  const [sheetH, setSheetH] = useState(0);
+  const [turnBannerH, setTurnBannerH] = useState(0);
 
   // Fare modal
   const [showFareModal, setShowFareModal] = useState(false);
@@ -1060,6 +1066,18 @@ export default function DriverActiveRideScreen({
   const nextStep = steps[currentStepIndex + 1];
   const paymentIsCash = !ride.payment_method || ride.payment_method === "cash";
 
+  const showTurnLaneBanner =
+    navMode &&
+    !showRerouting &&
+    !!currentStep &&
+    distToNextTurn !== null &&
+    distToNextTurn < TURN_INDICATOR_THRESHOLD &&
+    laneHint(currentStep.maneuver) !== null;
+  // Gap above the sheet, off its measured height so it holds in both the
+  // collapsed and expanded states. The fallbacks only cover the first frame,
+  // before onLayout has reported.
+  const sheetGap = (sheetH || (panelExpanded ? 300 : 210)) + 12;
+
   return (
     <View style={styles.container}>
       {/* ── MAP ── */}
@@ -1180,9 +1198,11 @@ export default function DriverActiveRideScreen({
       </MapView>
 
       {/* ── TURN / LANE BANNER — left/right turns only, within 300 m ── */}
-      {navMode && !showRerouting && currentStep && distToNextTurn !== null &&
-       distToNextTurn < TURN_INDICATOR_THRESHOLD && laneHint(currentStep.maneuver) !== null && (
-        <View style={[styles.turnLaneBanner, { bottom: panelExpanded ? 310 : 220 }]}>
+      {showTurnLaneBanner && (
+        <View
+          style={[styles.turnLaneBanner, { bottom: sheetGap }]}
+          onLayout={(e) => setTurnBannerH(e.nativeEvent.layout.height)}
+        >
           <View style={styles.turnLaneIcon}>
             <Ionicons name={manoeuvreIcon(currentStep.maneuver) as any} size={20} color="#fff" />
           </View>
@@ -1256,7 +1276,14 @@ export default function DriverActiveRideScreen({
       )}
 
       {/* ── NAV CONTROLS (voice above, navigate below) — nav mode only ── */}
-      <View style={[styles.navControls, { bottom: panelExpanded ? 380 : 290 }]}>
+      <View
+        style={[
+          styles.navControls,
+          {
+            bottom: showTurnLaneBanner ? sheetGap + turnBannerH + 10 : sheetGap,
+          },
+        ]}
+      >
         {navMode && (
           <TouchableOpacity
             style={[styles.voiceBtn, voiceMuted && styles.voiceBtnMuted]}
@@ -1307,7 +1334,10 @@ export default function DriverActiveRideScreen({
 
 
       {/* ── BOTTOM SHEET ── */}
-      <View style={styles.sheet}>
+      <View
+        style={styles.sheet}
+        onLayout={(e) => setSheetH(e.nativeEvent.layout.height)}
+      >
         {/* Expand/collapse — chevron top-left */}
         <TouchableOpacity
           style={styles.sheetHandle}
@@ -1430,7 +1460,8 @@ export default function DriverActiveRideScreen({
 
         {/* Driver exit — release before pickup, no-show after arriving.
             Never shown mid-ride: an in-progress ride ends by completing it. */}
-        {(ride.status === "assigned" || ride.status === "driver_arriving") && (
+        {panelExpanded &&
+          (ride.status === "assigned" || ride.status === "driver_arriving") && (
           <TouchableOpacity
             style={[styles.exitBtn, exiting && { opacity: 0.6 }]}
             onPress={ride.status === "assigned" ? releaseRide : reportNoShow}
