@@ -690,8 +690,10 @@ export default function DriverHomeScreen({
                 }}
                 scrollEventThrottle={16}
                 renderItem={({ item: r }) => (
-                  <View
+                  <TouchableOpacity
                     style={[styles.scheduledRideRow, { width: CARD_WIDTH }]}
+                    activeOpacity={0.75}
+                    onPress={onOpenAssigned}
                   >
                     <View style={styles.scheduledRideTime}>
                       <Text style={styles.scheduledRideTimeText}>
@@ -720,7 +722,12 @@ export default function DriverHomeScreen({
                         ${r.fare_estimate.toFixed(2)}
                       </Text>
                     )}
-                  </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color={colors.textTertiary}
+                    />
+                  </TouchableOpacity>
                 )}
               />
               {otherScheduledRides.length > 1 && (
