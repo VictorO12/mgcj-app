@@ -1193,95 +1193,97 @@ export default function PassengerHomeScreen() {
       </MapView>
 
       {/* Top bar */}
-      <View style={styles.topBar}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.topName}>
-            {hasActiveRide
-              ? "Your ride"
-              : `Hey ${profile?.name?.split(" ")[0] ?? "there"}`}
-          </Text>
-          <Text style={styles.topSub}>
-            {hasActiveRide
-              ? statusLabel(ride.status, ride.driver?.name)
-              : "Where are you headed?"}
-          </Text>
-        </View>
-        <View style={styles.topActions}>
-          {!hasActiveRide && (
+      <View style={styles.headerWrap} pointerEvents="box-none">
+        <View style={styles.topBar}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.topName}>
+              {hasActiveRide
+                ? "Your ride"
+                : `Hey ${profile?.name?.split(" ")[0] ?? "there"}`}
+            </Text>
+            <Text style={styles.topSub}>
+              {hasActiveRide
+                ? statusLabel(ride.status, ride.driver?.name)
+                : "Where are you headed?"}
+            </Text>
+          </View>
+          <View style={styles.topActions}>
+            {!hasActiveRide && (
+              <TouchableOpacity
+                style={styles.calendarBtn}
+                onPress={() => setScheduledVisible(true)}
+              >
+                <Ionicons name="calendar-outline" size={20} color={colors.accentPurple} />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
-              style={styles.calendarBtn}
-              onPress={() => setScheduledVisible(true)}
+              style={styles.inboxBtn}
+              onPress={() => setInboxVisible(true)}
             >
-              <Ionicons name="calendar-outline" size={20} color={colors.accentPurple} />
+              <Ionicons name="mail-outline" size={19} color={colors.accentBlue} />
+              {inboxUnreadCount > 0 && (
+                <View style={styles.inboxBadge}>
+                  <Text style={styles.inboxBadgeText}>
+                    {inboxUnreadCount > 9 ? "9+" : inboxUnreadCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.inboxBtn}
-            onPress={() => setInboxVisible(true)}
-          >
-            <Ionicons name="mail-outline" size={19} color={colors.accentBlue} />
-            {inboxUnreadCount > 0 && (
-              <View style={styles.inboxBadge}>
-                <Text style={styles.inboxBadgeText}>
-                  {inboxUnreadCount > 9 ? "9+" : inboxUnreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarBtn}
-            onPress={() => setMenuVisible(true)}
-          >
-            {profile?.avatar_url ? (
-              <Image
-                source={{ uri: profile.avatar_url }}
-                style={styles.topAvatar}
-              />
-            ) : (
-              <View style={styles.topAvatarFallback}>
-                <Text style={styles.topAvatarInitials}>
-                  {profile?.name
-                    ? profile.name
-                        .split(" ")
-                        .map((n) => n[0])
-                        .join("")
-                        .slice(0, 2)
-                        .toUpperCase()
-                    : "?"}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.avatarBtn}
+              onPress={() => setMenuVisible(true)}
+            >
+              {profile?.avatar_url ? (
+                <Image
+                  source={{ uri: profile.avatar_url }}
+                  style={styles.topAvatar}
+                />
+              ) : (
+                <View style={styles.topAvatarFallback}>
+                  <Text style={styles.topAvatarInitials}>
+                    {profile?.name
+                      ? profile.name
+                          .split(" ")
+                          .map((n) => n[0])
+                          .join("")
+                          .slice(0, 2)
+                          .toUpperCase()
+                      : "?"}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
 
-      {!hasActiveRide && activeDrivers.length > 0 && (
-        <View style={styles.driversPill}>
-          <Animated.View
-            style={[
-              styles.driversPillDot,
-              {
-                transform: [
-                  {
-                    scale: driversPulse.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [1, 1.5],
-                    }),
-                  },
-                ],
-                opacity: driversPulse.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 0.5],
-                }),
-              },
-            ]}
-          />
-          <Text style={styles.driversPillText}>
-            {activeDrivers.length} driver{activeDrivers.length > 1 ? "s" : ""}{" "}
-            available
-          </Text>
-        </View>
-      )}
+        {!hasActiveRide && activeDrivers.length > 0 && (
+          <View style={styles.driversPill}>
+            <Animated.View
+              style={[
+                styles.driversPillDot,
+                {
+                  transform: [
+                    {
+                      scale: driversPulse.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 1.5],
+                      }),
+                    },
+                  ],
+                  opacity: driversPulse.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 0.5],
+                  }),
+                },
+              ]}
+            />
+            <Text style={styles.driversPillText}>
+              {activeDrivers.length} driver{activeDrivers.length > 1 ? "s" : ""}{" "}
+              available
+            </Text>
+          </View>
+        )}
+      </View>
 
       {userLocation && (
         <TouchableOpacity
@@ -2042,11 +2044,13 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     map: { flex: 1 },
-    topBar: {
+    headerWrap: {
       position: "absolute",
       top: 0,
       left: 0,
       right: 0,
+    },
+    topBar: {
       flexDirection: "row",
       alignItems: "center",
       paddingTop: Platform.OS === "ios" ? 56 : 40,
@@ -2121,9 +2125,9 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
     },
     inboxBadgeText: { fontSize: 9, fontWeight: "700", color: "#fff" },
     driversPill: {
-      position: "absolute",
-      top: Platform.OS === "ios" ? 116 : 100,
-      left: 20,
+      alignSelf: "flex-start",
+      marginLeft: 20,
+      marginTop: 10,
       flexDirection: "row",
       alignItems: "center",
       gap: 7,
