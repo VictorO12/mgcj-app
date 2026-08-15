@@ -10,7 +10,7 @@
 // Cron: */10 * * * * (register in Supabase dashboard pg_cron)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
-import { isDriverLive } from '../_shared/presence.ts'
+import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -90,7 +90,7 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
   if (!ride.company_id) return 'uncovered'
 
   let q = supabase.from('drivers')
-    .select('id, is_active, last_seen_at')
+    .select(DISPATCHABLE_COLUMNS)
     .eq('company_id', ride.company_id)
 
   if (ride.vehicle_class_id) {
@@ -99,14 +99,16 @@ async function computeCoverage(ride: any): Promise<'uncovered' | 'at_risk' | 'co
 
   const { data: roster } = await q
   const totalCount  = roster?.length ?? 0
-  const activeCount = (roster ?? []).filter((d: any) => isDriverLive(d)).length
+  // Dispatchable, not merely live — must match assign-ride's eligibility or the
+  // dashboard reads 'covered' while assign-ride finds nobody to offer.
+  const activeCount = (roster ?? []).filter((d: any) => isDriverDispatchable(d)).length
 
   if (totalCount === 0) return 'uncovered'
 
   if (ride.preferred_driver_exclusive && ride.preferred_driver_id) {
     const { data: prefD } = await supabase.from('drivers')
-      .select('is_active, last_seen_at').eq('id', ride.preferred_driver_id).maybeSingle()
-    return prefD && isDriverLive(prefD) ? 'covered' : 'at_risk'
+      .select(DISPATCHABLE_COLUMNS).eq('id', ride.preferred_driver_id).maybeSingle()
+    return prefD && isDriverDispatchable(prefD) ? 'covered' : 'at_risk'
   }
 
   return activeCount > 0 ? 'covered' : 'at_risk'

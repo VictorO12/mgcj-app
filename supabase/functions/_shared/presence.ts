@@ -39,3 +39,30 @@ export function isDriverLive(
   if (d.last_seen_at == null) return true; // transitional: unknown ≠ stale (see header)
   return new Date(d.last_seen_at).getTime() >= now.getTime() - PRESENCE_STALE_MS;
 }
+
+// ── Dispatchability = liveness + reachability ────────────────────────────────
+// A ride offer IS a push notification, so a driver with no push_token can never
+// be told a ride exists: assign-ride filters them out (`.not('push_token','is',
+// null)`), and offering one would just park the ride until reassign-stale-rides
+// cycles it 60s later.
+//
+// Coverage math must use the SAME definition as dispatch, or the two disagree in
+// the dangerous direction: the dashboard reads `covered` for a shift where
+// nobody is actually reachable, while assign-ride quietly returns `no_drivers`.
+// Both signals then fail toward false confidence. Coverage answers "can this
+// ride be served?", and a driver who cannot receive an offer is not capacity.
+//
+// Note this is about *reachable* capacity, not roster size. Sites that ask "does
+// this company employ any driver of this class at all" (the uncovered-vs-at_risk
+// distinction) should keep counting the raw roster — a company whose drivers are
+// all offline is at_risk, not structurally uncovered.
+
+export const DISPATCHABLE_COLUMNS = 'id, is_active, last_seen_at, push_token';
+
+export function isDriverDispatchable(
+  d: { is_active?: boolean | null; last_seen_at?: string | null; push_token?: string | null },
+  now: Date = new Date(),
+): boolean {
+  if (!isDriverLive(d, now)) return false;
+  return d.push_token != null && d.push_token !== '';
+}

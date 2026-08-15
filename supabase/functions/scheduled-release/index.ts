@@ -6,7 +6,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { computeAuthoritativeFare } from '../_shared/fare.ts'
-import { livenessOrFilter, isDriverLive } from '../_shared/presence.ts'
+import { livenessOrFilter, isDriverDispatchable } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -169,6 +169,10 @@ async function releaseRide(ride: any, now: Date) {
     .eq('is_active', true)
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
+    // A driver with no push_token can't be sent an offer — same filter
+    // assign-ride applies, so the pool this releases into matches the pool
+    // that will actually be dispatched from.
+    .not('push_token', 'is', null)
     .or(livenessOrFilter()) // exclude phantoms: online flag set but heartbeat stale
 
   if (ride.vehicle_class_id) {
@@ -484,11 +488,13 @@ async function markAtRiskAndAlert(ride: any, reason: string) {
 // ── Check if a driver is viable for this ride ─────────────────
 async function isDriverViable(driverId: string, ride: any): Promise<boolean> {
   const { data: driver } = await supabase.from('drivers')
-    .select('id, is_active, last_seen_at, company_id, vehicle_class_id')
+    .select('id, is_active, last_seen_at, push_token, company_id, vehicle_class_id')
     .eq('id', driverId)
     .maybeSingle()
 
-  if (!driver || !isDriverLive(driver)) return false
+  // Dispatchable, not merely live: an offer is a push, so an unreachable
+  // driver is not a viable target for one.
+  if (!driver || !isDriverDispatchable(driver)) return false
   if (driver.company_id !== ride.company_id) return false
   if (ride.vehicle_class_id && driver.vehicle_class_id !== null && driver.vehicle_class_id !== ride.vehicle_class_id) return false
 

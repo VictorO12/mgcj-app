@@ -10,6 +10,7 @@ import {
   FlatList,
   Dimensions,
   Image,
+  Linking,
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import AnimatedMarker from "../../components/AnimatedMarker";
@@ -18,7 +19,7 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
-import { useNotifications } from "../../hooks/useNotifications";
+import { useNotifications, registerPushToken } from "../../hooks/useNotifications";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
@@ -313,6 +314,32 @@ export default function DriverHomeScreen({
     }
     setTogglingOnline(true);
     const goingOnline = !isOnline;
+
+    // Going online requires a working push token. A ride offer IS a push, and
+    // assign-ride filters out drivers with a null push_token — so without one
+    // the driver would show "Online", sit all shift, and never be offered a
+    // single ride, with nothing on any screen explaining why. Better to refuse
+    // the toggle honestly than to display a green status that isn't true.
+    if (goingOnline) {
+      const { token, reason } = await registerPushToken(profile);
+      if (!token) {
+        setTogglingOnline(false);
+        Alert.alert(
+          "Notifications required",
+          reason === "denied"
+            ? "Ride offers arrive as notifications, so we can't send you rides without them. Turn on notifications for this app, then try going online again."
+            : "We couldn't set up ride notifications on this device. Ride offers arrive as notifications, so you can't be sent rides until this is working. Contact dispatch if it keeps happening.",
+          reason === "denied"
+            ? [
+                { text: "Not now", style: "cancel" },
+                { text: "Open settings", onPress: () => Linking.openSettings() },
+              ]
+            : [{ text: "OK" }],
+        );
+        return;
+      }
+    }
+
     const update: any = { is_active: goingOnline };
     if (goingOnline && location) {
       update.current_lat = location.latitude;

@@ -8,7 +8,7 @@
 // Advance driver claim-solicitation is removed — that path is gone.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
-import { isDriverLive } from '../_shared/presence.ts'
+import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
 
     let driversQuery = supabase
       .from('drivers')
-      .select('id, is_active, last_seen_at')
+      .select(DISPATCHABLE_COLUMNS)
       .eq('company_id', ride.company_id)
 
     if (ride.vehicle_class_id) {
@@ -64,7 +64,8 @@ Deno.serve(async (req) => {
 
     const { data: roster } = await driversQuery
     const totalCount  = roster?.length ?? 0
-    const activeCount = (roster ?? []).filter((d: any) => isDriverLive(d)).length
+    // Dispatchable, not merely live — see the note in _shared/presence.ts.
+    const activeCount = (roster ?? []).filter((d: any) => isDriverDispatchable(d)).length
 
     let newCoverage: 'uncovered' | 'at_risk' | 'covered'
     if (totalCount === 0) {
@@ -72,8 +73,8 @@ Deno.serve(async (req) => {
     } else if (ride.preferred_driver_exclusive && ride.preferred_driver_id) {
       // Exclusive: coverage is entirely determined by that one driver's status
       const { data: prefD } = await supabase.from('drivers')
-        .select('is_active, last_seen_at').eq('id', ride.preferred_driver_id).maybeSingle()
-      newCoverage = prefD && isDriverLive(prefD) ? 'covered' : 'at_risk'
+        .select(DISPATCHABLE_COLUMNS).eq('id', ride.preferred_driver_id).maybeSingle()
+      newCoverage = prefD && isDriverDispatchable(prefD) ? 'covered' : 'at_risk'
     } else if (activeCount === 0) {
       newCoverage = 'at_risk'
     } else {
