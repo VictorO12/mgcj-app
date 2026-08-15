@@ -28,6 +28,14 @@ const POOL_SLICE_K        = 3   // Kth-nearest driver for churn slack
 const CHURN_BUFFER_MINS   = 8   // runway for decline / no-ack cycles
 const ARRIVAL_BUFFER_MINS = 3   // driver arrives slightly before pickup time
 
+// §11: soft driver claims (Available board). A claim sets preferred_driver_id
+// but NOT driver_id — see migration 20260743_soft_scheduled_claims.sql.
+const CLAIM_SLACK_MINS     = 5        // extra release lead for a claimed ride, so a fall-through to the pool still has runway
+const CLAIM_CHECKIN_MINS   = 60       // "still good?" ping lead time; only an explicit no acts on the ride
+const CLAIM_CHECKIN_FLOOR_MINS = 30   // don't ping if release is already imminent — the offer itself is the better prompt
+const CLAIM_HOLD_MARGIN_MINS = 3      // hysteresis on the hold test, so ETA noise can't flip hold/release tick to tick
+const CLAIM_HOLD_SLIP_MS   = 60_000   // projected free-time growing by more than this between ticks = falling behind, not converging
+
 // §10: cost controls — bound Distance Matrix usage regardless of company driver count.
 // Without these, every 2-min tick DM-queries the *entire* active roster for every
 // ride still in its 75-min window, which scales with company size, not with the
@@ -124,6 +132,9 @@ Deno.serve(async () => {
 async function releaseRide(ride: any, now: Date) {
   const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
 
+  // §11.3: pre-release check-in for a soft-claimed ride.
+  if (ride.claimed_at) await sendClaimCheckin(ride, minsUntil)
+
   // §9.1: Ensure PaymentIntent for card rides before release.
   //
   // Gated on payment_check_status, NOT payment_status. The old gate was
@@ -208,11 +219,18 @@ async function releaseRide(ride: any, now: Date) {
   // §10: cheap Haversine-only gate before spending a real DM call.
   // Only applies to the pool path — a preferred-driver DM call is a single
   // origin (1 element), too cheap to bother gating.
-  if (!ride.preferred_driver_id) {
+  // A soft claim is pool-timed (§11.1): the claimant is non-binding, so the ride
+  // should be released when the FLEET says it's time, not when the claimant does.
+  // The old preferred-driver timing would hand a claimed ride to the pool up to
+  // 75 min early merely because the claimant hadn't started their shift yet.
+  if (!ride.preferred_driver_id || ride.claimed_at) {
     const kthKm = availableDrivers
       .map((d: any) => distanceKm(d.current_lat, d.current_lng, ride.pickup_lat, ride.pickup_lng))
       .sort((a: number, b: number) => a - b)[Math.min(POOL_SLICE_K, availableDrivers.length) - 1]
-    const estimatedThreshold = clamp((kthKm / AVG_SPEED_KMH) * 60 + CHURN_BUFFER_MINS, MIN_LEAD_MINS, MAX_LEAD_MINS)
+    const estimatedThreshold = clamp(
+      (kthKm / AVG_SPEED_KMH) * 60 + CHURN_BUFFER_MINS + (ride.claimed_at ? CLAIM_SLACK_MINS : 0),
+      MIN_LEAD_MINS, MAX_LEAD_MINS
+    )
 
     if (minsUntil > estimatedThreshold + DM_CALL_MARGIN_MINS && minsUntil > MIN_LEAD_MINS) {
       console.log(
@@ -241,7 +259,7 @@ async function computeReleaseThreshold(
   availableDrivers: any[]
 ): Promise<{ threshold: number; targetDriveMins: number | null }> {
 
-  if (ride.preferred_driver_id) {
+  if (ride.preferred_driver_id && !ride.claimed_at) {
     // Time off preferred driver's location regardless of viability.
     // Exclusive + not viable still gets offered to preferred — timing still uses their drive time.
     const { data: prefDriver } = await supabase
@@ -284,7 +302,10 @@ async function computeReleaseThreshold(
   const kthIdx  = Math.min(POOL_SLICE_K, sorted.length) - 1
   const kthMins = sorted[kthIdx] / 60
   return {
-    threshold: clamp(kthMins + CHURN_BUFFER_MINS, MIN_LEAD_MINS, MAX_LEAD_MINS),
+    threshold: clamp(
+      kthMins + CHURN_BUFFER_MINS + (ride.claimed_at ? CLAIM_SLACK_MINS : 0),
+      MIN_LEAD_MINS, MAX_LEAD_MINS
+    ),
     targetDriveMins: kthMins,
   }
 }
@@ -337,6 +358,13 @@ async function executeRelease(ride: any, targetDriveMins: number | null) {
 
   if (!ride.preferred_driver_id) {
     await releaseToPool(ride)
+    return
+  }
+
+  // §11.2: a soft claim is re-confirmed here, and may be held briefly for a
+  // claimant who is mid-ride but will clear in time.
+  if (ride.claimed_at) {
+    await releaseClaimedRide(ride, targetDriveMins)
     return
   }
 
@@ -417,7 +445,12 @@ async function releaseToPool(ride: any) {
 }
 
 // ── Preferred direct-offer: flip to offered, stamp leave_by ──
-async function releaseToPreferred(ride: any, viable: boolean, targetDriveMins: number | null) {
+async function releaseToPreferred(
+  ride: any,
+  viable: boolean,
+  targetDriveMins: number | null,
+  source: 'preferred' | 'driver_claim' = 'preferred',
+) {
   const now = new Date().toISOString()
 
   // Conservative 15-min fallback when DM was unavailable
@@ -432,7 +465,7 @@ async function releaseToPreferred(ride: any, viable: boolean, targetDriveMins: n
       status:            'offered',
       driver_id:         ride.preferred_driver_id,
       offered_at:        now,
-      assignment_source: 'preferred',
+      assignment_source: source,
       leave_by:          leaveBy,
       pickup_eta_mins:   Math.round(effectiveDriveMins),
     })
@@ -477,6 +510,197 @@ async function releaseToPreferred(ride: any, viable: boolean, targetDriveMins: n
       }
     )
   }
+}
+
+// ── §11.2: claimed-ride release ───────────────────────────────
+// Runs at the pool-computed threshold. Three outcomes:
+//   viable      → offer it to the claimant, exactly like a soft preference
+//   busy, clears→ HOLD: stay 'scheduled' and re-decide on the next 2-min tick
+//   otherwise   → hand it to the pool and tell the claimant it's gone
+async function releaseClaimedRide(ride: any, poolDriveMins: number | null) {
+  const now       = new Date()
+  const minsUntil = (new Date(ride.scheduled_at).getTime() - now.getTime()) / 60_000
+
+  const verdict = await evaluateClaimant(ride.preferred_driver_id, ride)
+
+  // Nothing to time — the claim is over. Checked before spending the DM element.
+  if (verdict.state === 'unavailable') {
+    await dropClaimToPool(ride, 'unavailable')
+    return
+  }
+
+  // leave_by has to be timed off the CLAIMANT, not the pool's Kth-nearest driver
+  // whose position set the release threshold — otherwise the hold deadline below
+  // is measured against a stranger's drive time. One DM origin = 1 element.
+  const claimantDriveMins = await getClaimantDriveMins(ride) ?? poolDriveMins ?? 15
+  const leaveBy = new Date(
+    new Date(ride.scheduled_at).getTime() - (claimantDriveMins + ARRIVAL_BUFFER_MINS) * 60_000
+  )
+
+  if (verdict.state === 'viable') {
+    await releaseToPreferred(ride, true, claimantDriveMins, 'driver_claim')
+    return
+  }
+
+  if (verdict.state === 'busy' && verdict.freeAt && minsUntil > MIN_LEAD_MINS) {
+    // Holding is not free — it blocks the pool release, so every hold spends
+    // runway the fallback might need. Two ways out: the projection says they
+    // won't clear in time, or it says they keep slipping.
+    const clearsInTime =
+      verdict.freeAt.getTime() + CLAIM_HOLD_MARGIN_MINS * 60_000 <= leaveBy.getTime()
+    const prevProjection = ride.claim_hold_projected_free_at
+      ? new Date(ride.claim_hold_projected_free_at).getTime()
+      : null
+    const slipping =
+      prevProjection !== null && verdict.freeAt.getTime() > prevProjection + CLAIM_HOLD_SLIP_MS
+
+    if (clearsInTime && !slipping) {
+      await supabase.from('rides')
+        .update({ claim_hold_projected_free_at: verdict.freeAt.toISOString() })
+        .eq('id', ride.id)
+      console.log(
+        `[ride ${ride.id}] claimant mid-ride, projected free ${verdict.freeAt.toISOString()} ` +
+        `<= leave_by ${leaveBy.toISOString()} — holding`
+      )
+      return
+    }
+    console.log(
+      `[ride ${ride.id}] claimant hold ended (${slipping ? 'ETA slipping' : 'will not clear in time'})`
+    )
+  }
+
+  // Only the busy branch reaches here — 'unavailable' returned above.
+  await dropClaimToPool(ride, 'busy')
+}
+
+// Clear the claim, tell the claimant, then release exactly as if it had never
+// been claimed. Order matters: the claim is cleared BEFORE the pool release so
+// nothing downstream reads a claim that no longer holds.
+async function dropClaimToPool(ride: any, reason: 'busy' | 'unavailable') {
+  const claimantId = ride.preferred_driver_id
+
+  await supabase.from('rides')
+    .update({
+      preferred_driver_id:          null,
+      claimed_at:                   null,
+      claim_checkin_at:             null,
+      claim_hold_projected_free_at: null,
+    })
+    .eq('id', ride.id)
+
+  // Losing a planned ride silently is the failure mode that kills trust in the
+  // board — this push is driver-facing, so the no-admin-push rule doesn't apply.
+  const { data: driver } = await supabase.from('drivers')
+    .select('push_token').eq('id', claimantId).maybeSingle()
+  if (driver?.push_token) {
+    const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
+      weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+    })
+    await sendPush(
+      driver.push_token,
+      'Your planned ride went to the pool',
+      reason === 'busy'
+        ? `You're still on a trip, so the ${when} pickup at ${ride.pickup_address} was offered to other drivers.`
+        : `The ${when} pickup at ${ride.pickup_address} was offered to other drivers.`,
+      { rideId: ride.id, type: 'claim_released', reason }
+    )
+  }
+
+  console.log(`[ride ${ride.id}] claim dropped (${reason}) — releasing to pool`)
+  ride.preferred_driver_id = null
+  await releaseToPool(ride)
+}
+
+// Drive time from the claimant's current position to pickup. Null when they have
+// no location (offline) or DM fails — callers fall back to the pool estimate.
+async function getClaimantDriveMins(ride: any): Promise<number | null> {
+  const { data: d } = await supabase.from('drivers')
+    .select('current_lat, current_lng').eq('id', ride.preferred_driver_id).maybeSingle()
+  if (!d?.current_lat || !d?.current_lng) return null
+  const times = await getDriveTimes(
+    [{ lat: d.current_lat, lng: d.current_lng, id: ride.preferred_driver_id }],
+    ride.pickup_lat, ride.pickup_lng
+  )
+  const secs = times.get(ride.preferred_driver_id)
+  return secs === undefined ? null : secs / 60
+}
+
+type ClaimVerdict =
+  | { state: 'viable' }
+  | { state: 'busy'; freeAt: Date | null }
+  | { state: 'unavailable' }
+
+// Like isDriverViable, but distinguishes "busy right now" from "can't take it at
+// all" — a claimed ride is worth holding for the first and not the second.
+async function evaluateClaimant(driverId: string, ride: any): Promise<ClaimVerdict> {
+  const { data: driver } = await supabase.from('drivers')
+    .select('id, is_active, last_seen_at, push_token, company_id, vehicle_class_id, active_ride_eta_seconds')
+    .eq('id', driverId)
+    .maybeSingle()
+
+  if (!driver || !isDriverDispatchable(driver)) return { state: 'unavailable' }
+  if (driver.company_id !== ride.company_id) return { state: 'unavailable' }
+  if (ride.vehicle_class_id && driver.vehicle_class_id !== null && driver.vehicle_class_id !== ride.vehicle_class_id) {
+    return { state: 'unavailable' }
+  }
+
+  const { data: busyRides } = await supabase.from('rides')
+    .select('id, status')
+    .eq('driver_id', driverId)
+    .in('status', ['assigned', 'driver_arriving', 'in_progress'])
+    .neq('id', ride.id)
+
+  if (!busyRides || busyRides.length === 0) return { state: 'viable' }
+
+  // Hold ONLY for a trip whose end we can actually bound: status 'in_progress'
+  // with a live ETA. drivers.active_ride_eta_seconds is ETA to the CURRENT
+  // TARGET, so during 'driver_arriving' it points at a pickup, not a dropoff —
+  // reading it as free-time there would undercount by the whole unstarted trip.
+  // It is also null whenever DriverActiveRideScreen isn't mounted, so null means
+  // unknown, never free. Both cases fall through to freeAt: null = don't hold.
+  const soleInProgress =
+    busyRides.length === 1 &&
+    busyRides[0].status === 'in_progress' &&
+    driver.active_ride_eta_seconds != null
+
+  return {
+    state:  'busy',
+    freeAt: soleInProgress
+      ? new Date(Date.now() + driver.active_ride_eta_seconds * 1000)
+      : null,
+  }
+}
+
+// ── §11.3: pre-release check-in ───────────────────────────────
+// Asymmetric on purpose: this push carries no accept action and no deadline. A
+// "can't make it" tap releases the claim (claim-scheduled-ride, action:release)
+// with a full hour of runway instead of the churn buffer; silence does nothing,
+// because a claimant mid-ride with the phone in a cradle is still perfectly
+// likely to take the ride, and the release-time check already covers them.
+async function sendClaimCheckin(ride: any, minsUntil: number) {
+  if (ride.claim_checkin_at) return
+  // Band, not a ceiling: pinging at T-12 when the offer lands at T-10 is noise.
+  if (minsUntil > CLAIM_CHECKIN_MINS || minsUntil < CLAIM_CHECKIN_FLOOR_MINS) return
+
+  const { data: driver } = await supabase.from('drivers')
+    .select('push_token').eq('id', ride.preferred_driver_id).maybeSingle()
+
+  if (driver?.push_token) {
+    const when = new Date(ride.scheduled_at).toLocaleString('en-CA', {
+      hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
+    })
+    await sendPush(
+      driver.push_token,
+      'Still good for your planned ride?',
+      `${when} pickup at ${ride.pickup_address}. Tap to release it if you can't make it.`,
+      { rideId: ride.id, type: 'claim_checkin' }
+    )
+  }
+
+  await supabase.from('rides')
+    .update({ claim_checkin_at: new Date().toISOString() })
+    .eq('id', ride.id)
+  console.log(`[ride ${ride.id}] claim check-in sent`)
 }
 
 // ── Mark at_risk (dashboard surfaces this via coverage_status) ─

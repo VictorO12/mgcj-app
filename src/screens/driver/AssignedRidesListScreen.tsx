@@ -25,6 +25,8 @@ interface AssignedRide {
   fare_estimate: number | null;
   scheduled_at: string | null;
   confirmed_by_driver: boolean;
+  /** Set when THIS driver soft-claimed the ride off the Available board. */
+  claimed_at?: string | null;
   passenger_name: string | null;
   passenger_phone: string | null;
 }
@@ -48,6 +50,9 @@ export default function AssignedRidesListScreen({
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [rides, setRides] = useState<AssignedRide[]>([]);
   const [openRides, setOpenRides] = useState<AssignedRide[]>([]);
+  // Soft-claimed: preferred_driver_id is me, but driver_id is still null and the
+  // ride is still in the normal release pipeline. Planned, not won.
+  const [plannedRides, setPlannedRides] = useState<AssignedRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tab, setTab] = useState<"mine" | "open">("mine");
@@ -55,6 +60,7 @@ export default function AssignedRidesListScreen({
   useEffect(() => {
     fetchAssignedRides();
     fetchOpenRides();
+    fetchPlannedRides();
   }, [profile]);
 
   // Realtime: keep this list live while it's open (cancellations,
@@ -107,6 +113,7 @@ export default function AssignedRidesListScreen({
             newRow?.company_id === profile.company_id
           ) {
             fetchOpenRides();
+            fetchPlannedRides();
           }
         },
       )
@@ -125,6 +132,11 @@ export default function AssignedRidesListScreen({
       .eq("company_id", profile.company_id)
       .eq("status", "scheduled")
       .is("driver_id", null)
+      // A ride someone has already claimed — or that dispatch has expressed a
+      // preference on — is no longer open. Note this also hides dispatch's SOFT
+      // preferences from the board, which used to be claimable: dispatch picking
+      // a driver is an intent, and a claim shouldn't quietly overwrite it.
+      .is("preferred_driver_id", null)
       .gte("scheduled_at", new Date().toISOString())
       .order("scheduled_at", { ascending: true });
 
@@ -147,33 +159,117 @@ export default function AssignedRidesListScreen({
     setOpenRides(enriched);
   }
 
+  // Planned rides: claimed by me, still unassigned, still 'scheduled'. Kept in a
+  // separate query from fetchAssignedRides because driver_id is null on these —
+  // that's the whole point of a soft claim.
+  async function fetchPlannedRides() {
+    if (!profile) return;
+
+    const graceCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from("rides")
+      .select("*")
+      .eq("preferred_driver_id", profile.id)
+      .not("claimed_at", "is", null)
+      .eq("status", "scheduled")
+      .is("driver_id", null)
+      .gte("scheduled_at", graceCutoff)
+      .order("scheduled_at", { ascending: true });
+
+    if (!data) return;
+
+    const enriched = await Promise.all(
+      data.map(async (ride) => {
+        const { data: p } = await supabase
+          .from("profiles")
+          .select("name, phone")
+          .eq("id", ride.passenger_id)
+          .maybeSingle();
+        return {
+          ...ride,
+          passenger_name: p?.name ?? null,
+          passenger_phone: p?.phone ?? null,
+        };
+      }),
+    );
+    setPlannedRides(enriched);
+  }
+
+  // A soft claim can't be a direct client write: RLS's WITH CHECK requires the
+  // updated row to have driver_id = auth.uid(), and a claim leaves it null.
+  async function callClaimFn(rideId: string, action: "claim" | "release") {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) throw new Error("Not signed in");
+    const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+    const res = await fetch(
+      `${supabaseUrl}/functions/v1/claim-scheduled-ride`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ ride_id: rideId, action }),
+      },
+    );
+    const result = await res.json();
+    if (!res.ok || result?.error) {
+      throw new Error(result?.error ?? "Something went wrong");
+    }
+    return result;
+  }
+
   async function claimOpenRide(ride: AssignedRide) {
     if (!profile) return;
     setActionLoading(ride.id);
-    const { data, error } = await supabase
-      .from("rides")
-      .update({ driver_id: profile.id, confirmed_by_driver: true })
-      .eq("id", ride.id)
-      .is("driver_id", null) // race-safe — same guard as the push-claim path
-      .eq("status", "scheduled")
-      .select("id");
-    setActionLoading(null);
-
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
-    if (!data || data.length === 0) {
-      Alert.alert("Already claimed", "Another driver already took this ride.");
+    try {
+      await callClaimFn(ride.id, "claim");
+    } catch (e: any) {
+      setActionLoading(null);
+      Alert.alert("Couldn't plan this ride", e.message);
       fetchOpenRides();
       return;
     }
+    setActionLoading(null);
 
     setOpenRides((prev) => prev.filter((r) => r.id !== ride.id));
-    fetchAssignedRides();
+    fetchPlannedRides();
+    // Deliberately NOT "Claimed!" — the claim is non-binding. Telling a driver
+    // the ride is theirs and then handing it to the pool at release is worse
+    // than never letting them plan at all.
     Alert.alert(
-      "Claimed!",
-      "Scheduled ride added to your assigned rides. You'll be notified when it's time to head to pickup.",
+      "Added to your plan 🗓",
+      "It's held for you. You'll get the ride offer to confirm shortly before pickup — if you're tied up on another trip then, it goes to the pool.",
+    );
+  }
+
+  function releasePlannedRide(ride: AssignedRide) {
+    Alert.alert(
+      "Release this ride?",
+      "It goes back to the Available board for other drivers.",
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Release",
+          style: "destructive",
+          onPress: async () => {
+            setActionLoading(ride.id + "-decline");
+            try {
+              await callClaimFn(ride.id, "release");
+            } catch (e: any) {
+              setActionLoading(null);
+              Alert.alert("Error", e.message);
+              return;
+            }
+            setActionLoading(null);
+            setPlannedRides((prev) => prev.filter((r) => r.id !== ride.id));
+            fetchOpenRides();
+          },
+        },
+      ],
     );
   }
 
@@ -366,7 +462,10 @@ export default function AssignedRidesListScreen({
           activeOpacity={0.8}
         >
           <Text style={[styles.tabBtnText, tab === "mine" && styles.tabBtnTextActive]}>
-            My rides{rides.length > 0 ? ` (${rides.length})` : ""}
+            My rides
+            {rides.length + plannedRides.length > 0
+              ? ` (${rides.length + plannedRides.length})`
+              : ""}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -384,7 +483,7 @@ export default function AssignedRidesListScreen({
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={colors.accentOrange} size="large" />
         </View>
-      ) : tab === "mine" && rides.length === 0 ? (
+      ) : tab === "mine" && rides.length === 0 && plannedRides.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Ionicons name="car-outline" size={48} color={colors.textFaint} />
           <Text style={styles.emptyTitle}>No assigned rides</Text>
@@ -457,12 +556,43 @@ export default function AssignedRidesListScreen({
             </>
           )}
 
+          {plannedRides.length > 0 && (
+            <>
+              <Text style={[styles.sectionLabel, { marginTop: 16 }]}>
+                PLANNED
+              </Text>
+              <Text style={styles.sectionSub}>
+                Held for you. You'll get the offer to confirm shortly before
+                pickup.
+              </Text>
+              {plannedRides.map((ride) => (
+                <RideCard
+                  key={ride.id}
+                  ride={ride}
+                  isImmediate={false}
+                  blocked={false}
+                  planned
+                  actionLoading={actionLoading}
+                  countdownLabel={
+                    ride.scheduled_at ? countdownLabel(ride.scheduled_at) : null
+                  }
+                  onAccept={() => {}}
+                  onDecline={() => releasePlannedRide(ride)}
+                  onCall={() =>
+                    ride.passenger_phone && callPassenger(ride.passenger_phone)
+                  }
+                />
+              ))}
+            </>
+          )}
+
           <View style={{ height: 40 }} />
         </ScrollView>
       ) : (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
           <Text style={styles.sectionSub}>
-            Nobody's claimed these yet — first to tap wins.
+            Free to plan — claiming one holds it for you, it isn't final until
+            you confirm near pickup.
           </Text>
           {openRides.map((ride) => (
             <RideCard
@@ -494,6 +624,7 @@ function RideCard({
   isImmediate,
   blocked,
   open = false,
+  planned = false,
   actionLoading,
   countdownLabel,
   onAccept,
@@ -504,6 +635,7 @@ function RideCard({
   isImmediate: boolean;
   blocked: boolean;
   open?: boolean;
+  planned?: boolean;
   actionLoading: string | null;
   countdownLabel: string | null;
   onAccept: () => void;
@@ -551,6 +683,18 @@ function RideCard({
               {isImmediate ? "Immediate" : "Scheduled"}
             </Text>
           </View>
+
+          {/* Held, not won — deliberately distinct from the Confirmed badge. */}
+          {planned && (
+            <View style={styles.plannedBadge}>
+              <Ionicons
+                name="bookmark-outline"
+                size={12}
+                color={colors.accentPurple}
+              />
+              <Text style={styles.plannedBadgeText}>Held for you</Text>
+            </View>
+          )}
 
           {/* ← Confirmed badge — only shows after driver accepts */}
           {ride.confirmed_by_driver && (
@@ -640,7 +784,8 @@ function RideCard({
             is the driver's only way to hand it back — the in-ride Release
             button lives on a screen they can't reach until pickup time. An
             open-board card has nothing assigned to give back. */}
-        {!open && (!ride.confirmed_by_driver || !!ride.scheduled_at) && (
+        {!open &&
+          (planned || !ride.confirmed_by_driver || !!ride.scheduled_at) && (
           <TouchableOpacity
             style={[styles.declineBtn, isDeclining && { opacity: 0.6 }]}
             onPress={onDecline}
@@ -651,36 +796,47 @@ function RideCard({
               <ActivityIndicator color={colors.accentRed} size="small" />
             ) : (
               <Text style={styles.declineBtnText}>
-                {ride.confirmed_by_driver ? "Release" : "Decline"}
+                {planned || ride.confirmed_by_driver ? "Release" : "Decline"}
               </Text>
             )}
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity
-          style={[
-            styles.acceptBtn,
-            ride.confirmed_by_driver && styles.acceptBtnConfirmed,
-            (blocked || isAccepting) && { opacity: 0.5 },
-          ]}
-          onPress={onAccept}
-          disabled={!!actionLoading || blocked || ride.confirmed_by_driver}
-          activeOpacity={0.85}
-        >
-          {isAccepting ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.acceptBtnText}>
-              {blocked
-                ? "Ride in progress"
-                : ride.confirmed_by_driver
-                  ? "✓ Confirmed"
-                  : open
-                    ? "Claim"
-                    : "Accept"}
-            </Text>
-          )}
-        </TouchableOpacity>
+        {planned ? (
+          <View style={styles.plannedNote}>
+            <Ionicons
+              name="time-outline"
+              size={13}
+              color={colors.textOnSurfaceLight}
+            />
+            <Text style={styles.plannedNoteText}>Confirmed near pickup</Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.acceptBtn,
+              ride.confirmed_by_driver && styles.acceptBtnConfirmed,
+              (blocked || isAccepting) && { opacity: 0.5 },
+            ]}
+            onPress={onAccept}
+            disabled={!!actionLoading || blocked || ride.confirmed_by_driver}
+            activeOpacity={0.85}
+          >
+            {isAccepting ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.acceptBtnText}>
+                {blocked
+                  ? "Ride in progress"
+                  : ride.confirmed_by_driver
+                    ? "✓ Confirmed"
+                    : open
+                      ? "Plan this ride"
+                      : "Accept"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -817,6 +973,39 @@ const makeStyles = (colors: Colors) =>
       fontSize: 11,
       fontWeight: "600",
       color: colors.accentGreen,
+    },
+    plannedBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: "rgba(168,85,247,0.12)",
+      borderRadius: 20,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+      borderWidth: 0.5,
+      borderColor: "rgba(168,85,247,0.3)",
+    },
+    plannedBadgeText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.accentPurple,
+    },
+    plannedNote: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 5,
+      paddingVertical: 11,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceAlt,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+    },
+    plannedNoteText: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.textOnSurfaceLight,
     },
     callBtn: {
       width: 32,

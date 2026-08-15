@@ -402,7 +402,22 @@ export default function DriverApp() {
 
         if (data.type === "scheduled_offer") {
           // body tap or ACCEPT both claim; DECLINE just dismisses (it wasn't theirs)
-          if (action !== "DECLINE") await claimScheduledRide(rideId);
+          if (action !== "DECLINE") await claimScheduledRide(String(rideId));
+          return;
+        }
+
+        // "Still good for your planned ride?" — asymmetric by design: there is
+        // nothing to accept here, so any tap just opens the list, where the
+        // Release button lives. Ignoring it costs the driver nothing.
+        if (data.type === "claim_checkin") {
+          setShowAssignedList(true);
+          return;
+        }
+
+        // The claim didn't convert at release and the ride went to the pool.
+        if (data.type === "claim_released") {
+          await fetchConfirmedScheduledRides();
+          setShowAssignedList(true);
           return;
         }
 
@@ -435,29 +450,42 @@ export default function DriverApp() {
     return () => sub.remove();
   }, [profile]);
 
+  // Soft claim from a push. Goes through the Edge Function for the same reason
+  // the Available board does: RLS's WITH CHECK (driver_id = auth.uid()) means the
+  // only claim a client can write is one that hard-binds the driver to the ride —
+  // which is what this replaces. Leaving driver_id null fails the check.
   async function claimScheduledRide(rideId: string) {
     if (!profile) return;
-    const { data, error } = await supabase
-      .from("rides")
-      .update({ driver_id: profile.id, confirmed_by_driver: true })
-      .eq("id", rideId)
-      .is("driver_id", null) // race-safe: only an unclaimed ride
-      .eq("status", "scheduled") // stays 'scheduled' — not active yet
-      .select("id");
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
-    if (!data || data.length === 0) {
-      Alert.alert(
-        "Already taken",
-        "Another driver claimed this scheduled ride.",
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) throw new Error("Not signed in");
+      const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+      const res = await fetch(
+        `${supabaseUrl}/functions/v1/claim-scheduled-ride`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ ride_id: rideId, action: "claim" }),
+        },
       );
+      const result = await res.json();
+      if (!res.ok || result?.error) {
+        throw new Error(result?.error ?? "Couldn't plan this ride");
+      }
+    } catch (e: any) {
+      Alert.alert("Couldn't plan this ride", e.message);
       return;
     }
+    // Held, not won — see the matching copy on the Available board.
     Alert.alert(
-      "Scheduled ride claimed 🗓",
-      "It'll go live automatically at pickup time.",
+      "Added to your plan 🗓",
+      "It's held for you. You'll get the ride offer to confirm shortly before pickup.",
     );
     fetchConfirmedScheduledRides();
   }

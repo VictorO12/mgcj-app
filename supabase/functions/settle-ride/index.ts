@@ -214,6 +214,7 @@ Deno.serve(async (req) => {
       .select(
         'id, status, passenger_id, driver_id, company_id, payment_method, payment_status, ' +
         'stripe_payment_intent_id, scheduled_at, arrived_at, pickup_lat, pickup_lng, ' +
+        'preferred_driver_id, claimed_at, ' +
         'declined_by, confirmed_by_driver'
       )
       .eq('id', ride_id)
@@ -275,10 +276,31 @@ Deno.serve(async (req) => {
         new Date(ride.scheduled_at).getTime() - Date.now() <= FUTURE_SCHEDULED_MS
       const backTo = dueNow ? 'pending' : 'scheduled'
 
+      // A ride the driver soft-claimed off the Available board carries their own
+      // preferred_driver_id. Handing it back has to drop the claim too, or the
+      // ride returns to 'scheduled' still reserved for them: scheduled-release
+      // would re-offer the ride they just released, and the Available board
+      // (which hides any ride with a preferred_driver_id) would never show it to
+      // anyone else. A DISPATCH-set preference is left alone — that's dispatch's
+      // intent to keep or change, not the driver's.
+      const wasOwnClaim = !!ride.claimed_at && ride.preferred_driver_id === userId
+
       await supabase.rpc('append_declined_by', { p_ride_id: ride.id, p_driver_id: userId })
       const { error: relError } = await supabase
         .from('rides')
-        .update({ driver_id: null, confirmed_by_driver: false, status: backTo })
+        .update({
+          driver_id: null,
+          confirmed_by_driver: false,
+          status: backTo,
+          ...(wasOwnClaim
+            ? {
+                preferred_driver_id:          null,
+                claimed_at:                   null,
+                claim_checkin_at:             null,
+                claim_hold_projected_free_at: null,
+              }
+            : {}),
+        })
         .eq('id', ride.id)
         .eq('driver_id', userId)          // optimistic lock: lost the race, no-op
       if (relError) return json({ error: relError.message }, 500)
