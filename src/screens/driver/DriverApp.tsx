@@ -105,8 +105,9 @@ export default function DriverApp() {
   >([]);
   // Ride id the driver has tapped "On My Way" for — moves a scheduled ride
   // from the home-screen countdown card to the active-ride screen without
-  // touching `status` (see handleStartRide). Local/session-only by design:
-  // if the app restarts, the driver just sees the countdown card again.
+  // touching `status` (see handleStartRide). Mirrored to `rides.en_route_at`
+  // so the passenger app and dispatch dashboard can see the ride is live
+  // early, and so it survives an app restart (re-seeded in fetchActiveRide).
   const [startedScheduledRideId, setStartedScheduledRideId] = useState<
     string | null
   >(null);
@@ -581,6 +582,9 @@ export default function DriverApp() {
       return;
     }
     const ride = rides[0];
+    // Re-seed the "On My Way" state after an app restart so the driver lands
+    // back on the active-ride screen rather than the countdown card.
+    if (ride.en_route_at) setStartedScheduledRideId(ride.id);
     const { data: passenger } = await supabase
       .from("profiles")
       .select("name, phone, avatar_url")
@@ -737,9 +741,34 @@ export default function DriverApp() {
   // label) and would falsely tell the passenger the driver is already
   // there while also skipping the driver's real "I've arrived" step and
   // its turn-by-turn nav to the pickup.
-  function handleStartRide() {
+  async function handleStartRide() {
     if (!activeRide) return;
     setStartedScheduledRideId(activeRide.id);
+    // Publish the departure so the passenger's tracking sheet opens and the
+    // ride moves from Scheduled to Active on the dashboard. Timestamp only —
+    // `status` is untouched, so notify-passenger (which fires on a status
+    // change or confirm) stays quiet and no premature "driver has arrived"
+    // push goes out. Best-effort: local state already switched the screen, so
+    // a failed write must not block the driver from driving.
+    const rideId = activeRide.id;
+    const { data, error } = await supabase
+      .from("rides")
+      .update({ en_route_at: new Date().toISOString() })
+      .eq("id", rideId)
+      .eq("driver_id", profile?.id ?? "")
+      .is("en_route_at", null)
+      // .select() so we can tell a no-op apart from a success: a write filtered
+      // out by RLS comes back with zero rows and error === null, so checking
+      // `error` alone would miss the most likely failure.
+      .select("id");
+    if (error) {
+      console.error("[handleStartRide] en_route_at write failed:", error);
+    } else if (!data || data.length === 0) {
+      // Either already stamped (driver re-tapped, or resumed after a restart)
+      // or the row was filtered out. Harmless in the first case; log so the
+      // second isn't invisible.
+      console.log("[handleStartRide] en_route_at not written for", rideId);
+    }
   }
 
   if (loadingDriver) return null;

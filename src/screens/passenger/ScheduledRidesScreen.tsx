@@ -101,7 +101,12 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
       .eq("passenger_id", profile.id)
       .not("scheduled_at", "is", null)
       .gte("scheduled_at", now)
-      .in("status", ["pending", "assigned", "scheduled", "driver_arriving"])
+      // "Upcoming" means not yet live. A driver who has departed early (or
+      // already reached the pickup) is surfaced by the active-ride tracking
+      // sheet instead, so those rides drop off this list rather than showing
+      // in both places.
+      .in("status", ["pending", "assigned", "scheduled"])
+      .is("en_route_at", null)
       .order("scheduled_at", { ascending: true });
 
     if (error || !data) {

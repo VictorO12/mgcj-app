@@ -30,8 +30,15 @@ export interface ActiveRide {
 
 const ACTIVE_STATUSES = ['pending', 'offered', 'assigned', 'driver_arriving', 'in_progress']
 
+// A scheduled ride becomes the passenger's *active* ride once the driver is
+// actually working it — not at its scheduled_at. Drivers head out early (they
+// tap "On my way", stamping en_route_at) and can reach the pickup before the
+// booked time, so gating purely on the clock left the passenger with no
+// tracking sheet while their driver was literally outside.
 function isRideNow(row: any): boolean {
   if (!row.scheduled_at) return true
+  if (row.en_route_at) return true
+  if (row.status === 'driver_arriving' || row.status === 'in_progress') return true
   return new Date(row.scheduled_at) <= new Date()
 }
 
@@ -90,14 +97,18 @@ export function useActiveRide(passengerId: string | undefined) {
           // Clear after 3s — plenty of time for the useEffect in
           // PassengerHomeScreen to fire and set reviewTarget
           setTimeout(() => setRide(null), 3000)
-        } else {
-          // cancelled
+        } else if (row.status === 'cancelled') {
           setRide(null)
           setEta(null)
           if (row.cancelled_reason === 'timeout') {
             setCancelledReason('timeout')
           }
         }
+        // Any other status ('scheduled', in particular) is deliberately a
+        // no-op. This used to fall into the cancelled branch and null out the
+        // ride — so a background write like scheduled-coverage-monitor's
+        // 10-minute coverage_status refresh would silently wipe the
+        // passenger's tracking sheet, even for a different ride.
       })
       .subscribe((status) => {
         console.log('[Realtime] rides channel:', status)
@@ -173,20 +184,22 @@ export function useActiveRide(passengerId: string | undefined) {
 
   // ── Fetch active ride ───────────────────────────────────────
   async function fetchActiveRide(pid: string) {
-    const now = new Date().toISOString()
-
+    // Liveness is decided in JS by the same isRideNow() the realtime handler
+    // uses, rather than by a PostgREST .or() filter — one predicate, no way for
+    // the two paths to drift, and no logic-tree string that can silently 400
+    // and leave the passenger with no tracking sheet at all. Fetching a few
+    // rows so a not-yet-live scheduled ride can't crowd out a live one.
     const { data: rides, error } = await supabase
       .from('rides')
       .select('*')
       .eq('passenger_id', pid)
       .in('status', ACTIVE_STATUSES)
-      .or(`scheduled_at.is.null,scheduled_at.lte.${now}`)
       .order('created_at', { ascending: false })
-      .limit(1);
+      .limit(5);
     if (error) { console.error('[fetchActiveRide] error:', error); return }
-    if (!rides || rides.length === 0) { setRide(null); return }
 
-    const rideRow = rides[0]
+    const rideRow = rides?.find(isRideNow)
+    if (!rideRow) { setRide(null); return }
     let driver: Driver | null = null
     let driverEtaSeconds: number | null = null
 
