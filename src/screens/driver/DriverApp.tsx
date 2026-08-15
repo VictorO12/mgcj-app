@@ -105,6 +105,11 @@ export default function DriverApp() {
   // — setShowAssignedList(true) is a no-op when it's already true, so without
   // this a digest tap on an open list would silently leave them on "mine".
   const [assignedListTabSignal, setAssignedListTabSignal] = useState(0);
+  // Unclaimed scheduled rides this driver's company has open. Surfaced on the
+  // home screen so the board is discoverable without a push — the digest is a
+  // rare nudge by design, so the always-correct signal has to be visible where
+  // the driver already is, not buried one screen deep.
+  const [openRideCount, setOpenRideCount] = useState(0);
   // Bumped by the notification-tap handler below to tell DriverHomeScreen to
   // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
@@ -212,6 +217,26 @@ export default function DriverApp() {
     }
   }
 
+  // Count only — the list screen owns the detail. Mirrors the board's own
+  // predicates (unassigned, unclaimed, no dispatch preference, still upcoming)
+  // so the number can't disagree with what the Available tab shows.
+  async function fetchOpenRideCount() {
+    if (!profile?.company_id) return;
+    const { count } = await supabase
+      .from("rides")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", profile.company_id)
+      .eq("status", "scheduled")
+      .is("driver_id", null)
+      .is("preferred_driver_id", null)
+      .gte("scheduled_at", new Date().toISOString());
+    setOpenRideCount(count ?? 0);
+  }
+
+  useEffect(() => {
+    fetchOpenRideCount();
+  }, [profile]);
+
   // ── Realtime: watch for ride changes on this driver ──────────
   useEffect(() => {
     if (!profile) return;
@@ -241,6 +266,11 @@ export default function DriverApp() {
           }
 
           const row = payload.new as any;
+
+          // Any company ride change can open or close a claimable slot, and an
+          // open ride has driver_id null — so this has to run before the
+          // own-driver filter below, not after it.
+          fetchOpenRideCount();
 
           if (row.driver_id !== profile.id) return;
 
@@ -836,6 +866,13 @@ export default function DriverApp() {
         assignedRide={assignedRide}
         onOpenAssigned={() => {
           setAssignedListTab("mine");
+          setAssignedListTabSignal((n) => n + 1);
+          setShowAssignedList(true);
+        }}
+        openRideCount={openRideCount}
+        onOpenAvailable={() => {
+          setAssignedListTab("open");
+          setAssignedListTabSignal((n) => n + 1);
           setShowAssignedList(true);
         }}
         confirmedScheduledRides={confirmedScheduledRides}

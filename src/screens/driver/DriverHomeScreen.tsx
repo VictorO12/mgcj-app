@@ -119,6 +119,9 @@ interface Props {
   openChatSignal?: number;
   activeScheduledRide?: ActiveScheduledRide | null;
   onStartRide?: () => void;
+  /** Unclaimed scheduled rides open to this driver's company. */
+  openRideCount?: number;
+  onOpenAvailable?: () => void;
 }
 
 const VALLEY_REGION = {
@@ -137,6 +140,8 @@ export default function DriverHomeScreen({
   openChatSignal,
   activeScheduledRide,
   onStartRide,
+  openRideCount = 0,
+  onOpenAvailable,
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
@@ -509,6 +514,32 @@ export default function DriverHomeScreen({
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Claimable work on the Available board. The digest push is deliberately
+          rare (once per ride, rate-limited), so this is the always-correct
+          channel: realtime, and visible without opening anything. */}
+      {openRideCount > 0 && onOpenAvailable && (
+        <TouchableOpacity
+          style={styles.openRidesBanner}
+          onPress={onOpenAvailable}
+          activeOpacity={0.85}
+        >
+          <Ionicons
+            name="calendar-outline"
+            size={18}
+            color={colors.accentPurpleTextStrong}
+          />
+          <Text style={styles.openRidesBannerText}>
+            {openRideCount} scheduled {openRideCount === 1 ? "ride" : "rides"}{" "}
+            available to claim
+          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color={colors.accentPurpleTextStrong}
+          />
+        </TouchableOpacity>
+      )}
 
       {/* Assigned ride banner — dispatch-assigned rides only */}
       {hasAssignedRide && (
@@ -1012,7 +1043,26 @@ const makeStyles = (colors: Colors) =>
       borderColor: colors.background,
     },
     badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
-    assignedBanner: {
+    openRidesBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.accentPurple,
+  },
+  openRidesBannerText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.accentPurpleTextStrong,
+  },
+  assignedBanner: {
       position: "absolute",
       top: Platform.OS === "ios" ? 160 : 146,
       left: 16,

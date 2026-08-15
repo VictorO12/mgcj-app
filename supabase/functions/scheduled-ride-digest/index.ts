@@ -1,26 +1,36 @@
-// Daily "here's tomorrow's open work" digest for drivers.
+// Tells a driver, at most once per ride, that new scheduled work they can claim
+// has appeared on the Available board.
 //
-// This is the push half of the soft-claim Available board. The in-app half
-// already works (the board is live via realtime), but a driver only sees it if
-// they happen to open the app — so rides sat unclaimed until scheduled-release
-// pushed them out at T-75-to-10, which is far too late to plan a day around.
+// ── Why there is no time of day in this function ────────────────────────────
+// The first cut of this fired once daily at 6pm and reported "what's open for
+// tomorrow". Both halves were wrong for the customers this is built for: taxi
+// companies run 24 hours, so there is no company-wide evening, and "tomorrow"
+// is meaningless at 2am to a driver whose shift starts at 8pm. Any clock
+// constant is wrong for somebody. So the trigger is CONTENT — new claimable
+// work appeared — and the only timing rule is a per-driver rate ceiling.
 //
-// Deliberately NOT a per-ride broadcast on booking. A push per scheduled ride to
-// every driver competes with the ride-offer channel that immediate dispatch
-// depends on: offers are time-critical and get 30s to be answered, and training
-// drivers to swipe away taxi notifications is how you lose those. One push a
-// day, only to drivers who actually have claimable work, is the whole design.
+// Quiet hours are deliberately NOT implemented. iOS Focus and Android DND
+// already solve this per-person, already configured by the driver, and they
+// correctly handle a night driver's quiet hours being the inverse of a day
+// driver's. Any range hardcoded here is wrong for half a 24h fleet.
 //
-// STATELESS BY DESIGN: this reports what is *open right now*, not what is *new
-// since last run*. "New since" needs a watermark column and another hand-applied
-// migration; "open now" is just the board's own query run server-side. A ride
-// still open two days running gets counted twice — that's correct, it IS still
-// open.
+// ── Why the ceiling gets LONGER as a fleet gets bigger ──────────────────────
+// Counterintuitive but load-bearing: at thousands of rides a day the board is
+// never empty, so "new work exists" carries almost no information — the driver
+// already knows. Push value is inversely proportional to supply. The watermark
+// gives one mechanism that is correct at both ends: a small fleet naturally
+// produces few pushes because little new work appears, and a large fleet gets
+// clamped by the ceiling. Do not "fix" this by shortening the interval for big
+// customers.
 //
-// Scope boundary with scheduled-release: the digest covers TOMORROW only (a full
-// Halifax calendar day), which sits entirely outside release's 75-minute
-// horizon. The two can't double-notify about the same ride, and there's no gap
-// where a ride is too far out for release but too near for the digest.
+// ── The seam ───────────────────────────────────────────────────────────────
+// "Is there new work" and "should this driver be pushed right now" are separate
+// questions, and the second lives entirely in shouldSendDigest(). The cron is
+// dumb and frequent. Future work — driver-set frequency, holding a push until
+// the driver isn't mid-ride, learned per-driver windows — is a change inside
+// that one predicate, not a rewrite of this pipeline. Presence-aware timing
+// specifically is blocked until the last_seen_at heartbeat build is universal;
+// today every online driver still reports NULL.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const supabase = createClient(
@@ -28,9 +38,47 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
-const EXPO_BATCH_MAX = 100        // Expo's documented per-request message cap
-const TZ = 'America/Halifax'
+const EXPO_PUSH_URL  = 'https://exp.host/--/api/v2/push/send'
+const EXPO_BATCH_MAX = 100          // Expo's documented per-request message cap
+const TZ             = 'America/Halifax'
+
+// Rides nearer than this are scheduled-release's problem, not the digest's: it
+// starts releasing at most 75 minutes before pickup. The margin keeps the two
+// from ever racing over the same ride.
+const RELEASE_SAFETY_MINS = 90
+
+// How far ahead work is announceable. Bounds the message, not the trigger —
+// the watermark already guarantees each ride is announced at most once.
+const HORIZON_HOURS = 72
+
+// ── The two-tier ceiling ────────────────────────────────────────────────────
+// A single floor has a real failure: a ride booked at noon for 6pm tonight gets
+// held by a 6-hour ceiling and released to the pool before any driver hears it
+// exists. So the ceiling is set by how fast the claim window is CLOSING.
+//
+// URGENT_HOURS is a proxy for "the claim window is closing soon", not a
+// meaningful quantity in itself — the real one is time-to-release-threshold,
+// which is computed per-ride and dynamic (10-75 min before pickup). Don't treat
+// 12 as load-bearing; it's a cheap stand-in.
+const URGENT_HOURS      = 12
+const FLOOR_NORMAL_MS   = 6 * 60 * 60 * 1000
+const FLOOR_URGENT_MS   = 1 * 60 * 60 * 1000
+
+interface OpenRide {
+  id: string
+  company_id: string
+  vehicle_class_id: string | null
+  scheduled_at: string
+  became_open_at: string | null
+}
+
+interface DriverRow {
+  id: string
+  push_token: string | null
+  vehicle_class_id: string | null
+  digest_watermark_at: string | null
+  digest_last_sent_at: string | null
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -39,144 +87,162 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-// ── Halifax calendar-day boundaries ─────────────────────────────────────────
-// The cron fires on a UTC schedule, so the wall-clock time it lands drifts an
-// hour across DST. That's fine for "tomorrow's work" — but the WINDOW must not
-// drift, or on one changeover day the digest would silently include or exclude
-// an hour of real rides. Hence resolving true Halifax midnight rather than
-// doing arithmetic on UTC offsets.
-function tzOffsetMs(d: Date): number {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: TZ, hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    }).formatToParts(d).map((p) => [p.type, p.value])
-  ) as Record<string, string>
-  const asUTC = Date.UTC(
-    +parts.year, +parts.month - 1, +parts.day,
-    +parts.hour % 24, +parts.minute, +parts.second
+// Mirror claim-scheduled-ride's rule exactly: a null class on either side means
+// "any". Counting a ride this driver would be REJECTED for is worse than saying
+// nothing — a push promising work that yields nothing claimable is how the
+// channel gets muted.
+function classMatches(ride: OpenRide, driver: DriverRow): boolean {
+  if (!ride.vehicle_class_id) return true
+  if (driver.vehicle_class_id === null) return true
+  return driver.vehicle_class_id === ride.vehicle_class_id
+}
+
+// ── The seam: everything about WHEN lives here ──────────────────────────────
+function shouldSendDigest(
+  driver: DriverRow,
+  newRides: OpenRide[],
+  now: Date,
+): { send: boolean; reason: string } {
+  if (newRides.length === 0) return { send: false, reason: 'nothing new' }
+
+  const urgent = newRides.some(
+    (r) => new Date(r.scheduled_at).getTime() - now.getTime() <= URGENT_HOURS * 3_600_000
   )
-  return asUTC - d.getTime()
-}
+  const floor = urgent ? FLOOR_URGENT_MS : FLOOR_NORMAL_MS
 
-// Instant of 00:00 Halifax on the local calendar date `daysAhead` days from now.
-// Two passes because the offset that applies at local midnight can differ from
-// the offset right now (DST changeover night).
-function halifaxMidnight(daysAhead: number, now: Date): Date {
-  const target = new Date(now.getTime() + daysAhead * 86_400_000)
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(target).map((p) => [p.type, p.value])
-  ) as Record<string, string>
-  const naive = Date.UTC(+parts.year, +parts.month - 1, +parts.day, 0, 0, 0)
-
-  let guess = new Date(naive)
-  for (let i = 0; i < 2; i++) guess = new Date(naive - tzOffsetMs(guess))
-  return guess
-}
-
-interface OpenRide {
-  id: string
-  company_id: string
-  vehicle_class_id: string | null
-  scheduled_at: string
+  if (driver.digest_last_sent_at) {
+    const since = now.getTime() - new Date(driver.digest_last_sent_at).getTime()
+    if (since < floor) {
+      // Held, not dropped: the watermark is untouched, so these rides are still
+      // pending for this driver and the next tick past the floor picks them up.
+      return { send: false, reason: `rate-limited (${Math.round(since / 60000)}m of ${floor / 60000}m)` }
+    }
+  }
+  return { send: true, reason: urgent ? 'urgent' : 'normal' }
 }
 
 Deno.serve(async () => {
   try {
-    const now = new Date()
-    const windowStart = halifaxMidnight(1, now)   // tomorrow 00:00 Halifax
-    const windowEnd   = halifaxMidnight(2, now)   // day after 00:00 Halifax
+    const now        = new Date()
+    const windowFrom = new Date(now.getTime() + RELEASE_SAFETY_MINS * 60_000)
+    const windowTo   = new Date(now.getTime() + HORIZON_HOURS * 3_600_000)
 
-    // Same predicates as the board's fetchOpenRides: unassigned, unclaimed and
-    // with no dispatch preference. A ride dispatch has expressed intent on is
-    // not open work, even though driver_id is still null.
+    // Same predicates as the board's fetchOpenRides. A ride dispatch has
+    // expressed a preference on is not open work, even with driver_id null.
     const { data: openRides, error: ridesErr } = await supabase
       .from('rides')
-      .select('id, company_id, vehicle_class_id, scheduled_at')
+      .select('id, company_id, vehicle_class_id, scheduled_at, became_open_at')
       .eq('status', 'scheduled')
       .is('driver_id', null)
       .is('preferred_driver_id', null)
-      .gte('scheduled_at', windowStart.toISOString())
-      .lt('scheduled_at', windowEnd.toISOString())
+      .gte('scheduled_at', windowFrom.toISOString())
+      .lte('scheduled_at', windowTo.toISOString())
       .order('scheduled_at', { ascending: true })
 
     if (ridesErr) return json({ error: ridesErr.message }, 500)
-    if (!openRides || openRides.length === 0) {
-      console.log('[digest] no open rides for tomorrow — nothing to send')
-      return json({ sent: 0, companies: 0 })
-    }
 
     const byCompany = new Map<string, OpenRide[]>()
-    for (const r of openRides as OpenRide[]) {
+    for (const r of (openRides ?? []) as OpenRide[]) {
       if (!r.company_id) continue
       const list = byCompany.get(r.company_id) ?? []
       list.push(r)
       byCompany.set(r.company_id, list)
     }
 
+    // A driver whose company has no open work still needs evaluating: a brand
+    // new driver must get their watermark seeded, or their first ever digest
+    // arrives as a backlog dump. Hence querying drivers by company, not only
+    // the companies that happen to have rides right now.
+    const { data: allDrivers, error: drvErr } = await supabase
+      .from('drivers')
+      .select('id, company_id, push_token, vehicle_class_id, digest_watermark_at, digest_last_sent_at')
+      .not('push_token', 'is', null)
+
+    if (drvErr) return json({ error: drvErr.message }, 500)
+
     const messages: Record<string, unknown>[] = []
+    // Parallel to `messages`: what to write back if Expo accepts message i.
+    const pending: { driverId: string; watermark: string }[] = []
+    const seeded: string[] = []
+    let heldByRate = 0
 
-    for (const [companyId, rides] of byCompany) {
-      // NOTE — the audience here is deliberately NOT isDriverDispatchable(), and
-      // this is the one driver-read site where that convention does not apply.
-      // Dispatchability means "online and reachable RIGHT NOW", which is the
-      // right question for an offer that must be answered in 30 seconds. It is
-      // the wrong question for a message about tomorrow: filtering on is_active
-      // would reach only the drivers on shift at send time — precisely the ones
-      // NOT sitting down to plan tomorrow. A push_token is the only thing
-      // genuinely required, because without one there is nothing to send to.
-      const { data: drivers, error: drvErr } = await supabase
-        .from('drivers')
-        .select('id, push_token, vehicle_class_id')
-        .eq('company_id', companyId)
-        .not('push_token', 'is', null)
+    for (const driver of (allDrivers ?? []) as (DriverRow & { company_id: string })[]) {
+      const companyRides = byCompany.get(driver.company_id) ?? []
+      const mine = companyRides.filter((r) => classMatches(r, driver) && r.became_open_at)
 
-      if (drvErr) {
-        console.error(`[digest] company ${companyId}: ${drvErr.message}`)
+      // NOTE — the audience filter is a push_token and nothing else. This is the
+      // one driver-read site that must NOT use isDriverDispatchable(): that
+      // means "reachable and online RIGHT NOW", which is the right question for
+      // a 30-second ride offer and the wrong one for a message about work days
+      // out. Filtering on is_active would reach only drivers on shift at send
+      // time — precisely the ones not sitting down to plan.
+
+      if (driver.digest_watermark_at === null) {
+        // First ever evaluation. Seed silently at the current high-water mark
+        // and send NOTHING: a new or reinstalled driver's first push must not
+        // be the entire standing backlog, which is the single push most likely
+        // to get the channel muted for good.
+        const high = mine.reduce<string>(
+          (max, r) => (r.became_open_at! > max ? r.became_open_at! : max),
+          now.toISOString()
+        )
+        await supabase.from('drivers').update({ digest_watermark_at: high }).eq('id', driver.id)
+        seeded.push(driver.id)
         continue
       }
-      if (!drivers || drivers.length === 0) continue
 
-      for (const driver of drivers) {
-        // Mirror claim-scheduled-ride's class rule exactly: a driver with a null
-        // vehicle_class_id can take anything, and a ride with a null class can
-        // be taken by anyone. Counting rides this driver would be REJECTED for
-        // is worse than staying quiet — "3 rides open" that yields nothing
-        // claimable teaches them to ignore the digest.
-        const eligible = rides.filter(
-          (r) =>
-            !r.vehicle_class_id ||
-            driver.vehicle_class_id === null ||
-            driver.vehicle_class_id === r.vehicle_class_id
-        )
-        if (eligible.length === 0) continue
+      const watermark = driver.digest_watermark_at
+      const fresh = mine.filter((r) => r.became_open_at! > watermark)
 
-        const first = new Date(eligible[0].scheduled_at).toLocaleTimeString('en-US', {
-          hour: 'numeric', minute: '2-digit', timeZone: TZ,
-        })
-        const n = eligible.length
-
-        messages.push({
-          to: driver.push_token,
-          title: '🗓 Tomorrow’s open rides',
-          body:
-            `${n} scheduled ${n === 1 ? 'ride is' : 'rides are'} open for tomorrow — ` +
-            `first at ${first}. Tap to claim one.`,
-          data: { type: 'available_rides_digest', companyId, count: n },
-          sound: 'default',
-          priority: 'normal', // not time-critical, unlike a ride offer
-        })
+      const { send, reason } = shouldSendDigest(driver, fresh, now)
+      if (!send) {
+        if (reason.startsWith('rate-limited')) heldByRate++
+        continue
       }
+
+      const soonest = fresh.reduce((a, b) =>
+        new Date(a.scheduled_at) <= new Date(b.scheduled_at) ? a : b
+      )
+      const when = new Date(soonest.scheduled_at).toLocaleString('en-US', {
+        weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: TZ,
+      })
+      const n = fresh.length
+
+      messages.push({
+        to: driver.push_token,
+        title: '🗓 New rides you can claim',
+        // Deliberately the NEW count, never the running total. Restating work
+        // they've already been told about reintroduces the repetition the
+        // watermark exists to prevent, just through the message body instead of
+        // the trigger. The running total belongs on the board.
+        body:
+          `${n} new scheduled ${n === 1 ? 'ride' : 'rides'} open — ` +
+          `earliest ${when}. Tap to claim.`,
+        data: { type: 'available_rides_digest', companyId: driver.company_id, count: n },
+        sound: 'default',
+        priority: 'normal', // not time-critical, unlike a ride offer
+      })
+      pending.push({
+        driverId: driver.id,
+        // Highest became_open_at actually announced. Advancing past rides that
+        // weren't in this message would silence them forever.
+        watermark: fresh.reduce<string>(
+          (max, r) => (r.became_open_at! > max ? r.became_open_at! : max),
+          watermark
+        ),
+      })
     }
 
-    // One request per 100 messages rather than one per driver: a company with a
-    // real fleet is hundreds of sends, and Expo rate-limits per-request.
-    let sent = 0
+    // ── Send, and only advance the watermark for messages Expo ACCEPTED ──────
+    // If the watermark moved on a push that died (a stale token yields a
+    // DeviceNotRegistered ticket), that driver would never hear about those
+    // rides again — the watermark has passed them. Per-ticket write-back makes
+    // a failed send a retry on the next tick instead of a silent hole. Nulling
+    // dead tokens still belongs to the open push-receipts work, not here.
+    let sent = 0, rejected = 0
     for (let i = 0; i < messages.length; i += EXPO_BATCH_MAX) {
-      const chunk = messages.slice(i, i + EXPO_BATCH_MAX)
+      const chunk     = messages.slice(i, i + EXPO_BATCH_MAX)
+      const chunkMeta = pending.slice(i, i + EXPO_BATCH_MAX)
       try {
         const res = await fetch(EXPO_PUSH_URL, {
           method: 'POST',
@@ -187,21 +253,42 @@ Deno.serve(async () => {
           console.error(`[digest] expo ${res.status}: ${await res.text()}`)
           continue
         }
-        // Receipts are NOT polled here. A fan-out to every tokened driver is
-        // exactly where stale tokens surface as DeviceNotRegistered, but that
-        // fix belongs to the open push-receipts work — nulling tokens from the
-        // digest would half-build it in the wrong place.
-        sent += chunk.length
+        const body = await res.json()
+        const tickets: { status?: string; message?: string }[] = body?.data ?? []
+
+        for (let j = 0; j < chunkMeta.length; j++) {
+          // No ticket at all (malformed/short response) is treated as failure —
+          // holding the watermark costs one duplicate at worst; advancing it
+          // wrongly costs the ride forever.
+          if (tickets[j]?.status !== 'ok') {
+            rejected++
+            console.warn(`[digest] driver ${chunkMeta[j].driverId.slice(0, 8)} ticket: ${tickets[j]?.message ?? 'missing'}`)
+            continue
+          }
+          await supabase
+            .from('drivers')
+            .update({
+              digest_watermark_at: chunkMeta[j].watermark,
+              digest_last_sent_at: now.toISOString(),
+            })
+            .eq('id', chunkMeta[j].driverId)
+          sent++
+        }
       } catch (e) {
         console.error('[digest] expo send failed', e)
       }
     }
 
-    console.log(
-      `[digest] ${sent} push(es) across ${byCompany.size} company/companies ` +
-      `for ${windowStart.toISOString()} → ${windowEnd.toISOString()}`
-    )
-    return json({ sent, companies: byCompany.size, rides: openRides.length })
+    const summary = {
+      sent,
+      rejected,
+      seeded: seeded.length,
+      held_by_rate_limit: heldByRate,
+      open_rides_in_horizon: openRides?.length ?? 0,
+      companies: byCompany.size,
+    }
+    console.log('[digest]', JSON.stringify(summary))
+    return json(summary)
   } catch (error) {
     console.error('scheduled-ride-digest error:', error)
     return json({ error: String((error as Error).message ?? error) }, 500)

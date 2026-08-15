@@ -1,26 +1,29 @@
 -- Cron registration for scheduled-ride-digest.
 --
--- Once a day, early evening: the digest tells drivers what scheduled work is
--- still unclaimed for TOMORROW, which is when someone actually plans a day. It
--- is not the per-ride broadcast that was considered and rejected — a push per
--- booking to every driver competes with the ride-offer channel immediate
--- dispatch depends on, and offers only get 30 seconds to be answered.
+-- Every 15 minutes, and deliberately with NO clock logic in the schedule. The
+-- function is content-triggered: it pushes a driver only when scheduled work
+-- they can claim has newly appeared, and rate-limits per driver. The cron's job
+-- is just to ask often enough that the per-driver ceiling — not the sweep
+-- interval — is what decides when anyone hears anything.
 --
--- 21:00 UTC = 18:00 ADT (summer) / 17:00 AST (winter). The one-hour seasonal
--- drift in SEND time is accepted deliberately rather than papered over with DST
--- logic; both land in the evening, which is all this needs. The WINDOW does not
--- drift — the function resolves true Halifax midnight for tomorrow's calendar
--- day, so the set of rides reported is exact across a changeover.
+-- Why not a daily send at a fixed hour (the first cut of this): these companies
+-- run 24 hours, so there is no company-wide evening, and any hour picked is
+-- wrong for whoever is asleep or driving. See the header of the function.
 --
--- One row per day in cron.job_run_details, which is nothing against the
--- 2-minute jobs already driving that table's growth.
+-- 15 minutes costs 96 rows/day in cron.job_run_details — under a tenth of what
+-- the 2-minute scheduled-release job already writes, and the nightly
+-- cleanup-cron-logs job prunes both.
+--
+-- Requires migration 20260747 (drivers.digest_watermark_at / digest_last_sent_at
+-- and rides.became_open_at) to be applied FIRST — the function selects those
+-- columns on every run and will error on all of them otherwise.
 --
 -- Do NOT run this file as-is — the service-role JWT is project-specific and
 -- must be copied from an existing cron job in pg_cron (SELECT * FROM cron.job).
 --
 --   SELECT cron.schedule(
 --     'scheduled-ride-digest',
---     '0 21 * * *',
+--     '*/15 * * * *',
 --     $$SELECT net.http_post(
 --       url := 'https://hhsqwmftrrmtodvvuyxq.supabase.co/functions/v1/scheduled-ride-digest',
 --       headers := '{"Content-Type":"application/json","Authorization":"Bearer <service_role_jwt>"}'::jsonb,
@@ -33,10 +36,10 @@
 --   SELECT status, return_message, start_time FROM cron.job_run_details
 --     WHERE jobid = <jobid> ORDER BY start_time DESC LIMIT 5;
 --
--- To dry-run before waiting a day, invoke the function directly — it is
--- stateless and idempotent in the sense that matters (it writes nothing), so
--- the only side effect of a manual run is the pushes themselves:
+-- Dry run before registering — safe, and the first run is safe by construction:
+-- every driver's watermark starts NULL, which seeds silently and sends nothing.
+-- The response reports {sent, rejected, seeded, held_by_rate_limit,
+-- open_rides_in_horizon}, so the first invocation should read sent: 0 with
+-- seeded equal to your tokened-driver count.
 --   curl -X POST -H "Authorization: Bearer <service_role_jwt>" \
 --     https://hhsqwmftrrmtodvvuyxq.supabase.co/functions/v1/scheduled-ride-digest
--- The JSON response reports {sent, companies, rides} so you can confirm the
--- audience size before anyone's phone buzzes on a real schedule.
