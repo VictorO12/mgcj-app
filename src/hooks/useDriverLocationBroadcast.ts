@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as Location from "expo-location";
+import { getDeviceToken } from "../lib/deviceSession";
 import { supabase } from "../lib/supabase";
 
 // Keeps writing the driver's current_lat/current_lng every 10s while online,
@@ -18,9 +19,16 @@ function courseOrNull(coords: Location.LocationObjectCoords): number | null {
   return heading;
 }
 
-export function useDriverLocationBroadcast(driverId: string | undefined) {
+export function useDriverLocationBroadcast(
+  driverId: string | undefined,
+  onDisplaced?: () => void,
+) {
   const [isOnline, setIsOnline] = useState(false);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Kept in a ref so the 10s interval below never has to be torn down and
+  // rebuilt just because the callback identity changed on a re-render.
+  const onDisplacedRef = useRef(onDisplaced);
+  onDisplacedRef.current = onDisplaced;
 
   useEffect(() => {
     if (!driverId) return;
@@ -52,7 +60,9 @@ export function useDriverLocationBroadcast(driverId: string | undefined) {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      await supabase
+      const deviceToken = await getDeviceToken();
+      if (!deviceToken) return; // never claimed the lock; nothing to compare against
+      const { data, error } = await supabase
         .from("drivers")
         .update({
           current_lat: loc.coords.latitude,
@@ -72,7 +82,18 @@ export function useDriverLocationBroadcast(driverId: string | undefined) {
           // closing/backgrounding the app naturally lets the beat go stale.
           last_seen_at: new Date().toISOString(),
         })
-        .eq("id", driverId);
+        .eq("id", driverId)
+        // Compare-and-set: the heartbeat only lands while this device still
+        // holds the session lock. Zero rows back means another device claimed
+        // the account, which makes the beat a free 10s displacement check —
+        // it does not depend on Realtime reaching us (unreliable in Expo Go,
+        // and the drivers table may not even be in the publication).
+        .eq("device_token", deviceToken)
+        .select("id");
+      if (!error && (data?.length ?? 0) === 0) {
+        console.warn("[Session] heartbeat rejected — device_token no longer ours");
+        onDisplacedRef.current?.();
+      }
     }, 10000);
     return () => {
       if (locationInterval.current) clearInterval(locationInterval.current);

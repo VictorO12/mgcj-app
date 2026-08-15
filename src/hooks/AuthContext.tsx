@@ -8,7 +8,7 @@ import React, {
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
-import * as SecureStore from "expo-secure-store";
+import { getDeviceToken, clearDeviceToken } from "../lib/deviceSession";
 
 interface AuthContextType {
   session: Session | null;
@@ -124,10 +124,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (profile?.role === "driver" && userId) {
       // Clear local token before nulling DB so the Realtime handler doesn't
       // mistake a deliberate sign-out for a kicked-out-by-another-device event.
-      const localToken = await SecureStore.getItemAsync(
-        "@driver_device_token",
-      ).catch(() => null);
-      await SecureStore.deleteItemAsync("@driver_device_token").catch(() => {});
+      const localToken = await getDeviceToken();
+      await clearDeviceToken();
       // Compare-and-clear. A device being kicked out runs this same path, and
       // by then the NEW device has already written its own device_token — an
       // unconditional null would wipe the incoming session's claim and leave

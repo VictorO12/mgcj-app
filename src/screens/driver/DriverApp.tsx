@@ -11,7 +11,7 @@ import AssignedRidesListScreen from "./AssignedRidesListScreen";
 import RideRequestSheet from "./RideRequestSheet";
 import Constants from "expo-constants";
 import { Alert, AppState } from "react-native";
-import * as SecureStore from "expo-secure-store";
+import { getDeviceToken, setDeviceToken, clearDeviceToken } from "../../lib/deviceSession";
 
 interface ActiveRide {
   id: string;
@@ -88,7 +88,7 @@ function generateUUID(): string {
 
 export default function DriverApp() {
   const { profile, signOut } = useAuth();
-  useDriverLocationBroadcast(profile?.id);
+  useDriverLocationBroadcast(profile?.id, handleHeartbeatRejected);
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
@@ -121,6 +121,8 @@ export default function DriverApp() {
   // Set when another device claims this account while a ride is in flight.
   // The kick is deferred, never skipped — see performKickOut below.
   const pendingKickRef = useRef(false);
+  // Three detectors can fire at once; only the first should sign out.
+  const kickingOutRef = useRef(false);
 
   // Refs so the realtime callback can check "am I free?" without stale closures
   const activeRideRef = useRef<ActiveRide | null>(null);
@@ -142,6 +144,11 @@ export default function DriverApp() {
   // Ensures claimDeviceSession runs exactly once per DriverApp mount even if
   // profile object reference changes (onAuthStateChange can fire multiple times).
   const sessionClaimedRef = useRef(false);
+  // Resolves once this launch's token is in the DB *and* in SecureStore. Every
+  // detector awaits it: on a relaunch SecureStore still holds the previous
+  // launch's token, so a check that races the new claim sees a legitimate
+  // mismatch and signs the driver out of their own fresh session.
+  const claimRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (!profile) return;
@@ -151,7 +158,7 @@ export default function DriverApp() {
     fetchConfirmedScheduledRides();
     if (!sessionClaimedRef.current) {
       sessionClaimedRef.current = true;
-      claimDeviceSession();
+      claimRef.current = claimDeviceSession();
     }
   }, [profile]);
 
@@ -160,19 +167,39 @@ export default function DriverApp() {
     const token = generateUUID();
     console.log("[Session] claiming device session, token:", token);
     // Write to DB first. When Realtime fires for this update, localToken is
-    // still null in AsyncStorage — the check short-circuits and we don't kick
+    // still null in SecureStore — the check short-circuits and we don't kick
     // ourselves out. Only AFTER the DB write do we store the token locally,
     // so future Realtime events from another device are correctly caught.
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("drivers")
       .update({ device_token: token })
-      .eq("id", profile.id);
+      .eq("id", profile.id)
+      .select("id");
+    // On a failed claim, drop any token left over from a previous launch.
+    // Leaving it would make every detector compare a token we no longer own
+    // against the DB, mismatch, and sign the driver straight back out — a
+    // login loop caused by the lock failing, not by a second device.
     if (error) {
       console.error("[Session] failed to write device_token:", error);
+      await clearDeviceToken();
+      return;
+    }
+    // An RLS-blocked UPDATE comes back with no error and zero rows. Storing the
+    // token locally anyway would leave this device believing it owns a lock the
+    // DB never gave it — the whole feature failing without a single log line.
+    if ((data?.length ?? 0) === 0) {
+      console.error("[Session] device_token write affected 0 rows (RLS?) — lock NOT claimed");
+      await clearDeviceToken();
       return;
     }
     console.log("[Session] device_token written to DB");
-    await SecureStore.setItemAsync("@driver_device_token", token);
+    const stored = await setDeviceToken(token);
+    if (!stored) {
+      // We own the lock in the DB but can't remember it, so every detector
+      // would compare against null and silently pass. Say so — this is the
+      // exact failure mode that hid the invalid-key bug for six weeks.
+      console.error("[Session] device token not persisted — displacement detection is DISABLED on this device");
+    }
   }
 
   // ── Realtime: watch for ride changes on this driver ──────────
@@ -243,45 +270,85 @@ export default function DriverApp() {
 
   // ── Single-session enforcement ────────────────────────────────
   // If another device logs in with this driver account, device_token changes.
-  // We detect that via Realtime and via AppState resume, then force sign-out.
+  // Three independent detectors, because no single one is dependable: the
+  // heartbeat compare-and-set (10s, online only), a foreground poll (30s), and
+  // Realtime (instant when it works — the drivers table is in the publication,
+  // verified 2026-08-15, but it still needs a live socket to reach us).
+  // The heartbeat's compare-and-set can come back empty for reasons other than
+  // displacement (a stale token read during this launch's claim, or an RLS
+  // USING-clause change on `drivers` — both look identical to it), so treat it
+  // as a prompt to re-check the authoritative row rather than as a verdict.
+  async function handleHeartbeatRejected() {
+    if (!profile) return;
+    await verifyDeviceToken(profile.id);
+  }
+
+  async function handleKickedOut() {
+    // Mid-ride, the sign-out is deferred rather than skipped. Skipping it
+    // used to leave the driver in a half-dead session: this device's
+    // auth.sessions row was already gone (the other device's sign-in saw to
+    // that), so the UI and the heartbeat kept working on an orphaned JWT
+    // while capture-payment 401'd — the driver could drive the trip but
+    // never end it, stranding the passenger's hold until a sweep cancelled
+    // it hours later. Warn now, eject when the ride is actually over.
+    if (activeRideRef.current) {
+      if (pendingKickRef.current) return;
+      pendingKickRef.current = true;
+      Alert.alert(
+        "Signed in on another device",
+        "You'll be signed out here once you finish this ride.",
+        [{ text: "OK" }],
+      );
+      return;
+    }
+    await performKickOut();
+  }
+
+  // Poll the authoritative token. Realtime is the fast path but it is not a
+  // guarantee — a backgrounded socket, Expo Go on Android, or a device that
+  // was simply offline when the other login happened all miss the event.
+  async function verifyDeviceToken(driverId: string) {
+    await claimRef.current;
+    const localToken = await getDeviceToken();
+    // A missing local token means this device never claimed the account, so
+    // there is nothing to be kicked out of — no sign-in race to guard.
+    if (!localToken) return;
+    const { data, error } = await supabase
+      .from("drivers")
+      .select("device_token")
+      .eq("id", driverId)
+      .maybeSingle();
+    if (error || !data) {
+      // Can't read our own row (RLS or network) — say so rather than silently
+      // reading this as "not displaced", which is how a broken policy would
+      // disable the whole check invisibly.
+      console.warn("[Session] device_token check could not read the row:", error?.message);
+      return;
+    }
+    if (data.device_token && data.device_token !== localToken) {
+      handleKickedOut();
+    }
+  }
+
   useEffect(() => {
     if (!profile) return;
-
-    async function handleKickedOut() {
-      // Mid-ride, the sign-out is deferred rather than skipped. Skipping it
-      // used to leave the driver in a half-dead session: this device's
-      // auth.sessions row was already gone (the other device's sign-in saw to
-      // that), so the UI and the heartbeat kept working on an orphaned JWT
-      // while capture-payment 401'd — the driver could drive the trip but
-      // never end it, stranding the passenger's hold until a sweep cancelled
-      // it hours later. Warn now, eject when the ride is actually over.
-      if (activeRideRef.current) {
-        if (pendingKickRef.current) return;
-        pendingKickRef.current = true;
-        Alert.alert(
-          "Signed in on another device",
-          "You'll be signed out here once you finish this ride.",
-          [{ text: "OK" }],
-        );
-        return;
-      }
-      await performKickOut();
-    }
+    const driverId = profile.id;
 
     // Realtime: watch own drivers row for device_token changes
     const channel = supabase
-      .channel("driver-session-" + profile.id)
+      .channel("driver-session-" + driverId)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "drivers",
-          filter: "id=eq." + profile.id,
+          filter: "id=eq." + driverId,
         },
         async (payload) => {
+          await claimRef.current;
           const newToken = (payload.new as any)?.device_token;
-          const localToken = await SecureStore.getItemAsync("@driver_device_token");
+          const localToken = await getDeviceToken();
           // Only kick out if a real (non-null) new token doesn't match ours
           if (localToken && newToken && newToken !== localToken) {
             handleKickedOut();
@@ -290,38 +357,25 @@ export default function DriverApp() {
       )
       .subscribe();
 
-    // Poll the authoritative token. Realtime is the fast path but it is not a
-    // guarantee — a backgrounded socket, Expo Go on Android, or a device that
-    // was simply offline when the other login happened all miss the event.
-    const driverId = profile.id;
-    async function verifyDeviceToken() {
-      const { data } = await supabase
-        .from("drivers")
-        .select("device_token")
-        .eq("id", driverId)
-        .maybeSingle();
-      const newToken = data?.device_token;
-      const localToken = await SecureStore.getItemAsync("@driver_device_token");
-      // A missing local token means this device never claimed the account, so
-      // there is nothing to be kicked out of — no sign-in race to guard.
-      if (localToken && newToken && newToken !== localToken) {
-        handleKickedOut();
-      }
-    }
-
     // Cold start: AppState is already "active" when the app mounts, so the
     // listener below never fires for a launch. Without this, a device that was
     // displaced while closed comes back up believing it still holds the lock.
-    verifyDeviceToken();
+    verifyDeviceToken(driverId);
+
+    // While foregrounded, nothing else was checking: a device left open just
+    // kept working after being displaced (observed 2026-08-15). The heartbeat
+    // covers the online case; this covers a driver sitting offline in the app.
+    const poll = setInterval(() => verifyDeviceToken(driverId), 30000);
 
     // AppState: verify token on foreground resume (catches offline case)
     const appStateSub = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
-      verifyDeviceToken();
+      verifyDeviceToken(driverId);
     });
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(poll);
       appStateSub.remove();
     };
   }, [profile]);
@@ -627,13 +681,18 @@ export default function DriverApp() {
   }
 
   async function performKickOut() {
+    // Three detectors can race here (heartbeat, poll, Realtime) — and the
+    // deferred-kick drain is a fourth caller. Only the first should sign out,
+    // or the driver gets a stack of identical alerts.
+    if (kickingOutRef.current) return;
+    kickingOutRef.current = true;
     pendingKickRef.current = false;
     Alert.alert(
       "Signed out",
       "Your account was signed in on another device.",
       [{ text: "OK" }],
     );
-    await SecureStore.deleteItemAsync("@driver_device_token").catch(() => {});
+    await clearDeviceToken();
     await signOut();
   }
 
