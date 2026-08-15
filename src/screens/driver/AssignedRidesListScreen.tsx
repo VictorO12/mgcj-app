@@ -39,6 +39,13 @@ interface Props {
   onReleased?: () => void;
   /** Which tab to land on. The daily digest push opens straight to "open". */
   initialTab?: "mine" | "open";
+  /**
+   * Bumped when a digest push is tapped. initialTab alone only covers the case
+   * where this screen was closed and remounts; if the driver left it open on
+   * "mine" and backgrounded the app, there is no remount and the tab wouldn't
+   * move. Same counter idiom as DriverHomeScreen's openInboxSignal.
+   */
+  openTabSignal?: number;
 }
 
 export default function AssignedRidesListScreen({
@@ -47,6 +54,7 @@ export default function AssignedRidesListScreen({
   onAccepted,
   onReleased,
   initialTab = "mine",
+  openTabSignal,
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -59,6 +67,9 @@ export default function AssignedRidesListScreen({
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tab, setTab] = useState<"mine" | "open">(initialTab);
+  useEffect(() => {
+    if (openTabSignal) setTab(initialTab);
+  }, [openTabSignal]);
 
   useEffect(() => {
     fetchAssignedRides();

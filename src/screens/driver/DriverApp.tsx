@@ -101,6 +101,10 @@ export default function DriverApp() {
   // gets the tab its trigger intended.
   const [assignedListTab, setAssignedListTab] =
     useState<"mine" | "open">("mine");
+  // Bumped alongside assignedListTab so an ALREADY-OPEN list switches tabs too
+  // — setShowAssignedList(true) is a no-op when it's already true, so without
+  // this a digest tap on an open list would silently leave them on "mine".
+  const [assignedListTabSignal, setAssignedListTabSignal] = useState(0);
   // Bumped by the notification-tap handler below to tell DriverHomeScreen to
   // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
@@ -406,6 +410,7 @@ export default function DriverApp() {
         // rideId and must be handled above the guard below.
         if (data.type === "available_rides_digest") {
           setAssignedListTab("open");
+          setAssignedListTabSignal((n) => n + 1);
           setShowAssignedList(true);
           return;
         }
@@ -806,6 +811,7 @@ export default function DriverApp() {
     return (
       <AssignedRidesListScreen
         initialTab={assignedListTab}
+        openTabSignal={assignedListTabSignal}
         onClose={() => setShowAssignedList(false)}
         hasActiveRide={!!activeRide}
         onAccepted={() => {
