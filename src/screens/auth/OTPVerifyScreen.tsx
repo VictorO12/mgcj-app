@@ -114,13 +114,20 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     if (isDriver && inviteCode) {
       console.log("[OTP] entering driver registration path");
 
-      const { data: invite } = await supabase
-        .from("driver_invites")
-        .select("id, used, company_id, phone")
-        .eq("code", inviteCode)
-        .maybeSingle();
+      // Validate AND consume in one call. This used to be a direct table read
+      // (which needed a driver_invites SELECT policy so open that any anonymous
+      // session could enumerate every unused code on the platform) followed by
+      // mark_invite_used() — a check-then-act two devices could both win.
+      // consume_invite_code does both atomically; see 20260744.
+      const { data: consumed, error: consumeError } = await supabase.rpc(
+        "consume_invite_code",
+        { p_code: inviteCode, p_phone: phone },
+      );
+      const invite = consumed as
+        | { valid: boolean; reason?: string; company_id?: string | null }
+        | null;
 
-      if (!invite || invite.used || (invite.phone && invite.phone !== phone)) {
+      if (consumeError || !invite?.valid) {
         // Clean up the auto-created profile and release the navigation hold
         // before signing out so the home screen never becomes visible.
         await supabase.from("profiles").delete().eq("id", userId);
@@ -129,9 +136,9 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         setLoading(false);
         Alert.alert(
           "Invalid invite code",
-          invite?.used
+          invite?.reason === "already_used"
             ? "This invite code has already been used. Please contact dispatch."
-            : invite?.phone && invite.phone !== phone
+            : invite?.reason === "phone_mismatch"
               ? "This invite code was issued to a different phone number."
               : "That invite code wasn't recognised. Please check it and try again.",
           [{ text: "OK", onPress: () => navigation.navigate("DriverSignUp") }],
@@ -151,9 +158,6 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
         .from("drivers")
         .upsert({ id: userId, is_active: false }, { onConflict: "id" });
       console.log("[OTP] driver record upsert:", driverError ?? "ok");
-
-      const { error: inviteError } = await supabase.rpc("mark_invite_used", { p_invite_id: invite.id });
-      console.log("[OTP] invite mark used — error:", inviteError ?? "none");
 
       releaseLoading();
       await refetch();
