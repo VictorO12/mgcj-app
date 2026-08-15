@@ -19,6 +19,7 @@
 // All three route through settle-ride so the hold and the row can never
 // disagree about whether a ride is over.
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { requireServiceRole } from '../_shared/internalAuth.ts'
 
 const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -67,7 +68,12 @@ async function settle(rideId: string, action: string, reason?: string) {
   }
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Cron/internal only — see _shared/internalAuth.ts. Without this the
+  // function is reachable by anyone on the internet: verify_jwt = false in
+  // config.toml disables the gateway check entirely.
+  const denied = requireServiceRole(req)
+  if (denied) return denied
   const now = new Date();
   const iso = (minsAgo: number) => new Date(now.getTime() - minsAgo * 60_000).toISOString();
 

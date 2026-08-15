@@ -1,4 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { requireServiceRole } from '../_shared/internalAuth.ts'
 
 // ── sweep-held-transfers (cron, hourly) ───────────────────────────────────
 //
@@ -123,7 +124,12 @@ async function accountIsLive(accountId: string): Promise<boolean> {
   return account.capabilities?.transfers === 'active'
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Cron/internal only — see _shared/internalAuth.ts. Without this the
+  // function is reachable by anyone on the internet: verify_jwt = false in
+  // config.toml disables the gateway check entirely.
+  const denied = requireServiceRole(req)
+  if (denied) return denied
   const started = Date.now()
   const summary = { examined: 0, swept: 0, reconciled: 0, skipped: 0, failed: 0 }
 

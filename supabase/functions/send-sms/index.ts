@@ -9,6 +9,7 @@
 //   TWILIO_FROM_NUMBER   — your Twilio phone number, e.g. +19025551234
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { requireServiceRole } from '../_shared/internalAuth.ts'
 
 const TWILIO_SID   = Deno.env.get('TWILIO_ACCOUNT_SID') ?? ''
 const TWILIO_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN') ?? ''
@@ -55,9 +56,16 @@ function normaliseForSms(message: string): string {
 }
 
 serve(async (req) => {
-  // Only accept internal calls (service role key in Authorization header)
-  // Supabase validates this automatically when verify_jwt = false and the
-  // call comes from another Edge Function using the service role key.
+  // Internal only: this endpoint sends SMS on the project's Twilio account, so
+  // an open door here is a direct money-burn and a phishing vector under the
+  // company's sender ID.
+  //
+  // The comment that used to sit here claimed Supabase validated the service
+  // role key automatically when verify_jwt = false. It does not — verify_jwt =
+  // false disables the gateway check outright, and a POST with no Authorization
+  // header at all reached this function body (verified live 2026-08-15).
+  const denied = requireServiceRole(req)
+  if (denied) return denied
 
   try {
     const { phone, message } = await req.json()
@@ -70,8 +78,19 @@ serve(async (req) => {
     }
 
     if (!TWILIO_SID || !TWILIO_TOKEN || !TWILIO_FROM) {
-      console.warn('[send-sms] Twilio not configured — skipping')
-      return new Response(JSON.stringify({ skipped: true }), {
+      // 503, not 200. This used to return 200 {skipped:true}, which made
+      // scheduled-release's `if (!res.ok)` branch pass and logged NOTHING — so
+      // every T-30/T-15 passenger reminder since launch has been silently
+      // dropped with no trace anywhere. A missing secret is a fault; it should
+      // be loud enough to find without probing the endpoint by hand.
+      const missing = [
+        !TWILIO_SID   && 'TWILIO_ACCOUNT_SID',
+        !TWILIO_TOKEN && 'TWILIO_AUTH_TOKEN',
+        !TWILIO_FROM  && 'TWILIO_FROM_NUMBER',
+      ].filter(Boolean).join(', ')
+      console.error(`[send-sms] not configured — missing: ${missing}`)
+      return new Response(JSON.stringify({ error: 'twilio_not_configured', missing }), {
+        status: 503,
         headers: { 'Content-Type': 'application/json' },
       })
     }

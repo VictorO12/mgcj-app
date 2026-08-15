@@ -41,6 +41,7 @@
 // specifically is blocked until the last_seen_at heartbeat build is universal;
 // today every online driver still reports NULL.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { requireServiceRole } from '../_shared/internalAuth.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -130,7 +131,12 @@ function shouldSendDigest(
   return { send: true, reason: urgent ? 'urgent' : 'normal' }
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Cron/internal only — see _shared/internalAuth.ts. Without this the
+  // function is reachable by anyone on the internet: verify_jwt = false in
+  // config.toml disables the gateway check entirely.
+  const denied = requireServiceRole(req)
+  if (denied) return denied
   try {
     const now        = new Date()
     const windowFrom = new Date(now.getTime() + RELEASE_SAFETY_MINS * 60_000)

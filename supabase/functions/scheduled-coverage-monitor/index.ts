@@ -11,6 +11,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
+import { requireServiceRole } from '../_shared/internalAuth.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -24,7 +25,12 @@ function severity(s: string): number {
   return 0 // covered
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Cron/internal only — see _shared/internalAuth.ts. Without this the
+  // function is reachable by anyone on the internet: verify_jwt = false in
+  // config.toml disables the gateway check entirely.
+  const denied = requireServiceRole(req)
+  if (denied) return denied
   try {
     const now = new Date()
     console.log(`[coverage-monitor] now=${now.toISOString()}`)
