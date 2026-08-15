@@ -1,5 +1,14 @@
-// Tells a driver, at most once per ride, that new scheduled work they can claim
-// has appeared on the Available board.
+// Tells a driver that scheduled work they can claim has appeared on the
+// Available board — once per ride, per time that ride becomes available.
+//
+// That distinction is deliberate, not a loophole. A ride is announced to a
+// given driver exactly once while it sits open, no matter how long it sits.
+// But if it leaves the pool and RE-ENTERS it (someone claims and releases it,
+// dispatch clears a preference, a driver hands it back), became_open_at is
+// re-stamped and it is announceable again — including to a driver who heard
+// about it the first time round. That is the point of the column: the ride
+// genuinely is available again, and the alternative is work silently
+// re-entering the pool with nobody told.
 //
 // ── Why there is no time of day in this function ────────────────────────────
 // The first cut of this fired once daily at 6pm and reported "what's open for
@@ -178,15 +187,18 @@ Deno.serve(async () => {
       // time — precisely the ones not sitting down to plan.
 
       if (driver.digest_watermark_at === null) {
-        // First ever evaluation. Seed silently at the current high-water mark
-        // and send NOTHING: a new or reinstalled driver's first push must not
-        // be the entire standing backlog, which is the single push most likely
-        // to get the channel muted for good.
-        const high = mine.reduce<string>(
-          (max, r) => (r.became_open_at! > max ? r.became_open_at! : max),
-          now.toISOString()
-        )
-        await supabase.from('drivers').update({ digest_watermark_at: high }).eq('id', driver.id)
+        // First ever evaluation. Seed at now() and send NOTHING: a new or
+        // reinstalled driver's first push must not be the entire standing
+        // backlog, which is the single push most likely to get the channel
+        // muted for good. The cost is explicit — work already open when they
+        // joined is never pushed to them, only ever seen on the board. Seeding
+        // from the horizon-filtered set instead would be worse and subtler: a
+        // ride 5 days out isn't in `mine`, so it would sit below the watermark
+        // by the time it entered the horizon and never be announced at all.
+        await supabase
+          .from('drivers')
+          .update({ digest_watermark_at: now.toISOString() })
+          .eq('id', driver.id)
         seeded.push(driver.id)
         continue
       }

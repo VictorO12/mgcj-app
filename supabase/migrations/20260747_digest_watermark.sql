@@ -71,6 +71,11 @@ BEGIN
 END;
 $$;
 
+-- Trigger ordering was checked, not assumed: this is now the fourth BEFORE
+-- trigger on rides (with guard_ride_claim_fields, guard_ride_fare_fields and
+-- set_ride_completed_at). Postgres fires them in alphabetical name order, and
+-- this one only writes NEW.became_open_at, which none of the guards inspect —
+-- so its position in that order cannot change any outcome.
 DROP TRIGGER IF EXISTS trg_ride_became_open_at ON rides;
 CREATE TRIGGER trg_ride_became_open_at
   BEFORE INSERT OR UPDATE ON rides

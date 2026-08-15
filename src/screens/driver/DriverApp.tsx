@@ -110,6 +110,7 @@ export default function DriverApp() {
   // rare nudge by design, so the always-correct signal has to be visible where
   // the driver already is, not buried one screen deep.
   const [openRideCount, setOpenRideCount] = useState(0);
+  const openCountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped by the notification-tap handler below to tell DriverHomeScreen to
   // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
@@ -220,6 +221,19 @@ export default function DriverApp() {
   // Count only — the list screen owns the detail. Mirrors the board's own
   // predicates (unassigned, unclaimed, no dispatch preference, still upcoming)
   // so the number can't disagree with what the Available tab shows.
+  // Debounced: the realtime handler below fires on EVERY company ride change,
+  // and on a real fleet that's a burst per status transition across every
+  // online device. A trailing timer coalesces a burst into one HEAD count —
+  // this is a number in a banner, not something that needs to be exact within
+  // the same second.
+  function scheduleOpenRideCount() {
+    if (openCountTimerRef.current) clearTimeout(openCountTimerRef.current);
+    openCountTimerRef.current = setTimeout(() => {
+      openCountTimerRef.current = null;
+      fetchOpenRideCount();
+    }, 2000);
+  }
+
   async function fetchOpenRideCount() {
     if (!profile?.company_id) return;
     const { count } = await supabase
@@ -235,6 +249,9 @@ export default function DriverApp() {
 
   useEffect(() => {
     fetchOpenRideCount();
+    return () => {
+      if (openCountTimerRef.current) clearTimeout(openCountTimerRef.current);
+    };
   }, [profile]);
 
   // ── Realtime: watch for ride changes on this driver ──────────
@@ -270,7 +287,7 @@ export default function DriverApp() {
           // Any company ride change can open or close a claimable slot, and an
           // open ride has driver_id null — so this has to run before the
           // own-driver filter below, not after it.
-          fetchOpenRideCount();
+          scheduleOpenRideCount();
 
           if (row.driver_id !== profile.id) return;
 
