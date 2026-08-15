@@ -37,6 +37,8 @@ interface Props {
   onAccepted: () => void;
   /** Ride handed back to dispatch — parent must re-read its active-ride state. */
   onReleased?: () => void;
+  /** Which tab to land on. The daily digest push opens straight to "open". */
+  initialTab?: "mine" | "open";
 }
 
 export default function AssignedRidesListScreen({
@@ -44,6 +46,7 @@ export default function AssignedRidesListScreen({
   hasActiveRide,
   onAccepted,
   onReleased,
+  initialTab = "mine",
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -55,7 +58,7 @@ export default function AssignedRidesListScreen({
   const [plannedRides, setPlannedRides] = useState<AssignedRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [tab, setTab] = useState<"mine" | "open">("mine");
+  const [tab, setTab] = useState<"mine" | "open">(initialTab);
 
   useEffect(() => {
     fetchAssignedRides();

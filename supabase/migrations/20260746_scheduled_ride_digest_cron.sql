@@ -1,0 +1,42 @@
+-- Cron registration for scheduled-ride-digest.
+--
+-- Once a day, early evening: the digest tells drivers what scheduled work is
+-- still unclaimed for TOMORROW, which is when someone actually plans a day. It
+-- is not the per-ride broadcast that was considered and rejected — a push per
+-- booking to every driver competes with the ride-offer channel immediate
+-- dispatch depends on, and offers only get 30 seconds to be answered.
+--
+-- 21:00 UTC = 18:00 ADT (summer) / 17:00 AST (winter). The one-hour seasonal
+-- drift in SEND time is accepted deliberately rather than papered over with DST
+-- logic; both land in the evening, which is all this needs. The WINDOW does not
+-- drift — the function resolves true Halifax midnight for tomorrow's calendar
+-- day, so the set of rides reported is exact across a changeover.
+--
+-- One row per day in cron.job_run_details, which is nothing against the
+-- 2-minute jobs already driving that table's growth.
+--
+-- Do NOT run this file as-is — the service-role JWT is project-specific and
+-- must be copied from an existing cron job in pg_cron (SELECT * FROM cron.job).
+--
+--   SELECT cron.schedule(
+--     'scheduled-ride-digest',
+--     '0 21 * * *',
+--     $$SELECT net.http_post(
+--       url := 'https://hhsqwmftrrmtodvvuyxq.supabase.co/functions/v1/scheduled-ride-digest',
+--       headers := '{"Content-Type":"application/json","Authorization":"Bearer <service_role_jwt>"}'::jsonb,
+--       body := '{}'::jsonb
+--     )$$
+--   );
+--
+-- To verify after registering:
+--   SELECT jobid, jobname, schedule FROM cron.job WHERE jobname = 'scheduled-ride-digest';
+--   SELECT status, return_message, start_time FROM cron.job_run_details
+--     WHERE jobid = <jobid> ORDER BY start_time DESC LIMIT 5;
+--
+-- To dry-run before waiting a day, invoke the function directly — it is
+-- stateless and idempotent in the sense that matters (it writes nothing), so
+-- the only side effect of a manual run is the pushes themselves:
+--   curl -X POST -H "Authorization: Bearer <service_role_jwt>" \
+--     https://hhsqwmftrrmtodvvuyxq.supabase.co/functions/v1/scheduled-ride-digest
+-- The JSON response reports {sent, companies, rides} so you can confirm the
+-- audience size before anyone's phone buzzes on a real schedule.

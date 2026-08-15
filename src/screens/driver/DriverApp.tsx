@@ -96,6 +96,11 @@ export default function DriverApp() {
   const [loadingDriver, setLoadingDriver] = useState(true);
   const [showAssigned, setShowAssigned] = useState(false);
   const [showAssignedList, setShowAssignedList] = useState(false);
+  // Which tab AssignedRidesListScreen opens on. Set by whoever opens it — the
+  // screen reads this once at mount, and it unmounts on close, so every open
+  // gets the tab its trigger intended.
+  const [assignedListTab, setAssignedListTab] =
+    useState<"mine" | "open">("mine");
   // Bumped by the notification-tap handler below to tell DriverHomeScreen to
   // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
@@ -397,19 +402,22 @@ export default function DriverApp() {
           return;
         }
 
-        const rideId = data.rideId;
-        if (!rideId || !profile) return;
-
-        if (data.type === "scheduled_offer") {
-          // body tap or ACCEPT both claim; DECLINE just dismisses (it wasn't theirs)
-          if (action !== "DECLINE") await claimScheduledRide(String(rideId));
+        // Daily "tomorrow's open rides" digest. Company-wide, so it carries no
+        // rideId and must be handled above the guard below.
+        if (data.type === "available_rides_digest") {
+          setAssignedListTab("open");
+          setShowAssignedList(true);
           return;
         }
+
+        const rideId = data.rideId;
+        if (!rideId || !profile) return;
 
         // "Still good for your planned ride?" — asymmetric by design: there is
         // nothing to accept here, so any tap just opens the list, where the
         // Release button lives. Ignoring it costs the driver nothing.
         if (data.type === "claim_checkin") {
+          setAssignedListTab("mine");
           setShowAssignedList(true);
           return;
         }
@@ -417,6 +425,7 @@ export default function DriverApp() {
         // The claim didn't convert at release and the ride went to the pool.
         if (data.type === "claim_released") {
           await fetchConfirmedScheduledRides();
+          setAssignedListTab("mine");
           setShowAssignedList(true);
           return;
         }
@@ -450,45 +459,6 @@ export default function DriverApp() {
     return () => sub.remove();
   }, [profile]);
 
-  // Soft claim from a push. Goes through the Edge Function for the same reason
-  // the Available board does: RLS's WITH CHECK (driver_id = auth.uid()) means the
-  // only claim a client can write is one that hard-binds the driver to the ride —
-  // which is what this replaces. Leaving driver_id null fails the check.
-  async function claimScheduledRide(rideId: string) {
-    if (!profile) return;
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-      if (!accessToken) throw new Error("Not signed in");
-      const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
-      const res = await fetch(
-        `${supabaseUrl}/functions/v1/claim-scheduled-ride`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ ride_id: rideId, action: "claim" }),
-        },
-      );
-      const result = await res.json();
-      if (!res.ok || result?.error) {
-        throw new Error(result?.error ?? "Couldn't plan this ride");
-      }
-    } catch (e: any) {
-      Alert.alert("Couldn't plan this ride", e.message);
-      return;
-    }
-    // Held, not won — see the matching copy on the Available board.
-    Alert.alert(
-      "Added to your plan 🗓",
-      "It's held for you. You'll get the ride offer to confirm shortly before pickup.",
-    );
-    fetchConfirmedScheduledRides();
-  }
   // ── Fetch a ride row and show the RideRequestSheet popup ─────
   async function showRideRequestPopup(rideRow: any) {
     const { data: passenger } = await supabase
@@ -835,6 +805,7 @@ export default function DriverApp() {
   if (showAssignedList) {
     return (
       <AssignedRidesListScreen
+        initialTab={assignedListTab}
         onClose={() => setShowAssignedList(false)}
         hasActiveRide={!!activeRide}
         onAccepted={() => {
@@ -857,7 +828,10 @@ export default function DriverApp() {
     <>
       <DriverHomeScreen
         assignedRide={assignedRide}
-        onOpenAssigned={() => setShowAssignedList(true)}
+        onOpenAssigned={() => {
+          setAssignedListTab("mine");
+          setShowAssignedList(true);
+        }}
         confirmedScheduledRides={confirmedScheduledRides}
         onRideAccepted={fetchActiveRide}
         openInboxSignal={openInboxSignal}
