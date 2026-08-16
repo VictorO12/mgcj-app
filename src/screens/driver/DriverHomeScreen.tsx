@@ -520,7 +520,16 @@ export default function DriverHomeScreen({
           channel: realtime, and visible without opening anything. */}
       {openRideCount > 0 && onOpenAvailable && (
         <TouchableOpacity
-          style={styles.openRidesBanner}
+          style={[
+            styles.openRidesBanner,
+            // Shares the assigned banner's slot; drops below it when that one
+            // is also on screen, so the two never overlap.
+            {
+              top:
+                (Platform.OS === "ios" ? 160 : 146) +
+                (hasAssignedRide ? 68 : 0),
+            },
+          ]}
           onPress={onOpenAvailable}
           activeOpacity={0.85}
         >
@@ -1044,11 +1053,15 @@ const makeStyles = (colors: Colors) =>
     },
     badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
     openRidesBanner: {
+    // Absolute, like every other overlay here. The map is flex:1 and eats the
+    // whole container, so a normal-flow sibling after it lands below the
+    // viewport and is invisible — which is exactly what happened.
+    position: "absolute",
+    left: 16,
+    right: 16,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 10,
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 14,

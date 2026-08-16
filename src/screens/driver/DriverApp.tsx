@@ -236,7 +236,7 @@ export default function DriverApp() {
 
   async function fetchOpenRideCount() {
     if (!profile?.company_id) return;
-    const { count } = await supabase
+    const { count, error } = await supabase
       .from("rides")
       .select("id", { count: "exact", head: true })
       .eq("company_id", profile.company_id)
@@ -244,6 +244,13 @@ export default function DriverApp() {
       .is("driver_id", null)
       .is("preferred_driver_id", null)
       .gte("scheduled_at", new Date().toISOString());
+    // Never swallow this. A failed count is indistinguishable from "no open
+    // rides" — both render no banner — so without a log a broken query looks
+    // exactly like a quiet night.
+    if (error) {
+      console.warn("[openRideCount] query failed:", error.message);
+      return;
+    }
     setOpenRideCount(count ?? 0);
   }
 
