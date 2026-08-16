@@ -15,14 +15,45 @@
 // shipped inside the mobile app bundle, so "needs a valid project JWT" means
 // "needs a string any user already has on their phone".
 //
-// Comparing against the service-role key works for both callers with no config
-// change: pg_cron jobs already send `Authorization: Bearer <service_role_jwt>`
-// in their net.http_post headers, and function-to-function calls already send
-// SUPABASE_SERVICE_ROLE_KEY. Rotating the key rotates this gate with it —
-// which does mean every cron job's embedded JWT must be updated in the same
-// pass as a rotation, exactly as it already must be.
+// INCIDENT 2026-08-15 — why this gate no longer keys off the service-role key
+// alone. The original version compared ONLY against SUPABASE_SERVICE_ROLE_KEY,
+// on the stated assumption that "pg_cron jobs already send that key". That
+// assumption was false in a way that took hours to see:
+//
+//   - The cron jobs DO send the project's legacy service_role JWT. Verified by
+//     fingerprint: every cron.job command's bearer token is byte-identical to
+//     the key vellon-ops uses to reach this project, which demonstrably works.
+//   - But this project has the NEW Supabase API key system enabled
+//     (SUPABASE_PUBLISHABLE_KEYS / SUPABASE_SECRET_KEYS are both present), and
+//     the SUPABASE_SERVICE_ROLE_KEY injected into the Edge Function runtime is
+//     NOT that legacy JWT.
+//
+// So the two sides compared unequal strings and every cron-called function
+// 401'd from the moment this gate deployed (23:01 UTC): expire-pending-rides,
+// scheduled-coverage-monitor, sweep-held-transfers and scheduled-ride-digest
+// all silently stopped. Nothing surfaced it — net.http_post records the
+// response and moves on, and cron.job_run_details reports SUCCESS because
+// enqueuing the request succeeded. Look in net._http_response instead.
+//
+// Re-stamping the cron jobs could not fix it: there is no single key that
+// satisfies both layers, because a non-JWT secret sent as `Authorization:
+// Bearer` is rejected by the gateway on any function with verify_jwt = true.
+//
+// Hence the two paths below. The gate now owns its own secret (INTERNAL_API_KEY)
+// rather than borrowing Supabase's key plumbing, so a future key rotation or
+// key-format migration cannot take dispatch down again.
 
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const INTERNAL_API_KEY = Deno.env.get('INTERNAL_API_KEY') ?? ''
+
+// Header for our own key. Deliberately NOT Authorization: that header is read
+// by the Supabase gateway before our code runs, and on a function with
+// verify_jwt = true (scheduled-ride-digest and sweep-held-transfers have no
+// config.toml block, so they default to true) a non-JWT bearer is rejected at
+// the gateway. Using a separate header lets a caller satisfy BOTH layers:
+// Authorization carries a real project JWT for the gateway, x-internal-key
+// carries the secret this gate actually checks.
+const INTERNAL_HEADER = 'x-internal-key'
 
 // Length-independent compare. The tokens being compared are long and
 // high-entropy, so a timing attack here is close to theoretical — but a
@@ -42,23 +73,31 @@ function safeEqual(a: string, b: string): boolean {
  *   if (denied) return denied
  */
 export function requireServiceRole(req: Request): Response | null {
-  const header = req.headers.get('Authorization') ?? ''
-  const token  = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-
-  // No key configured means the gate can't be evaluated. Fail CLOSED: an
-  // unconfigured secret must not silently become an open door, which is the
-  // failure mode this whole file exists to fix.
-  if (!SERVICE_ROLE_KEY) {
-    console.error('[internalAuth] SUPABASE_SERVICE_ROLE_KEY is unset — refusing all callers')
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401, headers: { 'Content-Type': 'application/json' },
-    })
+  // Path 1 — our own secret. Preferred, and the only one that works for a
+  // pg_cron caller. See the incident note above.
+  if (INTERNAL_API_KEY) {
+    const provided = req.headers.get(INTERNAL_HEADER) ?? ''
+    if (provided && safeEqual(provided, INTERNAL_API_KEY)) return null
   }
 
-  if (!token || !safeEqual(token, SERVICE_ROLE_KEY)) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401, headers: { 'Content-Type': 'application/json' },
-    })
+  // Path 2 — the injected service-role key on Authorization. Kept because
+  // function-to-function calls (scheduled-release -> send-sms,
+  // expire-pending-rides -> capture-payment) send SUPABASE_SERVICE_ROLE_KEY
+  // from their own env, so they match this by construction whatever value
+  // Supabase injects. Those calls never broke and must keep working.
+  if (SERVICE_ROLE_KEY) {
+    const header = req.headers.get('Authorization') ?? ''
+    const token  = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+    if (token && safeEqual(token, SERVICE_ROLE_KEY)) return null
   }
-  return null
+
+  // Fail CLOSED. With neither secret configured the gate cannot be evaluated,
+  // and an unconfigured secret must not silently become an open door.
+  if (!INTERNAL_API_KEY && !SERVICE_ROLE_KEY) {
+    console.error('[internalAuth] neither INTERNAL_API_KEY nor SUPABASE_SERVICE_ROLE_KEY is set - refusing all callers')
+  }
+
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401, headers: { 'Content-Type': 'application/json' },
+  })
 }
