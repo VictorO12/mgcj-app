@@ -545,3 +545,11 @@ entrypoint = "./functions/scheduled-coverage-monitor/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/scheduled-release/index.ts"
+
+# Passenger- AND browser-called (the dashboard can act for a passenger), so the
+# CORS preflight carries no Authorization header and gateway JWT verification
+# would 401 it. The function verifies the caller's JWT and their relationship to
+# the ride itself — see the header comment there.
+[functions.edit-ride]
+enabled = true
+verify_jwt = false

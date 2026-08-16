@@ -18,6 +18,9 @@ import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import ScheduleDateTimePicker from "../../components/ScheduleDateTimePicker";
+import AddressPickerModal, {
+  type PickedAddress,
+} from "../../components/AddressPickerModal";
 
 interface ScheduledRide {
   id: string;
@@ -25,6 +28,8 @@ interface ScheduledRide {
   driver_id: string | null;
   pickup_address: string;
   dropoff_address: string;
+  pickup_lat: number;
+  pickup_lng: number;
   fare_estimate: number | null;
   scheduled_at: string;
   driver_name: string | null;
@@ -60,7 +65,10 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  // One "Edit ride" sheet per ride. `editField` is which of the three things
+  // is being changed inside it; null means the sheet is showing the summary.
   const [editingRide, setEditingRide] = useState<ScheduledRide | null>(null);
+  const [editField, setEditField] = useState<"time" | "pickup" | "dropoff" | null>(null);
   const [editDate, setEditDate] = useState<Date | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -140,6 +148,8 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
           driver_id: ride.driver_id,
           pickup_address: ride.pickup_address,
           dropoff_address: ride.dropoff_address,
+          pickup_lat: ride.pickup_lat,
+          pickup_lng: ride.pickup_lng,
           fare_estimate: ride.fare_estimate,
           scheduled_at: ride.scheduled_at,
           driver_name: driverName,
@@ -149,6 +159,12 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
     );
 
     setRides(enriched);
+    // The edit sheet holds its own copy of the ride, so without this its
+    // summary rows would still show the address or time the passenger just
+    // changed — the one screen guaranteed to be looking at the stale value.
+    setEditingRide((prev) =>
+      prev ? (enriched.find((r) => r.id === prev.id) ?? prev) : prev,
+    );
     setLoading(false);
   }
 
@@ -192,11 +208,13 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
 
   function openEdit(ride: ScheduledRide) {
     setEditingRide(ride);
+    setEditField(null);
     setEditDate(new Date(ride.scheduled_at));
   }
 
   function closeEdit() {
     setEditingRide(null);
+    setEditField(null);
     setEditDate(null);
   }
 
@@ -207,29 +225,51 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
       return;
     }
     setSaving(true);
-    // Guard on status='scheduled' + driver_id null: editing is only offered
-    // for unclaimed rides, so a driver can't have committed to the old time
-    // out from under this write.
-    const { error } = await supabase
-      .from("rides")
-      .update({
-        scheduled_at: editDate.toISOString(),
-        notified_30min: false,
-        notified_15min: false,
-        // Conservative placeholder until scheduled-coverage-monitor's next
-        // tick recomputes the real value for the new time.
-        coverage_status: "uncovered",
-      })
-      .eq("id", editingRide.id)
-      .eq("passenger_id", profile?.id)
-      .eq("status", "scheduled")
-      .is("driver_id", null);
+    // Goes through edit-ride rather than a direct .update(): the same status
+    // guards still apply, but the function is also what drops a driver's soft
+    // claim and tells them. A claimed ride has driver_id NULL, so the old
+    // client-side `.is('driver_id', null)` guard let a passenger move the
+    // pickup out from under a claimant with nobody told.
+    const { error } = await invokeFunction("edit-ride", {
+      ride_id: editingRide.id,
+      action: "reschedule",
+      scheduled_at: editDate.toISOString(),
+    });
     setSaving(false);
     if (error) {
-      Alert.alert("Error", error.message);
+      Alert.alert("Couldn't change the time", error);
       return;
     }
-    closeEdit();
+    setEditField(null);
+    fetchRides();
+  }
+
+  async function saveRelocate(place: PickedAddress) {
+    if (!editingRide || !editField || editField === "time") return;
+    const field = editField;
+    setSaving(true);
+    const { data, error } = await invokeFunction("edit-ride", {
+      ride_id: editingRide.id,
+      action: "relocate",
+      [field]: place,
+    });
+    setSaving(false);
+    if (error) {
+      Alert.alert(
+        field === "pickup" ? "Couldn't change the pickup" : "Couldn't change the destination",
+        error,
+      );
+      return;
+    }
+    setEditField(null);
+    // The fare is recomputed server-side from the new route, so say what it
+    // became rather than letting the card silently show a different number.
+    if (data?.fare_estimate != null) {
+      Alert.alert(
+        "Ride updated",
+        `Your estimated fare is now $${Number(data.fare_estimate).toFixed(2)}.`,
+      );
+    }
     fetchRides();
   }
 
@@ -389,21 +429,24 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
                 )}
 
                 {/* Edit + Cancel buttons */}
-                <View style={styles.actionRow}>
-                  {isUnclaimed && (
+                {isUnclaimed && (
+                  <View style={styles.editRow}>
                     <TouchableOpacity
                       style={styles.editBtn}
                       onPress={() => openEdit(ride)}
                       activeOpacity={0.8}
                     >
                       <Ionicons name="create-outline" size={14} color={colors.accentPurple} />
-                      <Text style={styles.editBtnText}>Edit time</Text>
+                      <Text style={styles.editBtnText}>Edit ride</Text>
                     </TouchableOpacity>
-                  )}
+                  </View>
+                )}
+
+                <View style={styles.actionRow}>
                   <TouchableOpacity
                     style={[
                       styles.cancelBtn,
-                      isUnclaimed && { flex: 1 },
+                      { flex: 1 },
                       isCancelling && { opacity: 0.5 },
                     ]}
                     onPress={() => confirmCancel(ride)}
@@ -423,9 +466,16 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
         </ScrollView>
       )}
 
-      {/* Edit sheet */}
+      {/* Edit sheet — one entry point for all three changes. Each row is
+          applied on its own rather than batched behind a single Save: the time
+          and the route are two different server actions, so a batch would have
+          to report "your time changed but your destination was declined", and
+          each change re-quotes the fare. Applying one at a time means the
+          passenger sees the new fare for the thing they just changed. */}
       <Modal
-        visible={!!editingRide}
+        visible={
+          !!editingRide && editField !== "pickup" && editField !== "dropoff"
+        }
         animationType="slide"
         transparent
         onRequestClose={closeEdit}
@@ -433,31 +483,117 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
         <View style={styles.editOverlay}>
           <View style={styles.editSheet}>
             <View style={styles.editHeader}>
-              <Text style={styles.editTitle}>Edit pickup time</Text>
-              <TouchableOpacity style={styles.editCloseBtn} onPress={closeEdit}>
-                <Ionicons name="close" size={20} color={colors.textPrimary} />
+              <Text style={styles.editTitle}>
+                {editField === "time" ? "Change pickup time" : "Edit ride"}
+              </Text>
+              <TouchableOpacity
+                style={styles.editCloseBtn}
+                onPress={() => (editField ? setEditField(null) : closeEdit())}
+              >
+                <Ionicons
+                  name={editField ? "chevron-back" : "close"}
+                  size={20}
+                  color={colors.textPrimary}
+                />
               </TouchableOpacity>
             </View>
-            <ScrollView keyboardShouldPersistTaps="handled">
-              {editingRide && (
-                <ScheduleDateTimePicker value={editDate} onChange={setEditDate} />
-              )}
-            </ScrollView>
-            <TouchableOpacity
-              style={[styles.saveBtn, saving && { opacity: 0.6 }]}
-              onPress={saveEdit}
-              disabled={saving || !editDate}
-              activeOpacity={0.85}
-            >
-              {saving ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.saveBtnText}>Save changes</Text>
-              )}
-            </TouchableOpacity>
+
+            {editField === "time" ? (
+              <>
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  <ScheduleDateTimePicker value={editDate} onChange={setEditDate} />
+                </ScrollView>
+                <TouchableOpacity
+                  style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+                  onPress={saveEdit}
+                  disabled={saving || !editDate}
+                  activeOpacity={0.85}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.saveBtnText}>Save changes</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : (
+              editingRide && (
+                <View>
+                  <Text style={styles.editHint}>
+                    Changing the pickup or destination re-quotes your fare.
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.editOption}
+                    onPress={() => {
+                      setEditDate(new Date(editingRide.scheduled_at));
+                      setEditField("time");
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="time-outline" size={18} color={colors.accentPurple} />
+                    <View style={styles.editOptionBody}>
+                      <Text style={styles.editOptionLabel}>Pickup time</Text>
+                      <Text style={styles.editOptionValue} numberOfLines={1}>
+                        {formatDate(editingRide.scheduled_at)}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.editOption}
+                    onPress={() => setEditField("pickup")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="navigate-outline" size={18} color={colors.accentPurple} />
+                    <View style={styles.editOptionBody}>
+                      <Text style={styles.editOptionLabel}>Pickup</Text>
+                      <Text style={styles.editOptionValue} numberOfLines={1}>
+                        {editingRide.pickup_address}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.editOption}
+                    onPress={() => setEditField("dropoff")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="flag-outline" size={18} color={colors.accentPurple} />
+                    <View style={styles.editOptionBody}>
+                      <Text style={styles.editOptionLabel}>Destination</Text>
+                      <Text style={styles.editOptionValue} numberOfLines={1}>
+                        {editingRide.dropoff_address}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              )
+            )}
           </View>
         </View>
       </Modal>
+
+      <AddressPickerModal
+        visible={editField === "pickup" || editField === "dropoff"}
+        title={editField === "pickup" ? "Change pickup" : "Change destination"}
+        note="Your fare is recalculated from the new route once you confirm."
+        near={
+          editingRide
+            ? {
+                latitude: editingRide.pickup_lat,
+                longitude: editingRide.pickup_lng,
+              }
+            : null
+        }
+        confirmLabel="Update ride"
+        busy={saving}
+        onCancel={() => setEditField(null)}
+        onConfirm={saveRelocate}
+      />
     </View>
   );
 }
@@ -631,7 +767,35 @@ const makeStyles = (colors: Colors) =>
       gap: 8,
       marginTop: 4,
     },
+    editHint: {
+      color: colors.textSecondary,
+      fontSize: 13,
+      lineHeight: 18,
+      marginBottom: 14,
+    },
+    editOption: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 14,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    editOptionBody: { flex: 1 },
+    editOptionLabel: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      marginBottom: 3,
+    },
+    editOptionValue: { color: colors.textPrimary, fontSize: 15 },
+    editRow: {
+      flexDirection: "row",
+      gap: 8,
+      marginTop: 4,
+      marginBottom: 8,
+    },
     editBtn: {
+      flex: 1,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",

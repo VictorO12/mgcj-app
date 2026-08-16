@@ -548,6 +548,45 @@ export default function DriverActiveRideScreen({
     if (loc) fetchRoute(loc, newTarget);
   }, [ride.status]);
 
+  // ── Passenger changed the destination mid-ride ───────────────────────
+  // DriverApp re-fetches the ride row on any realtime update, so `ride` already
+  // carries the new coordinates — but the effect above is keyed on status, so
+  // without this the nav would keep driving to the old dropoff. Separate from
+  // that effect on purpose: adding the coordinates to its deps would also tear
+  // down and re-fetch the PICKUP route (a wasted Directions call) whenever the
+  // destination changed before the passenger was even aboard.
+  const lastDropoffRef = useRef(`${ride.dropoff_lat},${ride.dropoff_lng}`);
+  useEffect(() => {
+    const key = `${ride.dropoff_lat},${ride.dropoff_lng}`;
+    if (key === lastDropoffRef.current) return;
+    lastDropoffRef.current = key;
+    if (ride.status !== "in_progress") return;
+
+    const newTarget = {
+      latitude: ride.dropoff_lat,
+      longitude: ride.dropoff_lng,
+    };
+    targetRef.current = newTarget;
+    setCurrentStepIndex(0);
+    setRouteCoords([]);
+    setSteps([]);
+    routeCoordsRef.current = [];
+    routeAvgSpeedRef.current = null;
+    etaSecondsRef.current = null;
+    setDistToNextTurn(null);
+    setDestSide(null);
+    announcedFar.current = false;
+    announcedNear.current = false;
+    announcedDestSide.current = false;
+    Speech.speak("Destination changed. Rerouting.", { language: SPEECH_LANG });
+    Alert.alert(
+      "Destination changed",
+      `This ride is now going to ${ride.dropoff_address}. The fare has been updated.`,
+    );
+    const loc = locationRef.current;
+    if (loc) fetchRoute(loc, newTarget);
+  }, [ride.dropoff_lat, ride.dropoff_lng, ride.status]);
+
   // ── Advance nav step on proximity + turn indicator + voice ───────────
   useEffect(() => {
     if (!location || steps.length === 0) return;

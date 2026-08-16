@@ -18,6 +18,8 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
 import DriverProfileSheet from "./DriverProfileSheet";
 import ReportDriverModal from "./ReportDriverModal";
+import AddressPickerModal, { type PickedAddress } from "./AddressPickerModal";
+import { invokeFunction } from "../lib/invokeFunction";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
 
@@ -44,6 +46,8 @@ export default function RideTrackingSheet({
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
   const [alreadyReported, setAlreadyReported] = useState(false);
+  const [destPickerVisible, setDestPickerVisible] = useState(false);
+  const [changingDest, setChangingDest] = useState(false);
   const sheetY = useRef(new Animated.Value(0)).current;
 
   const panResponder = useRef(
@@ -118,6 +122,34 @@ export default function RideTrackingSheet({
       { text: "No", style: "cancel" },
       { text: "Yes, cancel", style: "destructive", onPress: onCancel },
     ]);
+  }
+
+  async function changeDestination(place: PickedAddress) {
+    setChangingDest(true);
+    // Everything that makes this safe lives server-side in edit-ride: the fare
+    // is recomputed as (distance already driven + distance still to drive), the
+    // new card hold is taken BEFORE the change is applied, and the driver's
+    // other commitments are checked. All this has to do is report what came
+    // back — including the refusals, which are written to be read aloud.
+    const { data, error } = await invokeFunction("edit-ride", {
+      ride_id: ride.id,
+      action: "relocate",
+      dropoff: place,
+    });
+    setChangingDest(false);
+    if (error) {
+      Alert.alert("Couldn't change the destination", error);
+      return;
+    }
+    setDestPickerVisible(false);
+    if (data?.fare_estimate != null) {
+      Alert.alert(
+        "Destination updated",
+        `Your driver has been notified. Your estimated fare is now $${Number(
+          data.fare_estimate,
+        ).toFixed(2)}.`,
+      );
+    }
   }
 
   const isCompleted = ride.status === "completed";
@@ -300,6 +332,21 @@ export default function RideTrackingSheet({
           )}
         </View>
 
+        {/* Change destination — allowed right up until the ride ends. The fare
+            is re-quoted server-side off what has already been driven, so a
+            late change can raise it but never wipe out the trip so far. */}
+        {!isCompleted && !isCancelled && (
+          <TouchableOpacity
+            style={styles.changeDestRow}
+            onPress={() => setDestPickerVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="flag-outline" size={16} color={colors.accentOrange} />
+            <Text style={styles.changeDestText}>Change destination</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+
         {/* Report driver — prominent, full width */}
         {hasDriver && (
           <TouchableOpacity
@@ -341,6 +388,17 @@ export default function RideTrackingSheet({
           onDismiss={handleReportDismiss}
         />
       )}
+
+      <AddressPickerModal
+        visible={destPickerVisible}
+        title="Change destination"
+        note="You'll be charged for the distance already travelled plus the new route, so the fare may go up."
+        near={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+        confirmLabel="Update destination"
+        busy={changingDest}
+        onCancel={() => setDestPickerVisible(false)}
+        onConfirm={changeDestination}
+      />
     </>
   );
 }
@@ -474,6 +532,24 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     justifyContent: "center",
   },
 
+  changeDestRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(232,80,10,0.08)",
+    borderWidth: 0.5,
+    borderColor: "rgba(232,80,10,0.22)",
+  },
+  changeDestText: {
+    flex: 1,
+    color: colors.accentOrange,
+    fontSize: 14,
+    fontWeight: "600",
+  },
   reportRow: {
     flexDirection: "row",
     alignItems: "center",
