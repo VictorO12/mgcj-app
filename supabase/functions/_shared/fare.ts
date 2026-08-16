@@ -8,6 +8,15 @@
 // hold was sized off a client-writable column while the immediate path computed
 // it server-side — a money bug. Keeping the logic here means there is exactly
 // one implementation to trust.
+//
+// The vehicle-class surcharge lives here for the same reason (added 2026-08-16).
+// It used to exist ONLY in the two clients: PassengerHomeScreen quoted the
+// passenger `fare * (1 + surcharge/100)` and the dashboard did the same, while
+// every server-side computation ignored the class entirely. So a surcharged
+// ride was quoted high and held low — the mirror image of the $0.75 ride, and
+// invisible because nobody complains about being undercharged. Any new fare
+// path must take `vehicleClassId`; a fare computed without it silently reverts
+// the fix for whichever caller forgets.
 
 const GOOGLE_MAPS_KEY = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
 
@@ -53,9 +62,48 @@ export async function routeLegMetres(points: LatLng[]): Promise<number[]> {
   return legs.map(leg => leg?.distance?.value ?? 0)
 }
 
-/** The company's pricing formula. The ONLY place distance becomes money. */
-export function fareFromMetres(metres: number, baseFare: number, ratePerKm: number): number {
-  return Math.round((baseFare + (metres / 1000) * ratePerKm) * 100) / 100
+/** The company's pricing formula. The ONLY place distance becomes money.
+ *
+ *  The vehicle-class surcharge multiplies the WHOLE fare, base included — the
+ *  same shape the passenger is quoted in PassengerHomeScreen (`baseFare * (1 +
+ *  surcharge/100)`, where its `baseFare` is the already-computed fare). Getting
+ *  this wrong in the other direction — applying it to the distance component
+ *  only — would quote one number and charge another, which is the whole reason
+ *  the surcharge came server-side. */
+export function fareFromMetres(
+  metres: number, baseFare: number, ratePerKm: number, surchargePercent = 0,
+): number {
+  const fare = baseFare + (metres / 1000) * ratePerKm
+  return Math.round(fare * (1 + surchargePercent / 100) * 100) / 100
+}
+
+/**
+ * A vehicle class's surcharge percent, or 0 when there is no class.
+ *
+ * Scoped to the company on purpose: `vehicle_class_id` reaches the server from
+ * the client on the immediate-booking path (create-payment-intent runs before
+ * the ride row exists), and a class id belonging to some other company must
+ * never price a ride here. An unknown or foreign id yields 0 rather than an
+ * error — the un-surcharged fare is the safe direction to fail, and it is what
+ * every caller did before this existed.
+ *
+ * Note the surcharge only ever RAISES the fare, so a passenger who sends a
+ * cheaper class is not exploiting anything: assign-ride filters drivers by the
+ * same `vehicle_class_id` written to the row, so they get the cheaper class of
+ * vehicle they paid for.
+ */
+// deno-lint-ignore no-explicit-any
+export async function getVehicleSurcharge(
+  serviceClient: any, companyId: string | null, vehicleClassId: string | null | undefined,
+): Promise<number> {
+  if (!vehicleClassId || !companyId) return 0
+  const { data } = await serviceClient
+    .from('vehicle_classes')
+    .select('surcharge_percent')
+    .eq('id', vehicleClassId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return data?.surcharge_percent ?? 0
 }
 
 /** Company pricing, falling back to the platform defaults. */
@@ -81,12 +129,13 @@ export async function computeFareFromCoords(
   pickupLat: number, pickupLng: number,
   dropoffLat: number, dropoffLng: number,
   baseFare: number, ratePerKm: number,
+  surchargePercent = 0,
 ): Promise<number> {
   const metres = await routeMetres([
     { lat: pickupLat,  lng: pickupLng  },
     { lat: dropoffLat, lng: dropoffLng },
   ])
-  return fareFromMetres(metres, baseFare, ratePerKm)
+  return fareFromMetres(metres, baseFare, ratePerKm, surchargePercent)
 }
 
 export interface AuthoritativeFare {
@@ -110,14 +159,18 @@ export async function computeAuthoritativeFare(
     companyId:  string | null
     pickupLat:  number; pickupLng:  number
     dropoffLat: number; dropoffLng: number
-    discountCode?: string | null
+    discountCode?:   string | null
+    vehicleClassId?: string | null
   },
 ): Promise<AuthoritativeFare> {
   const { baseFare, ratePerKm } = await getCompanyPricing(serviceClient, opts.companyId)
+  const surchargePercent = await getVehicleSurcharge(
+    serviceClient, opts.companyId, opts.vehicleClassId,
+  )
 
   const fare = await computeFareFromCoords(
     opts.pickupLat, opts.pickupLng, opts.dropoffLat, opts.dropoffLng,
-    baseFare, ratePerKm,
+    baseFare, ratePerKm, surchargePercent,
   )
 
   let discountedFare = fare

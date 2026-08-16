@@ -926,6 +926,10 @@ export default function PassengerHomeScreen() {
               dropoff_lat: dropoffPlace.coords.latitude,
               dropoff_lng: dropoffPlace.coords.longitude,
               discount_code: discountCodeInput.trim() || null,
+              // The class is what the surcharge is priced off server-side. Omit
+              // it and the hold is sized off the un-surcharged fare while this
+              // screen quotes the surcharged one.
+              vehicle_class_id: selectedClassId,
             },
             "Could not process payment. Please try a different card or pay with cash.",
           );

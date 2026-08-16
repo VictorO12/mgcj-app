@@ -803,6 +803,9 @@ async function ensurePaymentIntent(ride: any): Promise<string | null> {
     pickupLat:  ride.pickup_lat,  pickupLng:  ride.pickup_lng,
     dropoffLat: ride.dropoff_lat, dropoffLng: ride.dropoff_lng,
     discountCode,
+    // Read off the row, not a client body: by release time the ride exists and
+    // its class is the authoritative one.
+    vehicleClassId: ride.vehicle_class_id ?? null,
   })
 
   // Use the recomputed fare when we got one; only fall back to the stored value

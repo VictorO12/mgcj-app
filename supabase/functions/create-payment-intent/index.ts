@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    const { pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, discount_code } = await req.json()
+    const { pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, discount_code, vehicle_class_id } = await req.json()
 
     if (
       pickup_lat == null || pickup_lng == null ||
@@ -107,7 +107,12 @@ Deno.serve(async (req) => {
       companyId:  passenger.company_id,
       pickupLat:  pickup_lat,  pickupLng:  pickup_lng,
       dropoffLat: dropoff_lat, dropoffLng: dropoff_lng,
-      discountCode: discount_code ?? null,
+      discountCode:   discount_code ?? null,
+      // Client-supplied because this runs BEFORE the ride row exists, but
+      // getVehicleSurcharge scopes the lookup to the passenger's company, and
+      // the same id goes onto the row the client then inserts — so it prices
+      // the vehicle class they will actually be matched with.
+      vehicleClassId: vehicle_class_id ?? null,
     })
     if (!fare_amount || fare_amount <= 0) {
       return new Response(JSON.stringify({ error: 'Could not compute fare — check coordinates.' }), {
