@@ -289,8 +289,12 @@ export default function PassengerHomeScreen() {
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
   const [rideRouteCoords, setRideRouteCoords] = useState<LatLng[]>([]);
-  const lastRouteFetchStatus = useRef<string | null>(null);
+  const lastRouteFetchKey = useRef<string | null>(null);
   const routeDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the route was last actually fetched, so the periodic refresh throttles
+  // instead of debouncing — see the effect below for why that distinction is
+  // what makes the line redraw at all.
+  const lastRouteFetchAt = useRef(0);
 
   const [defaultCard, setDefaultCard] = useState<PaymentMethod | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<"card" | "cash">(
@@ -341,12 +345,16 @@ export default function PassengerHomeScreen() {
   useEffect(() => {
     if (!ride?.driver?.current_lat || !ride?.driver?.current_lng) {
       setRideRouteCoords([]);
-      lastRouteFetchStatus.current = null;
+      lastRouteFetchKey.current = null;
       return;
     }
-    const statusChanged = ride.status !== lastRouteFetchStatus.current;
-    if (statusChanged) {
-      lastRouteFetchStatus.current = ride.status;
+    // Keyed on the DESTINATION as well as the status. Status alone meant a
+    // mid-ride destination change never redrew the line: the ride stays
+    // 'in_progress', so nothing here registered that the target had moved.
+    const routeKey = `${ride.status}|${ride.dropoff_lat},${ride.dropoff_lng}`;
+    const targetChanged = routeKey !== lastRouteFetchKey.current;
+    if (targetChanged) {
+      lastRouteFetchKey.current = routeKey;
       const origin = {
         latitude: ride.driver.current_lat,
         longitude: ride.driver.current_lng,
@@ -355,6 +363,7 @@ export default function PassengerHomeScreen() {
         ride.status === "in_progress"
           ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
           : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+      lastRouteFetchAt.current = Date.now();
       fetchRideRoute(origin, destination);
       mapRef.current?.fitToCoordinates([origin, destination], {
         edgePadding: { top: 100, right: 60, bottom: 360, left: 60 },
@@ -362,8 +371,16 @@ export default function PassengerHomeScreen() {
       });
       return;
     }
+    // Throttle, NOT a debounce. This effect re-runs on every driver location
+    // broadcast (~10s), and a debounce of the same length was cleared and
+    // restarted each time — so it starved and the line only ever redrew on a
+    // status change. A throttle fires on schedule no matter how often the
+    // driver's position updates.
+    const sinceLast = Date.now() - lastRouteFetchAt.current;
+    const wait = Math.max(0, 10000 - sinceLast);
     if (routeDebounceTimer.current) clearTimeout(routeDebounceTimer.current);
     routeDebounceTimer.current = setTimeout(() => {
+      lastRouteFetchAt.current = Date.now();
       const origin = {
         latitude: ride.driver!.current_lat!,
         longitude: ride.driver!.current_lng!,
@@ -373,16 +390,22 @@ export default function PassengerHomeScreen() {
           ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
           : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
       fetchRideRoute(origin, destination);
-    }, 10000);
+    }, wait);
     return () => {
       if (routeDebounceTimer.current) clearTimeout(routeDebounceTimer.current);
     };
-  }, [ride?.status, ride?.driver?.current_lat, ride?.driver?.current_lng]);
+  }, [
+    ride?.status,
+    ride?.dropoff_lat,
+    ride?.dropoff_lng,
+    ride?.driver?.current_lat,
+    ride?.driver?.current_lng,
+  ]);
 
   useEffect(() => {
     if (!ride) {
       setRideRouteCoords([]);
-      lastRouteFetchStatus.current = null;
+      lastRouteFetchKey.current = null;
     }
   }, [ride]);
 
