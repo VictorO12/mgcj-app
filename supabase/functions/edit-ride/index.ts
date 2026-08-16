@@ -460,6 +460,14 @@ Deno.serve(async (req) => {
         }
         fare = fareFromMetres(driven + remaining, baseFare, ratePerKm, surchargePercent)
         tripMins = (remaining / 1000 / 40) * 60   // ~40 km/h urban average
+
+        // The two legs are the whole basis of a mid-ride charge and they are
+        // stored nowhere — the row keeps only the resulting fare. Without this
+        // line the only way to check the pricing after the fact is to invert
+        // the formula in SQL and compare against a straight-line estimate.
+        console.log(`[edit-ride ${ride.id}] mid-ride re-price: driven=${driven}m ` +
+          `remaining=${remaining}m total=${driven + remaining}m ` +
+          `base=${baseFare} rate=${ratePerKm} surcharge=${surchargePercent}% -> ${fare}`)
       } else {
         const metres = await routeMetres([
           { lat: Number(newPickup.lat),  lng: Number(newPickup.lng)  },
@@ -468,6 +476,8 @@ Deno.serve(async (req) => {
         if (!metres) return json({ error: 'Could not work out a route to that destination.' }, 400)
         fare = fareFromMetres(metres, baseFare, ratePerKm, surchargePercent)
         tripMins = (metres / 1000 / 40) * 60
+        console.log(`[edit-ride ${ride.id}] re-price: ${metres}m ` +
+          `base=${baseFare} rate=${ratePerKm} surcharge=${surchargePercent}% -> ${fare}`)
       }
 
       // A dispatcher's typed fare replaces the computed one — they are trusted,
@@ -732,6 +742,10 @@ Deno.serve(async (req) => {
       if (updErr) return json({ error: updErr.message }, 500)
       return json({ error: 'This ride just changed — please try again.' }, 409)
     }
+
+    console.log(`[edit-ride ${ride.id}] applied by ${actor}: ` +
+      `fare ${ride.fare_estimate} -> ${needsReprice ? discountedFare : '(unchanged)'}, ` +
+      `reauthorized=${!!newPiId}, claim_released=${!!claimantId}`)
 
     if (claimantId) {
       await sendPush(
