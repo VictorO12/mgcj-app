@@ -13,6 +13,25 @@
 //   reschedule   change scheduled_at on a scheduled ride nobody is committed to
 //   relocate     change pickup and/or dropoff, re-pricing the ride
 //
+// ── Two callers, one money path ─────────────────────────────────────────────
+// The passenger app uses `reschedule` and a plain `relocate`. The dispatch
+// dashboard uses `relocate` ONLY, folding time, vehicle class and an optional
+// manual fare into the same call, because a dispatcher's save is one atomic
+// edit and splitting it across two actions would half-apply on a failure.
+//
+// The dashboard used to write all of this with a direct `.update()` — legal,
+// because both freeze triggers exempt `is_staff()`. It re-priced client-side,
+// so the fare was not stale, but it never re-authorized Stripe. That is the
+// real bug it had: `capture-payment` captures the PaymentIntent's authorized
+// amount and writes it back over the fare, so a dispatcher moving a
+// destination produced a charge and a receipt that agreed with each other and
+// disagreed with the ride. It also skipped the claim release, the notified_* /
+// leave_by resets, and the commitment guard.
+//
+// So the admin extras are additive and actor-gated; a passenger sending any of
+// them is refused. `reschedule` is deliberately untouched — it is the shipped,
+// live-tested app path.
+//
 // ── The pricing rule, and the trap it avoids ────────────────────────────────
 // Do NOT re-price a moved destination as `pickup → new dropoff`. That is the
 // obvious implementation and it is a free-ride exploit: a passenger who rides
@@ -42,7 +61,7 @@
 // behind it. Do not "fix" this to match settle-ride.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import {
-  routeMetres, routeLegMetres, fareFromMetres, getCompanyPricing,
+  routeMetres, routeLegMetres, fareFromMetres, getCompanyPricing, getVehicleSurcharge,
 } from '../_shared/fare.ts'
 import { evaluate, COMMITMENT_LOOKAHEAD_MINS, type Commitment } from '../_shared/commitment.ts'
 
@@ -65,6 +84,16 @@ const MAX_EDITS = 3
 // cancel-and-rebook, or a dispatch action from the dashboard.
 const PICKUP_EDITABLE  = new Set(['scheduled', 'pending'])
 const DROPOFF_EDITABLE = new Set(['scheduled', 'pending', 'offered', 'assigned', 'driver_arriving', 'in_progress'])
+
+// Dispatch may move a pickup later than a passenger may: they can phone the
+// driver, which is exactly the coordination the passenger-side ban stands in
+// for. The one status still excluded is in_progress — the passenger is aboard,
+// so the pickup already happened and "moving" it would only corrupt the
+// driven-distance leg the mid-ride fare is computed from.
+const PICKUP_EDITABLE_ADMIN = new Set(['scheduled', 'pending', 'offered', 'assigned', 'driver_arriving'])
+
+// Moving the time only means something before the pickup happens.
+const RESCHEDULABLE_ADMIN = new Set(['scheduled', 'pending', 'offered', 'assigned'])
 
 // Statuses where a driver is committed to this ride: the fare is effectively
 // final, the passenger is mid-commitment, and the commitment guard applies.
@@ -196,7 +225,7 @@ Deno.serve(async (req) => {
         'id, status, passenger_id, driver_id, company_id, payment_method, scheduled_at, ' +
         'pickup_lat, pickup_lng, pickup_address, dropoff_lat, dropoff_lng, dropoff_address, ' +
         'fare_estimate, pre_discount_fare, discount_amount, discount_type, discount_code_id, ' +
-        'stripe_payment_intent_id, preferred_driver_id, claimed_at, edit_count'
+        'stripe_payment_intent_id, preferred_driver_id, claimed_at, edit_count, vehicle_class_id'
       )
       .eq('id', ride_id)
       .maybeSingle()
@@ -219,7 +248,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    if ((ride.edit_count ?? 0) >= MAX_EDITS) {
+    // The cap is anti-tap-spam for passengers — and its error message tells them
+    // to call dispatch, so applying it to dispatch would close the escape hatch
+    // it points at.
+    if (actor === 'passenger' && (ride.edit_count ?? 0) >= MAX_EDITS) {
       return json({ error: `This ride has already been changed ${MAX_EDITS} times. Please call dispatch.` }, 409)
     }
 
@@ -300,13 +332,65 @@ Deno.serve(async (req) => {
     }
 
     // ── relocate ────────────────────────────────────────────────
-    const { pickup, dropoff } = body
-    if (!pickup && !dropoff) return json({ error: 'Nothing to change' }, 400)
+    const {
+      pickup, dropoff,
+      // Admin-only extras. A dispatcher's save is one edit, so they arrive on
+      // the same call rather than as a second round trip.
+      scheduled_at: newScheduledAtRaw,
+      vehicle_class_id: newVehicleClassId,
+      fare_override,
+      confirm_conflict,
+    } = body
 
-    if (pickup && !PICKUP_EDITABLE.has(ride.status)) {
+    const isAdmin = actor === 'admin'
+    if (!isAdmin && (
+      newScheduledAtRaw != null || newVehicleClassId !== undefined ||
+      fare_override != null || confirm_conflict
+    )) {
+      // Not merely unsupported — these are the fields that let a caller set
+      // their own price and move a booked time past the reschedule branch's
+      // guards. The passenger surface stays exactly what shipped.
+      return json({ error: 'Not permitted on this ride' }, 403)
+    }
+
+    // Resolve the time change first: whether it moved decides several resets
+    // below, and an unchanged value sent by a form that always posts every
+    // field must not count as a change.
+    let newScheduledAtISO: string | null = null
+    if (newScheduledAtRaw != null) {
+      const whenMs = new Date(newScheduledAtRaw).getTime()
+      if (!Number.isFinite(whenMs)) return json({ error: 'scheduled_at is not a valid time' }, 400)
+      const iso = new Date(whenMs).toISOString()
+      if (!ride.scheduled_at || new Date(ride.scheduled_at).getTime() !== whenMs) {
+        if (!ride.scheduled_at) {
+          return json({ error: 'This is an immediate ride — it has no scheduled time to move.' }, 409)
+        }
+        if (!RESCHEDULABLE_ADMIN.has(ride.status)) {
+          return json({ error: 'This ride is already under way — its time can no longer be moved.' }, 409)
+        }
+        if (whenMs <= Date.now()) {
+          return json({ error: 'The new pickup time has to be later than now.' }, 400)
+        }
+        newScheduledAtISO = iso
+      }
+    }
+
+    // Same treatment for the class: only a real change reprices or is written.
+    const classChanged =
+      newVehicleClassId !== undefined &&
+      (newVehicleClassId || null) !== (ride.vehicle_class_id || null)
+
+    if (!pickup && !dropoff && !newScheduledAtISO && !classChanged && fare_override == null) {
+      return json({ error: 'Nothing to change' }, 400)
+    }
+
+    const pickupEditable = isAdmin ? PICKUP_EDITABLE_ADMIN : PICKUP_EDITABLE
+    if (pickup && !pickupEditable.has(ride.status)) {
       return json({ error: 'A driver is already on the way — the pickup can no longer be moved.' }, 409)
     }
-    if (pickup && ride.driver_id) {
+    // A passenger may not move a pickup once anyone is assigned, even if the
+    // status has not caught up yet. Dispatch may — they can call the driver.
+    if (pickup && ride.driver_id && !isAdmin) {
       return json({ error: 'A driver is already on the way — the pickup can no longer be moved.' }, 409)
     }
     if (dropoff && !DROPOFF_EDITABLE.has(ride.status)) {
@@ -321,203 +405,262 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { baseFare, ratePerKm } = await getCompanyPricing(supabase, ride.company_id)
+    // Only a change to WHERE the ride goes, what class of car it is, or the
+    // dispatcher's own typed number moves the money. A time-only edit does not
+    // — and must not: the passenger `reschedule` path leaves the fare alone,
+    // and re-pricing here would let a dispatcher nudging a pickup by five
+    // minutes trigger a Directions call and a Stripe re-authorization for a
+    // fare change nobody asked for (an expired discount, say). Skipping the
+    // whole block keeps the two time-change paths behaving identically.
+    const needsReprice = !!pickup || !!dropoff || classChanged || fare_override != null
+
+    let preDiscountFare = Number(ride.pre_discount_fare ?? ride.fare_estimate ?? 0)
+    let discountedFare  = Number(ride.fare_estimate ?? 0)
+    let discountAmount  = Number(ride.discount_amount ?? 0)
+    let discountType: string | null   = ride.discount_type ?? null
+    let discountCodeId: string | null = ride.discount_code_id ?? null
+    let newPiId: string | null        = null
+    let oldPiToCancel: string | null  = null
     const inRide = ride.status === 'in_progress'
 
-    let fare: number
-    let tripMins = 0
-    if (inRide) {
-      // Price off where the car actually is, read from the drivers table — not
-      // from anything the client sent. The position is the pivot the whole fare
-      // turns on, so it gets the same treatment as the fare itself.
-      const { data: driver } = await supabase
-        .from('drivers')
-        .select('current_lat, current_lng')
-        .eq('id', ride.driver_id)
-        .maybeSingle()
-      if (driver?.current_lat == null || driver?.current_lng == null) {
-        // Falling back to pickup → new dropoff here is exactly the exploit this
-        // function exists to avoid, so refuse instead of guessing.
-        return json({ error: "We can't reach the driver's location right now. Please ask them to change the destination." }, 503)
-      }
+    if (needsReprice) {
+      const { baseFare, ratePerKm } = await getCompanyPricing(supabase, ride.company_id)
+      // The class the ride will HAVE after this edit — a dispatcher changing the
+      // class is changing the fare, so the surcharge has to come from the new one.
+      const effectiveClassId = classChanged ? (newVehicleClassId || null) : (ride.vehicle_class_id ?? null)
+      const surchargePercent = await getVehicleSurcharge(supabase, ride.company_id, effectiveClassId)
 
-      // One request, two legs: pickup → where the car is now (driven), and
-      // there → the new destination (remaining). Reading them separately is
-      // what keeps the commitment check below from costing a second call.
-      const [driven = 0, remaining = 0] = await routeLegMetres([
-        { lat: ride.pickup_lat,        lng: ride.pickup_lng        },
-        { lat: driver.current_lat,     lng: driver.current_lng     },
-        { lat: Number(newDropoff.lat), lng: Number(newDropoff.lng) },
-      ])
-      if (!driven && !remaining) {
-        return json({ error: 'Could not work out a route to that destination.' }, 400)
-      }
-      fare = fareFromMetres(driven + remaining, baseFare, ratePerKm)
-      tripMins = (remaining / 1000 / 40) * 60   // ~40 km/h urban average
-    } else {
-      const metres = await routeMetres([
-        { lat: Number(newPickup.lat),  lng: Number(newPickup.lng)  },
-        { lat: Number(newDropoff.lat), lng: Number(newDropoff.lng) },
-      ])
-      if (!metres) return json({ error: 'Could not work out a route to that destination.' }, 400)
-      fare = fareFromMetres(metres, baseFare, ratePerKm)
-      tripMins = (metres / 1000 / 40) * 60
-    }
-
-    // ── Discount ────────────────────────────────────────────────
-    // Re-resolve it, then floor it at what the passenger already had once a
-    // driver is committed. Re-resolving alone would let a code that expired
-    // between booking and the edit silently vanish, so the fare would jump for
-    // a reason the passenger can't see; the floor keeps a percentage discount
-    // scaling correctly with the new fare while making that impossible.
-    // Before a driver is committed there is no floor: for a scheduled ride
-    // scheduled-release re-prices at release anyway, and pinning a discount
-    // here that release would then drop just moves the surprise later.
-    // Note this calls compute_discount_for_booking directly rather than going
-    // through computeAuthoritativeFare: that helper re-derives the fare from a
-    // Directions call of its own, and for a ride under way its two-point
-    // pickup → dropoff model is the very number we must not charge. We already
-    // hold the authoritative fare; only the discount is still open.
-    let code: string | null = null
-    if (ride.discount_code_id) {
-      const { data: dc } = await supabase
-        .from('discount_codes').select('code').eq('id', ride.discount_code_id).maybeSingle()
-      code = dc?.code ?? null
-    }
-
-    let discountAmount = 0
-    let discountType: string | null = null
-    let discountCodeId: string | null = null
-    if (ride.company_id && fare > 0) {
-      const { data: d } = await supabase
-        .rpc('compute_discount_for_booking', {
-          p_user_id:    ride.passenger_id,
-          p_company_id: ride.company_id,
-          p_fare:       fare,
-          p_code:       code,
-        })
-        .maybeSingle()
-      if (d) {
-        discountAmount = d.discount_amount ?? 0
-        discountType   = d.discount_type ?? null
-        discountCodeId = d.code_id ?? null
-      }
-    }
-
-    if (DRIVER_COMMITTED.has(ride.status) && Number(ride.discount_amount ?? 0) > discountAmount) {
-      discountAmount = Number(ride.discount_amount)
-      discountType   = ride.discount_type
-      discountCodeId = ride.discount_code_id
-    }
-
-    const preDiscountFare = fare
-    const discountedFare  = Math.max(0, Math.round((fare - discountAmount) * 100) / 100)
-
-    // ── Commitment guard ────────────────────────────────────────
-    if (ride.driver_id && dropoff) {
-      const conflict = await commitmentConflict(
-        ride, ride.driver_id, tripMins, Number(newDropoff.lat), Number(newDropoff.lng),
-      )
-      if (conflict) {
-        return json({
-          error: 'That destination would make your driver late for another booked pickup. Please call dispatch to arrange it.',
-          conflict: {
-            due_at:        conflict.verdict.due_at,
-            minutes_short: conflict.verdict.minutes_short,
-          },
-        }, 409)
-      }
-    }
-
-    // ── Stripe ──────────────────────────────────────────────────
-    // Only card rides with a live hold need anything here. A scheduled ride
-    // before release has no PaymentIntent at all (scheduled-release creates it
-    // lazily), which is the cheap and most common case: write and done.
-    let newPiId: string | null = null
-    let oldPiToCancel: string | null = null
-
-    if (ride.payment_method === 'card' && ride.stripe_payment_intent_id) {
-      const intent = await stripeGet(`/payment_intents/${ride.stripe_payment_intent_id}`)
-      if (intent.error) {
-        return json({ error: 'Could not reach your payment to update it. Please try again.' }, 502)
-      }
-      if (intent.status === 'succeeded') {
-        return json({ error: 'This ride has already been paid for and can no longer be changed.' }, 409)
-      }
-
-      const newCents = Math.round(discountedFare * 100)
-      if (newCents !== (intent.amount ?? 0)) {
-        // ANY change to the amount, in either direction. capture-payment
-        // captures `intent.amount_capturable ?? intent.amount` — the PI's
-        // authorized amount, never the row's fare — and then writes that back
-        // over fare_final. So an authorization left at the old number is a
-        // silent undercharge when the fare went up and a silent OVERCHARGE
-        // when it went down: a passenger who shortens their trip would be
-        // billed the original amount, with a receipt agreeing with the
-        // overcharge. The authorization is the charge, so it has to move with
-        // the fare both ways.
-        const { data: passenger } = await supabase
-          .from('profiles').select('stripe_customer_id').eq('id', ride.passenger_id).maybeSingle()
-        const { data: pm } = await supabase
-          .from('payment_methods')
-          .select('stripe_payment_method_id')
-          .eq('passenger_id', ride.passenger_id)
-          .eq('is_default', true)
+      let fare: number
+      let tripMins = 0
+      if (inRide) {
+        // Price off where the car actually is, read from the drivers table — not
+        // from anything the client sent. The position is the pivot the whole fare
+        // turns on, so it gets the same treatment as the fare itself.
+        const { data: driver } = await supabase
+          .from('drivers')
+          .select('current_lat, current_lng')
+          .eq('id', ride.driver_id)
           .maybeSingle()
-
-        if (!passenger?.stripe_customer_id || !pm?.stripe_payment_method_id) {
-          return json({ error: 'No card on file to authorize the new fare.' }, 402)
+        if (driver?.current_lat == null || driver?.current_lng == null) {
+          // Falling back to pickup → new dropoff here is exactly the exploit this
+          // function exists to avoid, so refuse instead of guessing.
+          return json({ error: "We can't reach the driver's location right now. Please ask them to change the destination." }, 503)
         }
 
-        const created = await stripePost('/payment_intents', {
-          amount:                                       newCents.toString(),
-          currency:                                     'cad',
-          customer:                                     passenger.stripe_customer_id,
-          payment_method:                               pm.stripe_payment_method_id,
-          capture_method:                               'manual',
-          confirm:                                      'true',
-          off_session:                                  'true',
-          'automatic_payment_methods[enabled]':         'true',
-          'automatic_payment_methods[allow_redirects]': 'never',
-          'metadata[passenger_id]':                     ride.passenger_id,
-          'metadata[ride_id]':                          ride.id,
-          'metadata[pre_discount_fare]':                preDiscountFare.toString(),
-          'metadata[discount_amount]':                  discountAmount.toString(),
-          'metadata[replaces_intent]':                  ride.stripe_payment_intent_id,
-        }, `edit-${ride.id}-${(ride.edit_count ?? 0) + 1}`)
-
-        // Insist on a live, capturable hold rather than merely "no error".
-        // The idempotency key is derived from edit_count, which does NOT
-        // increment when an edit rolls back — so a retry after the rollback
-        // path below (which creates a PI, fails, then cancels it) would get
-        // that CANCELLED PI back from Stripe's cache with no error set. Testing
-        // the status closes that, and every other non-held state, at once.
-        if (created.error || created.status !== 'requires_capture') {
-          const err = created.error ?? created.last_payment_error ?? {}
-          console.error(
-            `[edit-ride ${ride.id}] new hold not usable (status=${created.status}):`,
-            JSON.stringify(err),
-          )
-          return json({
-            error: declineMessage(err.decline_code ?? err.code),
-            decline_code: err.decline_code ?? err.code ?? null,
-          }, 402)
+        // One request, two legs: pickup → where the car is now (driven), and
+        // there → the new destination (remaining). Reading them separately is
+        // what keeps the commitment check below from costing a second call.
+        const [driven = 0, remaining = 0] = await routeLegMetres([
+          { lat: ride.pickup_lat,        lng: ride.pickup_lng        },
+          { lat: driver.current_lat,     lng: driver.current_lng     },
+          { lat: Number(newDropoff.lat), lng: Number(newDropoff.lng) },
+        ])
+        if (!driven && !remaining) {
+          return json({ error: 'Could not work out a route to that destination.' }, 400)
         }
-
-        newPiId       = created.id
-        oldPiToCancel = ride.stripe_payment_intent_id
+        fare = fareFromMetres(driven + remaining, baseFare, ratePerKm, surchargePercent)
+        tripMins = (remaining / 1000 / 40) * 60   // ~40 km/h urban average
+      } else {
+        const metres = await routeMetres([
+          { lat: Number(newPickup.lat),  lng: Number(newPickup.lng)  },
+          { lat: Number(newDropoff.lat), lng: Number(newDropoff.lng) },
+        ])
+        if (!metres) return json({ error: 'Could not work out a route to that destination.' }, 400)
+        fare = fareFromMetres(metres, baseFare, ratePerKm, surchargePercent)
+        tripMins = (metres / 1000 / 40) * 60
       }
-    }
+
+      // A dispatcher's typed fare replaces the computed one — they are trusted,
+      // and negotiating a price is a real dispatch job the dashboard has always
+      // allowed. It is treated as PRE-discount and run through the discount block
+      // below like any other fare, because `fare_estimate` is the post-discount
+      // number everywhere else in the schema. The dashboard used to write the
+      // typed figure straight into `fare_estimate`, which silently erased a
+      // passenger's discount every time dispatch touched a discounted ride.
+      //
+      // Note the route call above still happened: its `tripMins` is what the
+      // commitment guard needs, and an override does not make a driver less late.
+      if (fare_override != null) {
+        const overridden = Number(fare_override)
+        if (!Number.isFinite(overridden) || overridden < 0) {
+          return json({ error: 'The fare has to be a number.' }, 400)
+        }
+        fare = Math.round(overridden * 100) / 100
+      }
+
+      // ── Discount ────────────────────────────────────────────────
+      // Re-resolve it, then floor it at what the passenger already had once a
+      // driver is committed. Re-resolving alone would let a code that expired
+      // between booking and the edit silently vanish, so the fare would jump for
+      // a reason the passenger can't see; the floor keeps a percentage discount
+      // scaling correctly with the new fare while making that impossible.
+      // Before a driver is committed there is no floor: for a scheduled ride
+      // scheduled-release re-prices at release anyway, and pinning a discount
+      // here that release would then drop just moves the surprise later.
+      // Note this calls compute_discount_for_booking directly rather than going
+      // through computeAuthoritativeFare: that helper re-derives the fare from a
+      // Directions call of its own, and for a ride under way its two-point
+      // pickup → dropoff model is the very number we must not charge. We already
+      // hold the authoritative fare; only the discount is still open.
+      let code: string | null = null
+      if (ride.discount_code_id) {
+        const { data: dc } = await supabase
+          .from('discount_codes').select('code').eq('id', ride.discount_code_id).maybeSingle()
+        code = dc?.code ?? null
+      }
+
+      discountAmount = 0
+      discountType   = null
+      discountCodeId = null
+      if (ride.company_id && fare > 0) {
+        const { data: d } = await supabase
+          .rpc('compute_discount_for_booking', {
+            p_user_id:    ride.passenger_id,
+            p_company_id: ride.company_id,
+            p_fare:       fare,
+            p_code:       code,
+          })
+          .maybeSingle()
+        if (d) {
+          discountAmount = d.discount_amount ?? 0
+          discountType   = d.discount_type ?? null
+          discountCodeId = d.code_id ?? null
+        }
+      }
+
+      if (DRIVER_COMMITTED.has(ride.status) && Number(ride.discount_amount ?? 0) > discountAmount) {
+        discountAmount = Number(ride.discount_amount)
+        discountType   = ride.discount_type
+        discountCodeId = ride.discount_code_id
+      }
+
+      preDiscountFare = fare
+      discountedFare  = Math.max(0, Math.round((fare - discountAmount) * 100) / 100)
+
+      // Cash fares round up to the whole dollar, so nobody needs exact change.
+      // Both booking paths already do this (PassengerHomeScreen's
+      // `Math.ceil(discountedFare)`, and the dashboard's manual booking), and
+      // the dispatch fare preview does it too — without it here, every cash
+      // edit would come back a few cents off the number dispatch was shown and
+      // trigger the "fare recalculated" warning for no real reason.
+      if (ride.payment_method === 'cash') {
+        discountedFare = Math.ceil(discountedFare)
+      }
+
+      // ── Commitment guard ────────────────────────────────────────
+      if (ride.driver_id && dropoff) {
+        const conflict = await commitmentConflict(
+          ride, ride.driver_id, tripMins, Number(newDropoff.lat), Number(newDropoff.lng),
+        )
+        // For a passenger this is a refusal: the message points them at dispatch,
+        // who can actually resolve it by moving the other ride or another driver.
+        // For dispatch it is a warning they confirm through — they ARE the escape
+        // hatch, and a hard block would leave nobody able to make the call. Same
+        // shape as the manual-assignment warning check-ride-conflicts feeds.
+        if (conflict && !(isAdmin && confirm_conflict)) {
+          return json({
+            error: isAdmin
+              ? 'That destination would make this driver late for another booked pickup.'
+              : 'That destination would make your driver late for another booked pickup. Please call dispatch to arrange it.',
+            requires_confirmation: isAdmin,
+            conflict: {
+              due_at:        conflict.verdict.due_at,
+              minutes_short: conflict.verdict.minutes_short,
+            },
+          }, 409)
+        }
+      }
+
+      // ── Stripe ──────────────────────────────────────────────────
+      // Only card rides with a live hold need anything here. A scheduled ride
+      // before release has no PaymentIntent at all (scheduled-release creates it
+      // lazily), which is the cheap and most common case: write and done.
+      if (ride.payment_method === 'card' && ride.stripe_payment_intent_id) {
+        const intent = await stripeGet(`/payment_intents/${ride.stripe_payment_intent_id}`)
+        if (intent.error) {
+          return json({ error: 'Could not reach your payment to update it. Please try again.' }, 502)
+        }
+        if (intent.status === 'succeeded') {
+          return json({ error: 'This ride has already been paid for and can no longer be changed.' }, 409)
+        }
+
+        const newCents = Math.round(discountedFare * 100)
+        if (newCents !== (intent.amount ?? 0)) {
+          // ANY change to the amount, in either direction. capture-payment
+          // captures `intent.amount_capturable ?? intent.amount` — the PI's
+          // authorized amount, never the row's fare — and then writes that back
+          // over fare_final. So an authorization left at the old number is a
+          // silent undercharge when the fare went up and a silent OVERCHARGE
+          // when it went down: a passenger who shortens their trip would be
+          // billed the original amount, with a receipt agreeing with the
+          // overcharge. The authorization is the charge, so it has to move with
+          // the fare both ways.
+          const { data: passenger } = await supabase
+            .from('profiles').select('stripe_customer_id').eq('id', ride.passenger_id).maybeSingle()
+          const { data: pm } = await supabase
+            .from('payment_methods')
+            .select('stripe_payment_method_id')
+            .eq('passenger_id', ride.passenger_id)
+            .eq('is_default', true)
+            .maybeSingle()
+
+          if (!passenger?.stripe_customer_id || !pm?.stripe_payment_method_id) {
+            return json({ error: 'No card on file to authorize the new fare.' }, 402)
+          }
+
+          const created = await stripePost('/payment_intents', {
+            amount:                                       newCents.toString(),
+            currency:                                     'cad',
+            customer:                                     passenger.stripe_customer_id,
+            payment_method:                               pm.stripe_payment_method_id,
+            capture_method:                               'manual',
+            confirm:                                      'true',
+            off_session:                                  'true',
+            'automatic_payment_methods[enabled]':         'true',
+            'automatic_payment_methods[allow_redirects]': 'never',
+            'metadata[passenger_id]':                     ride.passenger_id,
+            'metadata[ride_id]':                          ride.id,
+            'metadata[pre_discount_fare]':                preDiscountFare.toString(),
+            'metadata[discount_amount]':                  discountAmount.toString(),
+            'metadata[replaces_intent]':                  ride.stripe_payment_intent_id,
+          }, `edit-${ride.id}-${(ride.edit_count ?? 0) + 1}`)
+
+          // Insist on a live, capturable hold rather than merely "no error".
+          // The idempotency key is derived from edit_count, which does NOT
+          // increment when an edit rolls back — so a retry after the rollback
+          // path below (which creates a PI, fails, then cancels it) would get
+          // that CANCELLED PI back from Stripe's cache with no error set. Testing
+          // the status closes that, and every other non-held state, at once.
+          if (created.error || created.status !== 'requires_capture') {
+            const err = created.error ?? created.last_payment_error ?? {}
+            console.error(
+              `[edit-ride ${ride.id}] new hold not usable (status=${created.status}):`,
+              JSON.stringify(err),
+            )
+            return json({
+              error: declineMessage(err.decline_code ?? err.code),
+              decline_code: err.decline_code ?? err.code ?? null,
+            }, 402)
+          }
+
+          newPiId       = created.id
+          oldPiToCancel = ride.stripe_payment_intent_id
+        }
+      }
+
+    } // ── end needsReprice ──────────────────────────────────────
 
     // ── Write ───────────────────────────────────────────────────
     const now = new Date().toISOString()
     const patch: Record<string, unknown> = {
-      fare_estimate:     discountedFare,
-      pre_discount_fare: preDiscountFare,
-      discount_amount:   discountAmount,
-      discount_type:     discountType,
-      discount_code_id:  discountCodeId,
-      edit_count:        (ride.edit_count ?? 0) + 1,
+      edit_count: (ride.edit_count ?? 0) + 1,
+    }
+    if (needsReprice) {
+      patch.fare_estimate     = discountedFare
+      patch.pre_discount_fare = preDiscountFare
+      patch.discount_amount   = discountAmount
+      patch.discount_type     = discountType
+      patch.discount_code_id  = discountCodeId
     }
     if (pickup) {
       patch.pickup_lat     = Number(newPickup.lat)
@@ -528,6 +671,12 @@ Deno.serve(async (req) => {
       patch.leave_by         = null
       patch.pickup_eta_mins  = null
       patch.coverage_status  = 'uncovered'
+      // Same reasoning as the time change below: a driver accepted a specific
+      // place as well as a specific time, and dispatch can now move a pickup on
+      // an offered/assigned/driver_arriving ride. Twenty kilometres away is not
+      // the job they said yes to, and leaving the confirmation standing would
+      // have the commitment guard defend a pickup they never agreed to.
+      if (ride.driver_id) patch.confirmed_by_driver = false
     }
     if (dropoff) {
       patch.dropoff_lat        = Number(newDropoff.lat)
@@ -536,13 +685,32 @@ Deno.serve(async (req) => {
       patch.dropoff_changed_at = now
     }
     if (newPiId) patch.stripe_payment_intent_id = newPiId
+    if (classChanged) patch.vehicle_class_id = newVehicleClassId || null
+
+    if (newScheduledAtISO) {
+      // Identical resets to the reschedule branch: every one of these is
+      // derived from the OLD time and is wrong the moment it moves.
+      patch.scheduled_at       = newScheduledAtISO
+      patch.notified_30min     = false
+      patch.notified_15min     = false
+      patch.departure_notified = false
+      patch.leave_by           = null
+      patch.coverage_status    = 'uncovered'
+      // A driver's acceptance was of a specific time. Leaving it standing would
+      // let the commitment guard defend a pickup they never agreed to, and let
+      // notify-passenger announce a confirmed driver for a time nobody
+      // confirmed. They are pushed below and re-accept.
+      if (ride.driver_id) patch.confirmed_by_driver = false
+    }
 
     // A soft claim is a driver planning around a specific place as well as a
-    // specific time, so a moved PICKUP releases it on the same reasoning as a
-    // moved time — see the reschedule branch. A moved destination does not: the
-    // claimant is still being asked for the job they claimed.
+    // specific time, so a moved PICKUP or a moved TIME releases it — see the
+    // reschedule branch. A moved destination does not: the claimant is still
+    // being asked for the job they claimed.
     const claimantId =
-      pickup && ride.claimed_at && ride.preferred_driver_id ? ride.preferred_driver_id : null
+      (pickup || newScheduledAtISO) && ride.claimed_at && ride.preferred_driver_id
+        ? ride.preferred_driver_id
+        : null
     if (claimantId) {
       patch.preferred_driver_id = null
       patch.claimed_at          = null
@@ -569,7 +737,9 @@ Deno.serve(async (req) => {
       await sendPush(
         claimantId,
         'Scheduled ride changed',
-        'A ride you claimed now picks up somewhere else and is back on the Available board.',
+        pickup
+          ? 'A ride you claimed now picks up somewhere else and is back on the Available board.'
+          : 'A ride you claimed was moved to a new time and is back on the Available board.',
         { type: 'claim_released', ride_id: ride.id },
       )
     }
@@ -598,16 +768,78 @@ Deno.serve(async (req) => {
         { type: 'dropoff_changed', ride_id: ride.id },
       )
     }
+    if (ride.driver_id && newScheduledAtISO) {
+      // confirmed_by_driver was just cleared, so this is not a courtesy note —
+      // it is the ask to accept the ride again at its new time.
+      await sendPush(
+        ride.driver_id,
+        'Pickup time changed',
+        `A ride you accepted was moved to ${new Date(newScheduledAtISO).toLocaleString('en-CA', {
+          timeZone: 'America/Halifax', dateStyle: 'medium', timeStyle: 'short',
+        })}. Please confirm you can still take it.`,
+        { type: 'scheduled_time_changed', ride_id: ride.id },
+      )
+    }
+    if (pickup && ride.driver_id) {
+      await sendPush(
+        ride.driver_id,
+        'Pickup moved',
+        `This ride now picks up at ${newPickup.address ?? 'a new address'}.`,
+        { type: 'pickup_changed', ride_id: ride.id },
+      )
+    }
+
+    // ── Tell the passenger, when this wasn't their own doing ────
+    // A passenger editing their own ride already knows. A DISPATCHER moving
+    // the time or the pickup is changing where and when someone has to be
+    // standing outside, and notify-passenger won't cover it — that fires on
+    // status transitions, and none of this is one.
+    if (actor === 'admin' && ride.passenger_id) {
+      if (newScheduledAtISO) {
+        await sendPush(
+          ride.passenger_id,
+          'Your pickup time changed',
+          `Dispatch moved your ride to ${new Date(newScheduledAtISO).toLocaleString('en-CA', {
+            timeZone: 'America/Halifax', dateStyle: 'medium', timeStyle: 'short',
+          })}.`,
+          { type: 'ride_rescheduled', ride_id: ride.id },
+        )
+      }
+      if (pickup) {
+        await sendPush(
+          ride.passenger_id,
+          'Your pickup location changed',
+          `Dispatch moved your pickup to ${newPickup.address ?? 'a new address'}.`,
+          { type: 'ride_relocated', ride_id: ride.id },
+        )
+      }
+      if (dropoff) {
+        await sendPush(
+          ride.passenger_id,
+          'Your destination changed',
+          `Dispatch set your destination to ${newDropoff.address ?? 'a new address'}` +
+            (needsReprice ? `. Your fare is now $${discountedFare.toFixed(2)}.` : '.'),
+          { type: 'ride_relocated', ride_id: ride.id },
+        )
+      }
+    }
 
     if (actor === 'admin') {
       await supabase.from('dispatch_events').insert({
         company_id:    ride.company_id,
         dispatcher_id: userId,
-        event_type:    'ride.route_modified',
+        // A time-or-class-only dispatch edit is not a route change, and
+        // 'ride.scheduled_modified' is the event the dashboard has always
+        // logged for it — keeping it means the audit trail reads the same
+        // before and after this moved server-side.
+        event_type:    (pickup || dropoff) ? 'ride.route_modified' : 'ride.scheduled_modified',
         ride_id:       ride.id,
         details: {
           ...(pickup  ? { pickup_from:  ride.pickup_address,  pickup_to:  newPickup.address  } : {}),
           ...(dropoff ? { dropoff_from: ride.dropoff_address, dropoff_to: newDropoff.address } : {}),
+          ...(newScheduledAtISO ? { scheduled_from: ride.scheduled_at, scheduled_to: newScheduledAtISO } : {}),
+          ...(classChanged ? { vehicle_class_id: newVehicleClassId || null } : {}),
+          ...(fare_override != null ? { fare_manual: true } : {}),
           fare_from: ride.fare_estimate,
           fare_to:   discountedFare,
           mid_ride:  inRide,
@@ -621,6 +853,7 @@ Deno.serve(async (req) => {
       previous_fare:   ride.fare_estimate,
       discount_amount: discountAmount,
       reauthorized:    !!newPiId,
+      scheduled_at:    newScheduledAtISO,
     })
 
   } catch (err) {
