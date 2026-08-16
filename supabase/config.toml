@@ -473,6 +473,23 @@ verify_jwt = true
 # Browser-called (dashboard) — verify_jwt must be false so the CORS preflight
 # OPTIONS (which carries no Authorization header) isn't 401'd at the gateway.
 # The function verifies the caller's JWT + admin role internally instead.
+[functions.check-ride-conflicts]
+enabled = true
+# Browser-called; verifies caller JWT + dispatch role in-function. See its header.
+verify_jwt = false
+
+[functions.delete-driver]
+enabled = true
+# Browser-called; verifies caller JWT + admin role in-function. See its header.
+verify_jwt = false
+
+[functions.dispatch-assign-ride]
+enabled = true
+# Browser-called: the CORS preflight carries no Authorization header, so gateway
+# JWT verification would 401 it. The function verifies the caller's JWT and
+# admin/dispatcher role itself — see the header comment there.
+verify_jwt = false
+
 [functions.create-staff-account]
 enabled = true
 verify_jwt = false
