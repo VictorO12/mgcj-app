@@ -1,16 +1,30 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// Browser-called from the dashboard, so it must answer the CORS preflight and
+// be deployed with verify_jwt = false (see config.toml). The preflight OPTIONS
+// carries no Authorization header: gateway JWT verification 401s it, and even
+// with that off the 405 below answered it without CORS headers — either way the
+// browser blocks the real request and reports it as a CORS error, never as an
+// auth or method failure. Caller JWT + admin role are checked in-function below.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 })
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
   }
 
   try {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Missing authorization' }), {
-        status: 401, headers: { 'Content-Type': 'application/json' },
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
@@ -23,7 +37,7 @@ serve(async (req) => {
     const { data: { user }, error: userError } = await userClient.auth.getUser()
     if (userError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401, headers: { 'Content-Type': 'application/json' },
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
@@ -36,14 +50,14 @@ serve(async (req) => {
 
     if (callerProfile?.role !== 'admin') {
       return new Response(JSON.stringify({ error: 'Forbidden' }), {
-        status: 403, headers: { 'Content-Type': 'application/json' },
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
     const { driver_id } = await req.json()
     if (!driver_id) {
       return new Response(JSON.stringify({ error: 'driver_id required' }), {
-        status: 400, headers: { 'Content-Type': 'application/json' },
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
@@ -61,13 +75,13 @@ serve(async (req) => {
 
     if (!driverProfile || driverProfile.role !== 'driver') {
       return new Response(JSON.stringify({ error: 'Driver not found' }), {
-        status: 404, headers: { 'Content-Type': 'application/json' },
+        status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
     if (driverProfile.company_id !== callerProfile.company_id) {
       return new Response(JSON.stringify({ error: 'Forbidden' }), {
-        status: 403, headers: { 'Content-Type': 'application/json' },
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
@@ -79,7 +93,7 @@ serve(async (req) => {
 
     if (updateError) {
       return new Response(JSON.stringify({ error: updateError.message }), {
-        status: 500, headers: { 'Content-Type': 'application/json' },
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
@@ -95,13 +109,13 @@ serve(async (req) => {
 
     console.log(`Driver soft-deleted: ${driver_id} by admin ${user.id}`)
     return new Response(JSON.stringify({ success: true }), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
+      status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
 
   } catch (err) {
     console.error('Unexpected error:', err)
     return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500, headers: { 'Content-Type': 'application/json' },
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
 })

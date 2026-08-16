@@ -16,6 +16,17 @@
 //
 // logDispatchEvent stays in the dashboard on purpose: it writes dispatch_events
 // from the dispatcher's own session, and moving it here would change the actor.
+//
+// Called from the browser dashboard, so it must handle the CORS preflight and
+// be deployed with verify_jwt = false (see config.toml) — the preflight OPTIONS
+// carries no Authorization header, so gateway JWT verification 401s it before
+// this code runs, and the browser reports it as "CORS header missing" rather
+// than as an auth failure. We verify the caller's JWT + dispatch role
+// in-function below, so gateway verification is redundant anyway.
+//
+// This was missing from the day this function was created: every manual assign
+// and reassign from the dashboard failed at the preflight, silently, because
+// the fetch rejects before any response body exists to alert on.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 const supabase = createClient(
@@ -25,14 +36,20 @@ const supabase = createClient(
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     status,
   })
 }
 
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) return json({ error: 'Unauthorized' }, 401)
@@ -88,6 +105,11 @@ Deno.serve(async (req: Request) => {
       .from('rides')
       .update({
         driver_id,
+        // This override is exactly what the dashboard's "Held back — driver
+        // committed" banner tells the dispatcher to do, so it has to clear the
+        // hold or the ride keeps the pill after a driver is on it.
+        assignment_hold_reason: null,
+        assignment_hold_details: null,
         status: isFutureScheduled ? 'scheduled' : 'offered',
         confirmed_by_driver: false,
         ...(isFutureScheduled ? {} : { offered_at: new Date().toISOString() }),
