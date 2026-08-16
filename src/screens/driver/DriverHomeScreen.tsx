@@ -19,7 +19,10 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
-import { useNotifications, registerPushToken } from "../../hooks/useNotifications";
+import {
+  useNotifications,
+  registerPushToken,
+} from "../../hooks/useNotifications";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import { useDriverRating } from "../../hooks/useDriverRating";
@@ -60,6 +63,8 @@ interface ConfirmedScheduledRide {
   fare_estimate: number | null;
   scheduled_at: string;
   passenger_name: string | null;
+  /** Soft claim off the Available board, not a confirmed assignment. */
+  claimed?: boolean;
 }
 
 interface ActiveScheduledRide {
@@ -114,6 +119,8 @@ interface Props {
   assignedRide: AssignedRide | null;
   onOpenAssigned: () => void;
   confirmedScheduledRides: ConfirmedScheduledRide[];
+  /** Opens the Available board's "mine" tab — where a claim can be released. */
+  onOpenPlanned?: () => void;
   onRideAccepted: () => void;
   openInboxSignal?: number;
   openChatSignal?: number;
@@ -135,6 +142,7 @@ export default function DriverHomeScreen({
   assignedRide,
   onOpenAssigned,
   confirmedScheduledRides,
+  onOpenPlanned,
   onRideAccepted,
   openInboxSignal,
   openChatSignal,
@@ -337,7 +345,10 @@ export default function DriverHomeScreen({
           reason === "denied"
             ? [
                 { text: "Not now", style: "cancel" },
-                { text: "Open settings", onPress: () => Linking.openSettings() },
+                {
+                  text: "Open settings",
+                  onPress: () => Linking.openSettings(),
+                },
               ]
             : [{ text: "OK" }],
         );
@@ -535,16 +546,15 @@ export default function DriverHomeScreen({
         >
           <Ionicons
             name="calendar-outline"
-            size={18}
+            size={15}
             color={colors.accentPurpleTextStrong}
           />
           <Text style={styles.openRidesBannerText}>
-            {openRideCount} scheduled {openRideCount === 1 ? "ride" : "rides"}{" "}
-            available to claim
+            {openRideCount} {openRideCount === 1 ? "ride" : "rides"} to claim
           </Text>
           <Ionicons
             name="chevron-forward"
-            size={16}
+            size={13}
             color={colors.accentPurpleTextStrong}
           />
         </TouchableOpacity>
@@ -625,9 +635,7 @@ export default function DriverHomeScreen({
             !isOnline && { bottom: styles.recenterBtn.bottom + 40 },
             showFloatingStack && {
               bottom:
-                (Platform.OS === "ios" ? 220 : 200) +
-                floatingStackHeight +
-                10,
+                (Platform.OS === "ios" ? 220 : 200) + floatingStackHeight + 10,
             },
           ]}
           onPress={() =>
@@ -760,7 +768,14 @@ export default function DriverHomeScreen({
                   <TouchableOpacity
                     style={[styles.scheduledRideRow, { width: CARD_WIDTH }]}
                     activeOpacity={0.75}
-                    onPress={onOpenAssigned}
+                    // A claim has no assignment to accept or decline, so it must
+                    // not open AssignedRideScreen. It goes to the board's
+                    // "mine" tab, which is where it can be released.
+                    onPress={
+                      r.claimed && onOpenPlanned
+                        ? onOpenPlanned
+                        : onOpenAssigned
+                    }
                   >
                     <View style={styles.scheduledRideTime}>
                       <Text style={styles.scheduledRideTimeText}>
@@ -774,17 +789,24 @@ export default function DriverHomeScreen({
                       </Text>
                     </View>
                     <View style={styles.scheduledRideInfo}>
-                      <Text
-                        style={styles.scheduledRidePassenger}
-                        numberOfLines={1}
-                      >
-                        {r.passenger_name ?? "Passenger"}
-                      </Text>
+                      <View style={styles.scheduledRideNameRow}>
+                        <Text
+                          style={styles.scheduledRidePassenger}
+                          numberOfLines={1}
+                        >
+                          {r.passenger_name ?? "Passenger"}
+                        </Text>
+                        {r.claimed && (
+                          <View style={styles.plannedPill}>
+                            <Text style={styles.plannedPillText}>PLANNED</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={styles.scheduledRideRoute} numberOfLines={1}>
                         {r.pickup_address} → {r.dropoff_address}
                       </Text>
                     </View>
-                    {r.fare_estimate && (
+                    {!!r.fare_estimate && (
                       <Text style={styles.scheduledRideFare}>
                         ${r.fare_estimate.toFixed(2)}
                       </Text>
@@ -1053,29 +1075,32 @@ const makeStyles = (colors: Colors) =>
     },
     badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
     openRidesBanner: {
-    // Absolute, like every other overlay here. The map is flex:1 and eats the
-    // whole container, so a normal-flow sibling after it lands below the
-    // viewport and is invisible — which is exactly what happened.
-    position: "absolute",
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.accentPurple,
-  },
-  openRidesBannerText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.accentPurpleTextStrong,
-  },
-  assignedBanner: {
+      // Absolute, like every other overlay here. The map is flex:1 and eats the
+      // whole container, so a normal-flow sibling after it lands below the
+      // viewport and is invisible — which is exactly what happened.
+      // Deliberately no `right`: the box shrinks to its content and hugs the
+      // left edge, so it's a nudge sitting beside the map rather than a bar
+      // across it. The realtime count is the always-correct channel, but it
+      // shouldn't cost the driver a strip of map to carry.
+      position: "absolute",
+      left: 16,
+      maxWidth: "70%",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingVertical: 7,
+      paddingHorizontal: 10,
+      borderRadius: 999,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.accentPurple,
+    },
+    openRidesBannerText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accentPurpleTextStrong,
+    },
+    assignedBanner: {
       position: "absolute",
       top: Platform.OS === "ios" ? 160 : 146,
       left: 16,
@@ -1356,10 +1381,32 @@ const makeStyles = (colors: Colors) =>
       color: colors.accentPurpleTextSubtle,
     },
     scheduledRideInfo: { flex: 1 },
+    scheduledRideNameRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
     scheduledRidePassenger: {
       fontSize: 13,
       fontWeight: "600",
       color: colors.textPrimary,
+      flexShrink: 1,
+    },
+    // A claim is not an assignment. It's re-decided at release and can still
+    // fall through to the pool, so the card has to say so — a planned ride that
+    // looks confirmed is the failure the soft-claim design exists to prevent.
+    plannedPill: {
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: 4,
+      borderWidth: 1,
+      borderColor: colors.accentPurple,
+    },
+    plannedPillText: {
+      fontSize: 8,
+      fontWeight: "700",
+      letterSpacing: 0.5,
+      color: colors.accentPurpleTextStrong,
     },
     scheduledRideRoute: {
       fontSize: 11,

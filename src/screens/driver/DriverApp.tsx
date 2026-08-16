@@ -11,7 +11,11 @@ import AssignedRidesListScreen from "./AssignedRidesListScreen";
 import RideRequestSheet from "./RideRequestSheet";
 import Constants from "expo-constants";
 import { Alert, AppState } from "react-native";
-import { getDeviceToken, setDeviceToken, clearDeviceToken } from "../../lib/deviceSession";
+import {
+  getDeviceToken,
+  setDeviceToken,
+  clearDeviceToken,
+} from "../../lib/deviceSession";
 
 interface ActiveRide {
   id: string;
@@ -75,6 +79,14 @@ interface ConfirmedScheduledRide {
   scheduled_at: string;
   leave_by: string | null;
   passenger_name: string | null;
+  /**
+   * True for a soft claim (preferred_driver_id = me, driver_id still null) as
+   * opposed to a confirmed dispatch assignment. The home-screen card must show
+   * the difference: a claim is re-decided at release and can still fall to the
+   * pool, and a card that looks assigned when it isn't re-creates the exact
+   * failure the soft-claim design exists to prevent.
+   */
+  claimed: boolean;
 }
 
 const ACTIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
@@ -99,8 +111,9 @@ export default function DriverApp() {
   // Which tab AssignedRidesListScreen opens on. Set by whoever opens it — the
   // screen reads this once at mount, and it unmounts on close, so every open
   // gets the tab its trigger intended.
-  const [assignedListTab, setAssignedListTab] =
-    useState<"mine" | "open">("mine");
+  const [assignedListTab, setAssignedListTab] = useState<"mine" | "open">(
+    "mine",
+  );
   // Bumped alongside assignedListTab so an ALREADY-OPEN list switches tabs too
   // — setShowAssignedList(true) is a no-op when it's already true, so without
   // this a digest tap on an open list would silently leave them on "mine".
@@ -149,6 +162,14 @@ export default function DriverApp() {
   useEffect(() => {
     assignedRideRef.current = assignedRide;
   }, [assignedRide]);
+  // Same reason: the realtime callback needs to know whether a changed row is
+  // one it's currently showing. That's the only way to catch a claim being
+  // taken away — scheduled-release CLEARS preferred_driver_id when it hands the
+  // ride to the pool, so the incoming row no longer points at this driver.
+  const scheduledIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    scheduledIdsRef.current = new Set(confirmedScheduledRides.map((r) => r.id));
+  }, [confirmedScheduledRides]);
 
   // Scheduled offers this driver dismissed — stays open for everyone else
   const dismissedOfferIds = useRef<Set<string>>(new Set());
@@ -204,7 +225,9 @@ export default function DriverApp() {
     // token locally anyway would leave this device believing it owns a lock the
     // DB never gave it — the whole feature failing without a single log line.
     if ((data?.length ?? 0) === 0) {
-      console.error("[Session] device_token write affected 0 rows (RLS?) — lock NOT claimed");
+      console.error(
+        "[Session] device_token write affected 0 rows (RLS?) — lock NOT claimed",
+      );
       await clearDeviceToken();
       return;
     }
@@ -214,7 +237,9 @@ export default function DriverApp() {
       // We own the lock in the DB but can't remember it, so every detector
       // would compare against null and silently pass. Say so — this is the
       // exact failure mode that hid the invalid-key bug for six weeks.
-      console.error("[Session] device token not persisted — displacement detection is DISABLED on this device");
+      console.error(
+        "[Session] device token not persisted — displacement detection is DISABLED on this device",
+      );
     }
   }
 
@@ -280,9 +305,7 @@ export default function DriverApp() {
             if (activeRideRef.current?.id === deletedId) setActiveRide(null);
             if (assignedRideRef.current?.id === deletedId)
               setAssignedRide(null);
-            setPendingRide((prev) =>
-              prev?.id === deletedId ? null : prev,
-            );
+            setPendingRide((prev) => (prev?.id === deletedId ? null : prev));
             setConfirmedScheduledRides((prev) =>
               prev.filter((r) => r.id !== deletedId),
             );
@@ -295,6 +318,19 @@ export default function DriverApp() {
           // open ride has driver_id null — so this has to run before the
           // own-driver filter below, not after it.
           scheduleOpenRideCount();
+
+          // Soft claims, same reasoning as the count above: a claimed ride has
+          // driver_id null, so it never survives the own-driver bail below.
+          // Both halves are needed — preferred_driver_id catches a claim
+          // arriving, the id check catches one going away, since release and
+          // scheduled-release's pool handoff both CLEAR preferred_driver_id and
+          // the row stops pointing at this driver at all.
+          if (
+            row.preferred_driver_id === profile.id ||
+            scheduledIdsRef.current.has(row.id)
+          ) {
+            fetchConfirmedScheduledRides();
+          }
 
           if (row.driver_id !== profile.id) return;
 
@@ -386,7 +422,10 @@ export default function DriverApp() {
       // Can't read our own row (RLS or network) — say so rather than silently
       // reading this as "not displaced", which is how a broken policy would
       // disable the whole check invisibly.
-      console.warn("[Session] device_token check could not read the row:", error?.message);
+      console.warn(
+        "[Session] device_token check could not read the row:",
+        error?.message,
+      );
       return;
     }
     if (data.device_token && data.device_token !== localToken) {
@@ -568,7 +607,9 @@ export default function DriverApp() {
     setPendingRide(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       const accessToken = session?.access_token;
       if (!accessToken) return;
 
@@ -666,26 +707,49 @@ export default function DriverApp() {
     });
   }
 
+  // Everything on this driver's calendar: rides dispatch assigned and they
+  // confirmed, PLUS rides they soft-claimed off the Available board. Two
+  // queries because a claim leaves driver_id null by design — that's the whole
+  // point of it being non-binding — so no single filter reaches both.
   async function fetchConfirmedScheduledRides() {
     if (!profile) return;
     const now = new Date().toISOString();
-    const { data } = await supabase
-      .from("rides")
-      .select("*")
-      .eq("driver_id", profile.id)
-      .eq("confirmed_by_driver", true)
-      .in("status", ["assigned", "scheduled", "pending"])
-      .not("scheduled_at", "is", null)
-      .gt("scheduled_at", now)
-      .order("scheduled_at", { ascending: true });
-    if (!data) return;
+
+    const [assignedRes, claimedRes] = await Promise.all([
+      supabase
+        .from("rides")
+        .select("*")
+        .eq("driver_id", profile.id)
+        .eq("confirmed_by_driver", true)
+        .in("status", ["assigned", "scheduled", "pending"])
+        .not("scheduled_at", "is", null)
+        .gt("scheduled_at", now),
+      // Predicates mirror fetchPlannedRides in AssignedRidesListScreen exactly,
+      // so the home panel and the board can never disagree about what counts as
+      // planned.
+      supabase
+        .from("rides")
+        .select("*")
+        .eq("preferred_driver_id", profile.id)
+        .not("claimed_at", "is", null)
+        .eq("status", "scheduled")
+        .is("driver_id", null)
+        .gt("scheduled_at", now),
+    ]);
+
+    const rows = [
+      ...(assignedRes.data ?? []).map((r) => ({ ride: r, claimed: false })),
+      ...(claimedRes.data ?? []).map((r) => ({ ride: r, claimed: true })),
+    ];
+    if (!assignedRes.data && !claimedRes.data) return;
+
     const enriched = await Promise.all(
-      data.map(async (ride) => {
+      rows.map(async ({ ride, claimed }) => {
         const { data: p } = await supabase
           .from("profiles")
           .select("name")
           .eq("id", ride.passenger_id)
-          .single();
+          .maybeSingle();
         return {
           id: ride.id,
           pickup_address: ride.pickup_address,
@@ -694,9 +758,11 @@ export default function DriverApp() {
           scheduled_at: ride.scheduled_at,
           leave_by: ride.leave_by ?? null,
           passenger_name: p?.name ?? null,
+          claimed,
         };
       }),
     );
+    enriched.sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at));
     setConfirmedScheduledRides(enriched);
   }
 
@@ -748,11 +814,9 @@ export default function DriverApp() {
     if (kickingOutRef.current) return;
     kickingOutRef.current = true;
     pendingKickRef.current = false;
-    Alert.alert(
-      "Signed out",
-      "Your account was signed in on another device.",
-      [{ text: "OK" }],
-    );
+    Alert.alert("Signed out", "Your account was signed in on another device.", [
+      { text: "OK" },
+    ]);
     await clearDeviceToken();
     await signOut();
   }
@@ -900,6 +964,11 @@ export default function DriverApp() {
           setShowAssignedList(true);
         }}
         confirmedScheduledRides={confirmedScheduledRides}
+        onOpenPlanned={() => {
+          setAssignedListTab("mine");
+          setAssignedListTabSignal((n) => n + 1);
+          setShowAssignedList(true);
+        }}
         onRideAccepted={fetchActiveRide}
         openInboxSignal={openInboxSignal}
         openChatSignal={openChatSignal}
