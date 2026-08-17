@@ -18,6 +18,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
 import DriverProfileSheet from "./DriverProfileSheet";
 import ReportDriverModal from "./ReportDriverModal";
+import RideProblemModal from "./RideProblemModal";
 import AddressPickerModal, { type PickedAddress } from "./AddressPickerModal";
 import { invokeFunction } from "../lib/invokeFunction";
 import { useTheme } from "../theme/ThemeContext";
@@ -45,6 +46,7 @@ export default function RideTrackingSheet({
   const [expanded, setExpanded] = useState(false);
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
+  const [problemVisible, setProblemVisible] = useState(false);
   const [alreadyReported, setAlreadyReported] = useState(false);
   const [destPickerVisible, setDestPickerVisible] = useState(false);
   const [changingDest, setChangingDest] = useState(false);
@@ -157,6 +159,15 @@ export default function RideTrackingSheet({
   const isPending = ride.status === "pending";
   const isOffered = ride.status === "offered";
   const isInProgress = ride.status === "in_progress";
+  // A raised flag that dispatch hasn't resolved yet. This is the passenger's
+  // only durable confirmation that their report landed — the modal's success
+  // screen vanishes with the modal. It clears itself when dispatch resolves,
+  // which also means a resolve is no longer completely silent to them.
+  const flagPending =
+    !!ride.passenger_flagged_at &&
+    (!ride.passenger_flag_resolved_at ||
+      new Date(ride.passenger_flag_resolved_at) <
+        new Date(ride.passenger_flagged_at));
   const hasDriver = !!ride.driver;
 
   const statusColor = isCompleted
@@ -332,6 +343,44 @@ export default function RideTrackingSheet({
           )}
         </View>
 
+        {/* Something's wrong — deliberately ABOVE "Change destination". A
+            passenger on a ride they were never picked up for reaches for the
+            nearest control that looks like it might help, and edit-ride prices
+            a mid-ride move as driven + remaining — so redirecting a phantom
+            trip bills them for a journey they were never on. This row has to
+            be the thing they find first. Not gated on hasDriver: "the driver
+            never arrived" is a reason too. */}
+        {!isCompleted && !isCancelled && (
+          <TouchableOpacity
+            style={[styles.problemRow, flagPending && styles.problemRowFlagged]}
+            onPress={() => setProblemVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={flagPending ? "checkmark-circle" : "alert-circle-outline"}
+              size={17}
+              color={flagPending ? colors.accentGreen : colors.accentAmber}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={[styles.problemText, flagPending && styles.problemTextFlagged]}
+              >
+                {flagPending
+                  ? "Dispatch has been told"
+                  : "Something's wrong with this ride"}
+              </Text>
+              {flagPending && (
+                <Text style={styles.problemSubText}>
+                  {(ride.passenger_flag_reasons?.length ?? 0) > 1
+                    ? `${ride.passenger_flag_reasons!.length} issues sent · tap to add more`
+                    : "Tap to add more or call them"}
+                </Text>
+              )}
+            </View>
+            <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+
         {/* Change destination — allowed right up until the ride ends. The fare
             is re-quoted server-side off what has already been driven, so a
             late change can raise it but never wipe out the trip so far. */}
@@ -388,6 +437,17 @@ export default function RideTrackingSheet({
           onDismiss={handleReportDismiss}
         />
       )}
+
+      <RideProblemModal
+        visible={problemVisible}
+        rideId={ride.id}
+        status={ride.status}
+        // Only for a still-open escalation. Once dispatch resolves, flag_ride
+        // starts a fresh episode, so pre-ticking stale reasons would show the
+        // passenger something dispatch no longer has in front of them.
+        alreadySent={flagPending ? (ride.passenger_flag_reasons ?? []) : []}
+        onDismiss={() => setProblemVisible(false)}
+      />
 
       <AddressPickerModal
         visible={destPickerVisible}
@@ -532,6 +592,33 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     justifyContent: "center",
   },
 
+  // Amber, not the orange used by "Change destination" below it. The two rows
+  // sit together and mean opposite things — one asks for help, the other
+  // silently re-prices the ride — so they must not read as a matched pair.
+  problemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(245,158,11,0.10)",
+    borderWidth: 0.5,
+    borderColor: "rgba(245,158,11,0.30)",
+  },
+  problemText: {
+    flex: 1,
+    color: colors.accentAmber,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  problemRowFlagged: {
+    backgroundColor: "rgba(29,158,117,0.10)",
+    borderColor: "rgba(29,158,117,0.30)",
+  },
+  problemTextFlagged: { color: colors.accentGreen },
+  problemSubText: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   changeDestRow: {
     flexDirection: "row",
     alignItems: "center",

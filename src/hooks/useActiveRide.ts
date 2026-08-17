@@ -25,6 +25,12 @@ export interface ActiveRide {
   dropoff_lng: number
   fare_estimate: number | null
   fare_final: number | null
+  // Passenger escalation (flag_ride). Carried so the tracking sheet can show
+  // the passenger their report landed — without it the only confirmation is a
+  // success screen that disappears when the sheet closes.
+  passenger_flagged_at: string | null
+  passenger_flag_resolved_at: string | null
+  passenger_flag_reasons: string[] | null
   driver: Driver | null
 }
 
@@ -250,6 +256,9 @@ export function useActiveRide(passengerId: string | undefined) {
       dropoff_lng: rideRow.dropoff_lng,
       fare_estimate: rideRow.fare_estimate,
       fare_final: rideRow.fare_final,
+      passenger_flagged_at: rideRow.passenger_flagged_at ?? null,
+      passenger_flag_resolved_at: rideRow.passenger_flag_resolved_at ?? null,
+      passenger_flag_reasons: rideRow.passenger_flag_reasons ?? null,
       driver,
     }
 
