@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "./AuthContext";
 
@@ -15,9 +15,10 @@ export interface RideMessage {
 }
 
 // Statuses in which the INSERT policy will accept a message. Mirrors
-// ride_messages_insert in 20260754_ride_messages.sql -- kept here so the UI can
-// disable the composer with an explanation rather than letting the insert fail
-// with an opaque RLS error the passenger cannot act on.
+// ride_accepts_messages() in 20260754_ride_messages.sql -- kept here so the UI
+// can disable the composer with an explanation rather than letting the insert
+// fail with an opaque RLS error the passenger cannot act on. If that function's
+// status list changes, change this too; nothing enforces the pairing.
 export const CHATTABLE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
 
 /**
@@ -137,22 +138,35 @@ export function useRideThread(rideId: string | null | undefined) {
 
   const markRead = useCallback(async () => {
     if (!rideId || !profile) return;
+    const now = new Date().toISOString();
     await supabase.from("ride_chat_reads").upsert(
-      {
-        ride_id: rideId,
-        profile_id: profile.id,
-        last_read_at: new Date().toISOString(),
-      },
+      { ride_id: rideId, profile_id: profile.id, last_read_at: now },
       { onConflict: "ride_id,profile_id" },
     );
+    // Advance the local cursor too, not just the count: without this the next
+    // inbound message recomputes against the session-start cursor and counts
+    // everything already read.
+    setLastReadAt(now);
     setUnreadCount(0);
   }, [rideId, profile]);
 
-  // Unread is computed against the cursor once on open, then maintained in
-  // memory: the cursor is for the NEXT session, not for this one.
-  const lastReadRef = useRef<string | null>(null);
+  // The read cursor is STATE, not a ref, and that is load-bearing twice over.
+  // As a ref it does not participate in the recompute below, which broke the
+  // badge in two ways: on a cold open the cursor fetch races the message
+  // fetch, and if messages landed first the recompute bailed on a null cursor
+  // and nothing ever re-triggered it (a ref assignment causes no render) — so
+  // the badge read zero with unread messages sitting there, about half the
+  // time. And after markRead the cursor never advanced, so every later message
+  // recounted the ones already read: the badge would creep toward the running
+  // total instead of the new count. That is precisely the failure the ride
+  // digest was designed around, arriving through a different door.
+  const [lastReadAt, setLastReadAt] = useState<string | null>(null);
+
   useEffect(() => {
-    if (!rideId || !profile) return;
+    if (!rideId || !profile) {
+      setLastReadAt(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       const { data } = await supabase
@@ -161,7 +175,7 @@ export function useRideThread(rideId: string | null | undefined) {
         .eq("ride_id", rideId)
         .eq("profile_id", profile.id)
         .maybeSingle();
-      if (!cancelled) lastReadRef.current = data?.last_read_at ?? "1970-01-01";
+      if (!cancelled) setLastReadAt(data?.last_read_at ?? "1970-01-01");
     })();
     return () => {
       cancelled = true;
@@ -169,12 +183,11 @@ export function useRideThread(rideId: string | null | undefined) {
   }, [rideId, profile]);
 
   useEffect(() => {
-    if (!profile || lastReadRef.current === null) return;
-    const lastRead = lastReadRef.current;
+    if (!profile || lastReadAt === null) return;
     setUnreadCount(
-      messages.filter((m) => m.sender_id !== profile.id && m.created_at > lastRead).length,
+      messages.filter((m) => m.sender_id !== profile.id && m.created_at > lastReadAt).length,
     );
-  }, [messages, profile]);
+  }, [messages, profile, lastReadAt]);
 
   return { messages, loading, unreadCount, send, markRead, refetch: fetchThread };
 }

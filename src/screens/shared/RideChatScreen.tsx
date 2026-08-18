@@ -83,15 +83,17 @@ export default function RideChatScreen({ thread, rideStatus, counterpartName, on
   const quickReplies = isDriver ? DRIVER_QUICK_REPLIES : PASSENGER_QUICK_REPLIES;
   const canSend = CHATTABLE_STATUSES.includes(rideStatus);
 
+  // On open, and again on close. NOT once per inbound message: that was an
+  // upsert per message, and it is unnecessary now that markRead advances the
+  // local cursor -- a thread being actively watched shows no badge because the
+  // count is maintained in memory, and the write only has to be durable by the
+  // time the screen goes away.
   useEffect(() => {
     markRead();
+    return () => {
+      markRead();
+    };
   }, [markRead]);
-
-  // Mark read again as messages land while the thread is open -- otherwise
-  // closing a thread you actively watched still leaves an unread badge.
-  useEffect(() => {
-    if (!loading && messages.length) markRead();
-  }, [messages.length, loading, markRead]);
 
   const hasScrolledInitialRef = useRef(false);
   useEffect(() => {

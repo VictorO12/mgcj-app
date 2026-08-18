@@ -95,6 +95,28 @@ BEGIN
 END;
 $$;
 
+-- Whether the ride is in a state that accepts new messages. A SEPARATE definer
+-- helper rather than an EXISTS subquery inlined in the policy: an inlined
+-- subquery evaluates under the CALLER's RLS on `rides`, which would make
+-- passenger messaging silently depend on guests keeping SELECT on their own
+-- ride. Tightening rides RLS later would then break chat with an opaque policy
+-- error rather than an obvious one. Going through a definer bypasses that by
+-- construction -- the same reason participation goes through one.
+CREATE OR REPLACE FUNCTION public.ride_accepts_messages(p_ride_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+  v_status text;
+BEGIN
+  SELECT status INTO v_status FROM rides WHERE id = p_ride_id;
+  RETURN v_status IN ('assigned','driver_arriving','in_progress');
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.is_ride_participant(p_ride_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -113,8 +135,9 @@ $$;
 -- `authenticated`, so that grant is exactly what covers them. Guests are a
 -- real population -- this is why authority is the rides row and not
 -- company_id, which a guest does not meaningfully have.
-GRANT EXECUTE ON FUNCTION public.ride_participant_role(uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.is_ride_participant(uuid)  TO authenticated;
+GRANT EXECUTE ON FUNCTION public.ride_participant_role(uuid)  TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_ride_participant(uuid)   TO authenticated;
+GRANT EXECUTE ON FUNCTION public.ride_accepts_messages(uuid) TO authenticated;
 
 -- ─── 4. company_id is stamped, never client-set ─────────────────────────────
 CREATE OR REPLACE FUNCTION public.stamp_ride_message_company()
@@ -177,11 +200,7 @@ CREATE POLICY ride_messages_insert ON ride_messages
   WITH CHECK (
     sender_id = auth.uid()
     AND sender_role = public.ride_participant_role(ride_id)
-    AND EXISTS (
-      SELECT 1 FROM rides r
-       WHERE r.id = ride_id
-         AND r.status IN ('assigned','driver_arriving','in_progress')
-    )
+    AND public.ride_accepts_messages(ride_id)
   );
 
 -- Read cursor: a participant owns exactly their own row.

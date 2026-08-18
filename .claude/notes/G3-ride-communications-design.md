@@ -410,6 +410,18 @@ Each phase is independently shippable.
   this may the `tel:`/`sms:` call sites be removed.
 - **Phase 3** — NOT STARTED. Dispatch-side thread view; retention cron.
 
+**Known gap in Phase 1, deliberate — no post-ride read path (2026-08-18).** §5 keeps
+SELECT open forever on the argument that "the thread is the evidence when the ride gets
+disputed", but nothing built in Phase 1 can actually reach a thread after the ride ends:
+the passenger's host clears when `useActiveRide` drops the completed ride, the driver's
+screen unmounts when `DriverApp` routes away, and D1's staff policy has no dashboard
+behind it until Phase 3. The composer-closed state renders only in the narrow case of a
+ride completing while the thread is already open. So the policy is right and the UI has
+not caught up to it yet — the evidence is durable and retrievable by SQL, just not by
+anyone in an app. Closing this is a `RideHistoryScreen` entry point (passenger + driver)
+and the Phase 3 dispatch view; **do not "fix" it by gating SELECT on status**, which
+would destroy the evidence rather than surface it.
+
 **G3 is not closed until Phase 2 lands** and those four `tel:`/`sms:` call sites are gone.
 Phase 1 alone leaves number exposure exactly where it is.
 
