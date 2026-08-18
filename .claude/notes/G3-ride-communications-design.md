@@ -425,6 +425,13 @@ Each phase is independently shippable.
   pushes delivered end to end. Delivery is fast in practice.
   **Still untested:** the driver-handover divider (needs a ride cycled from one driver to
   another mid-thread), and read-aloud beyond layout.
+  **Known cosmetic inconsistency, deliberately not fixed:** the ride-history Messages
+  button is evaluated when the list renders, and nothing re-renders it as time passes — so
+  a history screen left open across the 2h boundary still shows the button. Tapping it
+  lands on a thread that explains itself (the banner reads "less than a minute" and the
+  composer closes under them within 30s), so it degrades into the correct state rather than
+  into an error. Putting a ticking clock behind a history list to pre-empt that is
+  disproportionate; it self-corrects on the list's existing refresh.
   Original build note follows.
 - **Phase 1 (as planned)** — 
   `20260754_ride_messages.sql` (tables, `ride_participant_role`/`is_ride_participant`,
