@@ -3,7 +3,13 @@
 Design doc. Nothing built yet. Supersedes the "extend driver_chat_messages to the ride"
 one-liner in the review-gap queue, which understated the job.
 
-Status: **design, not approved.** Open decisions at the bottom.
+Status: **Phase 1 built 2026-08-18, not yet applied or tested.** Phases 0, 2, 3 open.
+D1/D4 settled below; D2/D3/D5 still open but none of them block Phase 1.
+
+Note on this doc's own reliability: an earlier edit to §4 silently no-matched and
+the doc carried the superseded `ride_chat_state` design for a day, and §11 below
+still cites a "§15" that has never existed in this file. Re-read what you are
+about to rely on; do not trust a cross-reference here without checking it.
 
 ---
 
@@ -196,10 +202,13 @@ participant.
 - **INSERT gated on `status IN ('assigned','driver_arriving','in_progress')`.**
   Verified sound: `assign-ride` only ever writes `status: 'offered'` (line 484), and every
   path that writes `'assigned'` sets `confirmed_by_driver: true` in the same statement
-  (`AssignedRideScreen.tsx:81`, `DriverApp.tsx:545`, `:589`). `dispatch-assign-ride` writes
-  `'offered'`/`'scheduled'` with `confirmed_by_driver: false` (line 113-114). So `assigned`
-  implies confirmed, and no separate confirmed check is needed. **Re-verify if anyone adds
-  a new writer of `'assigned'`.**
+  (`AssignedRideScreen.tsx:81`, `DriverApp.tsx:545`, `:589`, and — **found 2026-08-18,
+  missing from the original list** — `AssignedRidesListScreen.tsx:341`).
+  `dispatch-assign-ride` writes `'offered'`/`'scheduled'` with `confirmed_by_driver: false`
+  (line 113-114). So `assigned` implies confirmed, and no separate confirmed check is
+  needed. Re-verified against all four writers on 2026-08-18, before the policy shipped.
+  **Re-verify again if anyone adds a new writer of `'assigned'`** — one that omits
+  `confirmed_by_driver` lets a passenger message a driver who has not accepted.
 - **`sender_role` is verified against the ride, never self-asserted:**
   `sender_id = auth.uid()` AND (`'passenger'` ↔ `ride.passenger_id = auth.uid()`)
   OR (`'driver'` ↔ `ride.driver_id = auth.uid()`). Without this the passenger can post as
@@ -363,7 +372,11 @@ knowing which way it moves when a company runs high no-contact volume. **Not yet
 
 Each phase is independently shippable.
 
-- **Phase 0** — **HALF DONE 2026-08-17.** `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+- **Phase 0** — **HALF DONE 2026-08-17.** Independently verified 2026-08-18 that the code
+  matches this description: there is no T-30 SMS path left, and the T-15 SMS is gated on
+  `pax?.phone && !pax?.push_token` (`scheduled-release/index.ts:945`, `:972`). The "§15"
+  cited below is a dangling reference — this doc has no §15 — but the claim it supports is
+  true. `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
   `TWILIO_FROM_NUMBER` are set and verified present. **The end-to-end send is still
   unproven** — no SMS has ever left this platform, so "secrets exist" is not the same as
   "SMS works".
@@ -373,16 +386,25 @@ Each phase is independently shippable.
   logs for it — `send-sms` returns 503 naming missing secrets rather than a silent 200, so
   a failure will be visible.
   *Not part of this feature. Do it regardless.*
-- **Phase 1** — NOT STARTED. `ride_messages` + `ride_chat_reads`, RLS, Broadcast trigger, passenger and
-  driver thread UI, `send-ride-chat-push`. Quick replies + read-aloud + ack included; they
-  are not polish. Ships value alone and closes CAS-a052.
-  **Spike first (half a day):** Broadcast's private-channel authorization runs as RLS on
-  `realtime.messages`, keyed on topic name. Confirm `is_ride_participant()` is callable in
-  that context and that the ride id can be extracted from the topic. This is the one piece
-  of the design with **no precedent in this repo** — `driver_chat_messages` uses
-  `postgres_changes`, so hand-applied step 5 is new ground. If it doesn't work cleanly the
-  fallback is `postgres_changes` with a `ride_id=eq.X` filter and Phase 1 doesn't change
-  shape — but find out before estimating, not mid-build.
+- **Phase 1** — **CODE COMPLETE 2026-08-18. NOTHING APPLIED OR TESTED YET.**
+  `20260754_ride_messages.sql` (tables, `ride_participant_role`/`is_ride_participant`,
+  company-stamp trigger, RLS, grants, Broadcast trigger, and the `realtime.messages` policy
+  fenced off as §7), `send-ride-chat-push`, `useRideThread`, `RideChatScreen`, and the
+  entry points on `RideTrackingSheet` + `DriverActiveRideScreen`. Quick replies, ack and
+  read-aloud are in — they are the safety half, not polish. `expo-speech` was already a
+  dependency, so read-aloud needs no new build.
+  **The spike did not happen as a spike.** It cannot: there is no local `psql` and no
+  service-role key on this machine, so every SQL statement is Victor's hands in the
+  dashboard editor. It was decomposed instead into
+  `.claude/notes/g3-broadcast-auth-spike.sql` — two SQL-editor queries (does
+  `realtime.topic()` exist in `pg_proc`; is the helper callable as `authenticated`) that
+  cost about two minutes and derisk most of it, plus a device step that waits for the UI.
+  Migration §7 is fenced off behind those queries.
+  **If the spike fails, that is a decision, not a swap.** The client fallback is one marked
+  block in `useRideThread` — but it requires `ALTER PUBLICATION supabase_realtime ADD TABLE
+  ride_messages`, which is exactly what §3.3 rejects. Worth weighing against the fact that
+  §3.3's premise (that the publication's ordering thread is *shared* across tables) is
+  marked inferred-not-verified in this very doc.
 - **Phase 2** — NOT STARTED. Proxy is confirmed available (§3.2), so this is the Proxy
   path: masked voice + masked SMS, behind our own `ride_contact_sessions` mapping table. Closes KAM-i011 and the guest-passenger gap. Only after
   this may the `tel:`/`sms:` call sites be removed.
@@ -404,24 +426,40 @@ Per `migration-files-are-not-applied-state` — these are easy to believe are do
    — same as `notify-dispatch-report`. Not SQL.
 3. Twilio secrets set in Edge Function config.
 4. Twilio numbers purchased; voice/SMS webhooks pointed at our function.
-5. Realtime authorization for the private channel (`realtime.messages` RLS).
+5. Realtime authorization for the private channel (`realtime.messages` RLS) — this is
+   **§7 of `20260754_ride_messages.sql`, fenced off from the rest of the file**. Run the
+   two queries in `.claude/notes/g3-broadcast-auth-spike.sql` first; §7 depends on
+   `realtime.topic()` existing in this project, which is assumed, not verified.
+6. `GRANT SELECT ON realtime.messages TO authenticated`, **if and only if** step 5 applies
+   cleanly but no message ever arrives on a subscribed channel. A missing grant here
+   presents as silence, not as an error — see step 3 of the spike file.
 
 ---
 
 ## 13. Open decisions
 
-- **D1 — Do admins get SELECT on ride threads?** Recommend **yes**, policy included in the
-  phase-1 migration even with no UI, so the later addition isn't another hand-applied
-  migration. Counter-argument: passenger↔driver messages may carry an expectation of
-  privacy from dispatch that a chat with a taxi company's staff does not.
+- **D1 — Do admins get SELECT on ride threads? SETTLED YES, 2026-08-18**, on this doc's own
+  argument: adding the policy later is another hand-applied migration, and this repo's
+  history says those get believed-but-not-applied. Shipped as `ride_messages_select_staff`.
+  Two deviations from the wording above, both deliberate: it uses **`is_staff()`** (admin
+  OR dispatcher) rather than `role = 'admin'`, because dispatchers do ride ops and are
+  precisely the staff who need a thread when adjudicating a complaint; and it is
+  **read-only** — no staff INSERT policy until D5 is decided. The privacy
+  counter-argument is real but loses to the dispute case: the thread is evidence, and
+  evidence dispatch cannot read is not evidence.
 - **D2 — Does chat replace the SMS button or sit beside it?** Recommend **replace, at
   Phase 2**. Leaving both means the driver leaks their number out of habit. But it can only
   be removed once masked SMS exists, or guest passengers lose contact entirely.
 - **D3 — Retention window.** Floor is the 120-day chargeback filing window, *not* a round
   number; ceiling is PIPEDA minimisation and is the lawyer's question. **180 days**
   proposed. See §9.
-- **D4 — Grace window after completion.** 2h proposed for both thread INSERT and proxy
-  release.
+- **D4 — Grace window after completion. SETTLED NO GRACE for thread INSERT, 2026-08-18.**
+  Phase 1 ships with INSERT gated strictly on `assigned`/`driver_arriving`/`in_progress`;
+  the composer closes the moment the driver taps complete and the UI says so, rather than
+  failing an insert against the policy. The 2h proposal was about a passenger finishing a
+  sentence, which is not worth a fourth status in a security policy — "I left my bag" is
+  a dispatch problem, and dispatch is reachable by other means. Proxy release keeps its
+  own grace window; that is a Phase 2 question and is untouched by this.
 - **D5 — Does dispatch get a third leg** (dispatch↔passenger)? Out of scope for the build,
   but pre-empted in the schema: `sender_role`'s CHECK already admits `'admin'` (§4) so
   adding the leg later needs no CHECK migration. Still worth deciding whether it's wanted,
