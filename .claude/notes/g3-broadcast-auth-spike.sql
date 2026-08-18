@@ -37,6 +37,8 @@
 --   3. Run query 2.                              (tests what step 2 created)
 --   4. Apply SECTION 7 of the migration          (only if query 1 passed).
 --   5. Create the Database Webhook by hand.      (see step 4 below)
+--      The function must be DEPLOYED first or it will not appear in the
+--      picker — deployed 2026-08-18.
 --   6. Run step 3 from a device.
 --
 -- Running query 2 before step 2 gives
@@ -130,3 +132,36 @@ SELECT id, ride_id, sender_role, body, created_at
   FROM ride_messages
  WHERE ride_id = '<A REAL RIDE UUID>'
  ORDER BY created_at;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- 4. The Database Webhook — HAND-CREATED, no file backs this
+-- ═══════════════════════════════════════════════════════════════════════
+-- Database > Webhooks > Create a new hook.
+--
+--   Name        send-ride-chat-push        (named for the function it calls,
+--                                           same convention as the existing
+--                                           notify-dispatch-report hook)
+--   Table       public.ride_messages
+--   Events      Insert only
+--   Type        Supabase Edge Functions
+--   Function    send-ride-chat-push
+--   Method      POST
+--   HTTP header x-webhook-secret: <the WEBHOOK_SECRET value>
+--
+-- Do NOT point this at send-driver-chat-push. That function is the dispatch
+-- thread's, and it checks `body.table !== 'driver_chat_messages'` and returns
+-- 200 -- so pointing ride_messages at it fails SILENTLY and looks like the
+-- push simply not working.
+--
+-- `supabase secrets list` shows a HASH, not the secret. The easiest way to get
+-- the real value is to open the existing send-driver-chat-push webhook and
+-- copy its x-webhook-secret header; both functions read the same env var.
+--
+-- Verify it fired: insert a message, then check the function's logs. A 401
+-- means the header is missing or wrong; a 200 with 'Not a ride message insert'
+-- means it was pointed at the wrong table or the wrong event.
+SELECT id, ride_id, sender_role, left(body, 40) AS body, created_at
+  FROM ride_messages
+ ORDER BY created_at DESC
+ LIMIT 5;
