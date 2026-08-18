@@ -42,14 +42,13 @@
 // today every online driver still reports NULL.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { requireServiceRole } from '../_shared/internalAuth.ts'
+import { sendPushMany, type PushMessage } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL  = 'https://exp.host/--/api/v2/push/send'
-const EXPO_BATCH_MAX = 100          // Expo's documented per-request message cap
 const TZ             = 'America/Halifax'
 
 // Rides nearer than this are scheduled-release's problem, not the digest's: it
@@ -258,43 +257,29 @@ Deno.serve(async (req) => {
     // a failed send a retry on the next tick instead of a silent hole. Nulling
     // dead tokens still belongs to the open push-receipts work, not here.
     let sent = 0, rejected = 0
-    for (let i = 0; i < messages.length; i += EXPO_BATCH_MAX) {
-      const chunk     = messages.slice(i, i + EXPO_BATCH_MAX)
-      const chunkMeta = pending.slice(i, i + EXPO_BATCH_MAX)
-      try {
-        const res = await fetch(EXPO_PUSH_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(chunk),
-        })
-        if (!res.ok) {
-          console.error(`[digest] expo ${res.status}: ${await res.text()}`)
-          continue
-        }
-        const body = await res.json()
-        const tickets: { status?: string; message?: string }[] = body?.data ?? []
-
-        for (let j = 0; j < chunkMeta.length; j++) {
-          // No ticket at all (malformed/short response) is treated as failure —
-          // holding the watermark costs one duplicate at worst; advancing it
-          // wrongly costs the ride forever.
-          if (tickets[j]?.status !== 'ok') {
-            rejected++
-            console.warn(`[digest] driver ${chunkMeta[j].driverId.slice(0, 8)} ticket: ${tickets[j]?.message ?? 'missing'}`)
-            continue
-          }
-          await supabase
-            .from('drivers')
-            .update({
-              digest_watermark_at: chunkMeta[j].watermark,
-              digest_last_sent_at: now.toISOString(),
-            })
-            .eq('id', chunkMeta[j].driverId)
-          sent++
-        }
-      } catch (e) {
-        console.error('[digest] expo send failed', e)
+    // sendPushMany chunks to Expo's 100-per-request cap itself and returns
+    // results in input order, so `pending[i]` still lines up with `results[i]`.
+    // It also parks accepted ticket ids for the receipt sweep and retires any
+    // token Expo rejects outright — the "nulling dead tokens belongs to the open
+    // push-receipts work" note that used to sit here is now done.
+    const results = await sendPushMany(messages as PushMessage[])
+    for (let i = 0; i < pending.length; i++) {
+      // No ticket (malformed/short response) is treated as failure — holding the
+      // watermark costs one duplicate at worst; advancing it wrongly costs the
+      // ride forever.
+      if (!results[i]?.ok) {
+        rejected++
+        console.warn(`[digest] driver ${pending[i].driverId.slice(0, 8)} ticket: ${results[i]?.error ?? 'missing'}`)
+        continue
       }
+      await supabase
+        .from('drivers')
+        .update({
+          digest_watermark_at: pending[i].watermark,
+          digest_last_sent_at: now.toISOString(),
+        })
+        .eq('id', pending[i].driverId)
+      sent++
     }
 
     const summary = {

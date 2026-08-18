@@ -64,6 +64,7 @@ import {
   routeMetres, routeLegMetres, fareFromMetres, getCompanyPricing, getVehicleSurcharge,
 } from '../_shared/fare.ts'
 import { evaluate, COMMITMENT_LOOKAHEAD_MINS, type Commitment } from '../_shared/commitment.ts'
+import { sendPush as sendPushShared } from '../_shared/push.ts'
 
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_API        = 'https://api.stripe.com/v1'
@@ -147,16 +148,9 @@ async function sendPush(userId: string | null, title: string, body: string, data
   if (!userId) return
   const { data: profile } = await supabase
     .from('profiles').select('push_token').eq('id', userId).maybeSingle()
-  if (!profile?.push_token) return
-  try {
-    await fetch('https://exp.host/--/api/v2/push/send', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to: profile.push_token, sound: 'default', title, body, data }),
-    })
-  } catch (err) {
-    console.error('[edit-ride] push failed:', err)
-  }
+  // Ticket parking and dead-token retirement live in _shared/push.ts —
+  // see .claude/notes/push-receipts-devicenotregistered.md.
+  await sendPushShared(profile?.push_token, title, body, data as Record<string, unknown>)
 }
 
 /**

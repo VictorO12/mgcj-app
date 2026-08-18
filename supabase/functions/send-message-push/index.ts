@@ -1,11 +1,10 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { sendPushMany, type PushMessage } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
-
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 Deno.serve(async (req) => {
   try {
@@ -63,13 +62,11 @@ Deno.serve(async (req) => {
       priority: 'high',
     }))
 
-    const res = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(notifications),
-    })
-    const result = await res.json()
-    console.log(`[send-message-push] pushed to ${notifications.length} ${role}(s):`, JSON.stringify(result))
+    // sendPushMany chunks to Expo's 100-per-request cap on our behalf — this is
+    // the one broadcast site where a company roster can exceed it.
+    const results = await sendPushMany(notifications as PushMessage[])
+    const accepted = results.filter((r) => r.ok).length
+    console.log(`[send-message-push] pushed to ${notifications.length} ${role}(s), ${accepted} accepted`)
 
     return new Response(JSON.stringify({ ok: true, notified: notifications.length }), {
       headers: { 'Content-Type': 'application/json' },

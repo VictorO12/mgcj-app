@@ -312,6 +312,40 @@ export default function DriverHomeScreen({
       });
   }, [profile]);
 
+  // Keep the toggle honest when the server takes us offline.
+  //
+  // is_active used to be read once on mount, so a server-side flip left this
+  // screen showing "Online" until the app was restarted. That matters now that
+  // the push-receipt sweep flips a driver offline when their token turns out to
+  // be dead (retire_push_token, migration 20260753): without this the driver
+  // sees green, never thinks to go online again, and so never reaches the
+  // go-online gate that would re-register their token and fix it. The flip
+  // would be invisible and we'd have traded one silent failure for another.
+  //
+  // reap_stale_drivers flips the same column, so this fixes that case too.
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel("driver-is-active-" + profile.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "drivers",
+          filter: `id=eq.${profile.id}`,
+        },
+        (payload) => {
+          const next = (payload.new as any)?.is_active;
+          if (typeof next === "boolean") setIsOnline(next);
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
   // Location is broadcast to the `drivers` table by useDriverLocationBroadcast
   // in DriverApp, which keeps running regardless of which driver screen is
   // mounted (this screen unmounts during assigned/active-ride flows).

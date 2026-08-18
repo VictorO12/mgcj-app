@@ -1,12 +1,11 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { sendPushMany, type PushMessage } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
-
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 serve(async (req) => {
   try {
@@ -73,17 +72,8 @@ serve(async (req) => {
       priority: 'normal',
     }
 
-    const response = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify(notification),
-    })
-
-    const result = await response.json()
-    console.log('Push result:', JSON.stringify(result))
+    const [pushResult] = await sendPushMany([notification as PushMessage])
+    console.log('Push result:', JSON.stringify(pushResult))
 
     return new Response(
       JSON.stringify({ success: true }),

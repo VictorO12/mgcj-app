@@ -7,13 +7,13 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { computeAuthoritativeFare } from '../_shared/fare.ts'
 import { livenessOrFilter, isDriverDispatchable } from '../_shared/presence.ts'
+import { sendPush } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL     = 'https://exp.host/--/api/v2/push/send'
 const ASSIGN_RIDE_URL   = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
 const SETTLE_RIDE_URL   = `${Deno.env.get('SUPABASE_URL')}/functions/v1/settle-ride`
 const STRIPE_API        = 'https://api.stripe.com/v1'
@@ -942,17 +942,8 @@ async function sendPassengerReminders(now: Date) {
           { rideId: ride.id, type: 'reminder_30min' }
         )
       }
-      if (pax?.phone) {
-        await sendSms(pax.phone,
-          // Plain hyphen, not an em dash: "—" is outside GSM-7, which forces
-          // the whole message to UCS-2 and halves the segment size to 70
-          // chars. With "-" the full pickup address still fits one segment,
-          // and send-sms normalises any smart punctuation the company name
-          // drags in. Roughly 40 chars of prefix are free at a typical
-          // address length before this tips into a second segment.
-          `${await smsPrefix(ride.company_id)}Your ride at ${when} - your driver will be on the way to ${ride.pickup_address} very soon.`
-        )
-      }
+      // No SMS at T-30. On the SMS-only path we send ONE reminder, not two, and
+      // T-15 is the one that changes behaviour ("be ready now" vs "soon").
       await supabase.from('rides').update({ notified_30min: true }).eq('id', ride.id)
       console.log(`[ride ${ride.id}] sent T-30 passenger reminder`)
     }
@@ -965,8 +956,27 @@ async function sendPassengerReminders(now: Date) {
           { rideId: ride.id, type: 'reminder_15min' }
         )
       }
-      if (pax?.phone) {
+      // SMS only where push cannot reach — a passenger with a working token has
+      // already had the push above, and sending both is pure duplicate spend
+      // (real cost is ~$0.015-0.041/segment once carrier fees are added, not the
+      // $0.0083 base rate). The population this keeps is the one that matters:
+      // dispatch-booked guest passengers, who are keyed by phone number and have
+      // no app at all, so in-app push structurally cannot reach them.
+      //
+      // This gate is only as good as push_token is accurate — a stale token
+      // suppresses the SMS *and* the push goes nowhere. That is what the receipt
+      // sweep in _shared/pushReceipts.ts exists to guarantee; do not ship this
+      // gate without it. Note the recovery is cross-ride, not intra-ride: Expo
+      // wants ~15 min before a receipt is readable and the T-30→T-15 gap is
+      // exactly 15 minutes, so it's the NEXT ride that falls back correctly.
+      if (pax?.phone && !pax?.push_token) {
         await sendSms(pax.phone,
+          // Plain hyphen, not an em dash: "—" is outside GSM-7, which forces
+          // the whole message to UCS-2 and halves the segment size to 70
+          // chars. With "-" the full pickup address still fits one segment,
+          // and send-sms normalises any smart punctuation the company name
+          // drags in. Roughly 40 chars of prefix are free at a typical
+          // address length before this tips into a second segment.
           `${await smsPrefix(ride.company_id)}Your ride is at ${when}. Be ready at ${ride.pickup_address} - your driver is on the way shortly.`
         )
       }
@@ -996,21 +1006,6 @@ async function sendSms(phone: string, message: string) {
   } catch (e) { console.error('[sms]', e) }
 }
 
-async function sendPush(
-  token: string | null | undefined,
-  title: string,
-  body: string,
-  data: Record<string, unknown>
-) {
-  if (!token) return
-  try {
-    await fetch(EXPO_PUSH_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body:    JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
-    })
-  } catch (e) { console.error('[push]', e) }
-}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

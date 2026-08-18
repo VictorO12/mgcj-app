@@ -5,13 +5,13 @@ import {
   type Commitment,
 } from '../_shared/commitment.ts'
 import { livenessOrFilter } from '../_shared/presence.ts'
+import { sendPushMany } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const MAPS_KEY = Deno.env.get('GOOGLE_MAPS_BACKEND_KEY')!
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -516,10 +516,7 @@ async function assignRide(
   const passengerName = passenger?.name ?? 'A passenger'
   const fareText = ride.fare_estimate ? `$${Number(ride.fare_estimate).toFixed(2)}` : 'Cash'
 
-  const pushRes = await fetch(EXPO_PUSH_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify([{
+  const [pushResult] = await sendPushMany([{
       to: winnerDriver.push_token,
       title: '🚗 New ride assigned to you',
       body: `${passengerName} · ${ride.pickup_address} → ${ride.dropoff_address} · ${fareText}`,
@@ -535,9 +532,7 @@ async function assignRide(
       sound: 'default',
       priority: 'high',
       ttl: 90,
-    }]),
-  })
-  const pushResult = await pushRes.json()
+  }])
   console.log('Push result:', JSON.stringify(pushResult))
 
   return { success: true, driverId: winnerId, pass }

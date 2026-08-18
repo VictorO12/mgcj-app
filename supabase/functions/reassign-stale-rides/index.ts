@@ -1,4 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { sendPush } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -6,7 +7,6 @@ const supabase = createClient(
 )
 
 const ASSIGN_RIDE_URL = `${Deno.env.get('SUPABASE_URL')}/functions/v1/assign-ride`
-const EXPO_PUSH_URL   = 'https://exp.host/--/api/v2/push/send'
 const STALE_THRESHOLD_SECONDS = 60
 
 Deno.serve(async (_req) => {
@@ -127,14 +127,3 @@ async function handleExclusiveStale(ride: any) {
   return { rideId: ride.id, path: 'exclusive_hold', wasAlreadyAtRisk }
 }
 
-async function sendPush(token: string, title: string, body: string, data: Record<string, unknown>) {
-  try {
-    await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
-    })
-  } catch (e) {
-    console.error('[push]', e)
-  }
-}

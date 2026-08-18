@@ -28,13 +28,13 @@
 // and reassign from the dashboard failed at the preflight, silently, because
 // the fetch rejects before any response body exists to alert on.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { sendPush } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -141,17 +141,12 @@ Deno.serve(async (req: Request) => {
               weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Halifax',
             })
           : 'your'
-        await fetch(EXPO_PUSH_URL, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to:    claimant.push_token,
-            title: 'Dispatch reassigned your planned ride',
-            body:  `The ${when} pickup at ${ride.pickup_address} has been given to another driver.`,
-            data:  { rideId: ride.id, type: 'claim_released', reason: 'dispatch_override' },
-            sound: 'default',
-          }),
-        })
+        await sendPush(
+          claimant.push_token,
+          'Dispatch reassigned your planned ride',
+          `The ${when} pickup at ${ride.pickup_address} has been given to another driver.`,
+          { rideId: ride.id, type: 'claim_released', reason: 'dispatch_override' },
+        )
       }
     }
 

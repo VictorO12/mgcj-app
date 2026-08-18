@@ -12,6 +12,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
 import { requireServiceRole } from '../_shared/internalAuth.ts'
+import { pollPushReceipts } from '../_shared/pushReceipts.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -46,6 +47,21 @@ Deno.serve(async (req) => {
     const { data: reaped, error: reapErr } = await supabase.rpc('reap_stale_drivers')
     if (reapErr) console.error('[coverage-monitor] reap error:', JSON.stringify(reapErr))
     else if (reaped) console.log(`[coverage-monitor] reaped ${reaped} stale driver(s)`)
+
+    // Expo push receipts, piggybacked here for the same reason as the reaper
+    // above: a dedicated cron would add rows to cron.job_run_details, which has
+    // filled the disk once already. This is the half that catches a token which
+    // was valid and then died -- uninstall, reinstall, or notifications revoked
+    // in OS settings -- since that only ever reports DeviceNotRegistered in the
+    // receipt, never in the send-time ticket. Nulling a dead token also drops
+    // the driver out of isDriverDispatchable(), which is the point: they were
+    // being offered rides their phone could not receive.
+    // Failures are logged inside and never block coverage recomputation.
+    try {
+      await pollPushReceipts()
+    } catch (e) {
+      console.error('[coverage-monitor] receipt sweep threw:', e)
+    }
 
     const { data: rides, error } = await supabase
       .from('rides')

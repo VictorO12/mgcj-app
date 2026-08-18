@@ -20,6 +20,7 @@
 // disagree about whether a ride is over.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { requireServiceRole } from '../_shared/internalAuth.ts'
+import { sendPush as sendPushShared } from '../_shared/push.ts'
 
 const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -308,16 +309,12 @@ async function sendPush(
     .eq("id", userId)
     .maybeSingle();
 
-  const token = profile?.push_token;
-  if (!token) return;
-
-  try {
-    await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: token, sound: "default", ...notification }),
-    });
-  } catch (e) {
-    console.error("[expire-pending-rides] push error:", e);
-  }
+  // Delivery handling (ticket parking + retiring dead tokens) lives in
+  // _shared/push.ts — see .claude/notes/push-receipts-devicenotregistered.md.
+  await sendPushShared(
+    profile?.push_token,
+    notification.title,
+    notification.body,
+    (notification.data ?? {}) as Record<string, unknown>,
+  );
 }

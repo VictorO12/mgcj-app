@@ -9,13 +9,13 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
+import { sendPush } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 )
 
-const EXPO_PUSH_URL    = 'https://exp.host/--/api/v2/push/send'
 const RELEASE_LEAD_MINS = 30
 
 Deno.serve(async (req) => {
@@ -128,14 +128,3 @@ Deno.serve(async (req) => {
   }
 })
 
-async function sendPush(token: string, title: string, body: string, data: Record<string, unknown>) {
-  try {
-    await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ to: token, title, body, data, sound: 'default', priority: 'high' }),
-    })
-  } catch (e) {
-    console.error('[push]', e)
-  }
-}

@@ -28,6 +28,7 @@
 // Ordering is load-bearing: the hold is released BEFORE the row is written,
 // so a Stripe failure can never leave a cancelled ride with a live hold.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { sendPush as sendPushShared } from '../_shared/push.ts'
 
 const STRIPE_SECRET_KEY  = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_API         = 'https://api.stripe.com/v1'
@@ -156,16 +157,9 @@ async function sendPush(userId: string | null, title: string, body: string, data
   if (!userId) return
   const { data: profile } = await supabase
     .from('profiles').select('push_token').eq('id', userId).maybeSingle()
-  if (!profile?.push_token) return
-  try {
-    await fetch('https://exp.host/--/api/v2/push/send', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to: profile.push_token, sound: 'default', title, body, data }),
-    })
-  } catch (err) {
-    console.error('[settle-ride] push failed:', err)
-  }
+  // Ticket parking and dead-token retirement live in _shared/push.ts —
+  // see .claude/notes/push-receipts-devicenotregistered.md.
+  await sendPushShared(profile?.push_token, title, body, data as Record<string, unknown>)
 }
 
 function distanceMetres(lat1: number, lng1: number, lat2: number, lng2: number) {
