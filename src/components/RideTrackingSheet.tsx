@@ -208,6 +208,28 @@ export default function RideTrackingSheet({
             </Text>
           </View>
         </View>
+        {/* The collapsed bar is where the passenger spends the ride, so an
+            unread message has to be visible HERE or it is not visible at all.
+            Rendered only when something is unread, so the bar stays as quiet
+            as it was designed to be. Sits outside miniRight because that row
+            is baseline-aligned for the ETA number and its label, and a View
+            has no baseline to align to. Tappable: the outer PanResponder only
+            claims vertical drags over 8px, so a tap still reaches this. */}
+        {chatUnread > 0 && (
+          <TouchableOpacity
+            style={styles.miniChatBtn}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              onOpenChat();
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="chatbubbles" size={15} color="#FFFFFF" />
+            <Text style={styles.miniChatCount}>
+              {chatUnread > 9 ? "9+" : chatUnread}
+            </Text>
+          </TouchableOpacity>
+        )}
         <View style={styles.miniRight}>
           <Text style={styles.miniEta}>{eta !== null ? `${eta}` : "--"}</Text>
           <Text style={styles.miniEtaLabel}>min</Text>
@@ -511,6 +533,18 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   miniStatus: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   miniSub: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
   miniRight: { flexDirection: "row", alignItems: "baseline", gap: 2 },
+  miniChatBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 13,
+    backgroundColor: colors.accentOrange,
+    marginLeft: "auto",
+    marginRight: 10,
+  },
+  miniChatCount: { fontSize: 12, fontWeight: "700", color: "#FFFFFF" },
   miniEta: { fontSize: 24, fontWeight: "700", color: colors.textPrimary },
   miniEtaLabel: { fontSize: 12, color: colors.textSecondary },
 

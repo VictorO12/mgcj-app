@@ -384,9 +384,20 @@ const makeStyles = (colors: Colors) =>
     bubbleText: { fontSize: 15, color: colors.textPrimary, lineHeight: 20 },
     bubbleTime: { fontSize: 11, color: colors.textSecondary, marginTop: 3, marginHorizontal: 4 },
     bubbleTimeRight: { textAlign: "right" },
-    quickRow: { maxHeight: 46, borderTopWidth: 1, borderTopColor: colors.borderSubtle },
-    quickRowContent: { paddingHorizontal: 10, paddingVertical: 7, gap: 7, alignItems: "center" },
+    // flexGrow: 0 rather than a maxHeight. A horizontal ScrollView inside a
+    // flex column will otherwise try to fill the space, and capping it with
+    // maxHeight clipped the chips instead -- the height has to come from the
+    // content, not from a guessed number.
+    quickRow: { flexGrow: 0, borderTopWidth: 1, borderTopColor: colors.borderSubtle },
+    quickRowContent: {
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      gap: 7,
+      alignItems: "center",
+    },
     quickChip: {
+      minHeight: 34,
+      justifyContent: "center",
       paddingHorizontal: 13,
       paddingVertical: 7,
       borderRadius: 16,
@@ -396,6 +407,8 @@ const makeStyles = (colors: Colors) =>
     },
     quickChipText: { fontSize: 13, color: colors.textPrimary },
     ackChip: {
+      minHeight: 34,
+      justifyContent: "center",
       paddingHorizontal: 12,
       paddingVertical: 5,
       borderRadius: 16,

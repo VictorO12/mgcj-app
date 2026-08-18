@@ -12,7 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
-import { useRideThread } from "../../hooks/useRideThread";
+import { useRideThread, rideAcceptsMessages } from "../../hooks/useRideThread";
 import RideChatScreen from "./RideChatScreen";
 import RideReviewModal from "../../components/RideReviewModal";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
@@ -345,11 +345,16 @@ export default function RideHistoryScreen({ onClose }: Props) {
     // RLS, and a row coming back at all is proof this user may read that
     // thread. Failure is silent on purpose -- a missing chat button is a
     // smaller problem than a history page that will not load.
-    if (mapped.length) {
+    //
+    // Scoped to rides still inside the messaging window, since the button only
+    // renders for those anyway (D4). History is newest-first, so in practice
+    // this is at most the first row or two and usually asks about nothing.
+    const inWindow = mapped.filter((r) => rideAcceptsMessages(r.status, r.completed_at));
+    if (inWindow.length) {
       const { data: threaded } = await supabase
         .from("ride_messages")
         .select("ride_id")
-        .in("ride_id", mapped.map((r) => r.id));
+        .in("ride_id", inWindow.map((r) => r.id));
       if (threaded) {
         const ids = new Set(threaded.map((t: any) => t.ride_id));
         setRidesWithThread((prev) =>
@@ -648,7 +653,14 @@ export default function RideHistoryScreen({ onClose }: Props) {
                               </Text>
                             </TouchableOpacity>
                           )}
-                          {ridesWithThread.has(ride.id) && (
+                          {/* D4: the card action expires with the messaging
+                              window, so a finished ride stops offering a way
+                              back into the thread. The RLS SELECT stays open —
+                              dispatch and any dispute review can still read it
+                              (Phase 3), and nothing is deleted here. What goes
+                              away is the passenger/driver entry point. */}
+                          {ridesWithThread.has(ride.id) &&
+                            rideAcceptsMessages(ride.status, ride.completed_at) && (
                             <TouchableOpacity
                               style={styles.viewProfileBtn}
                               onPress={() => setChatRide(ride)}

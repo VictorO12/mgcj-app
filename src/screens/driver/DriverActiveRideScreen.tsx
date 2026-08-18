@@ -1439,19 +1439,41 @@ export default function DriverActiveRideScreen({
         style={styles.sheet}
         onLayout={(e) => setSheetH(e.nativeEvent.layout.height)}
       >
-        {/* Expand/collapse — chevron top-left */}
-        <TouchableOpacity
-          style={styles.sheetHandle}
-          onPress={() => setPanelExpanded(e => !e)}
-          activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 40 }}
-        >
-          <Ionicons
-            name={panelExpanded ? "chevron-down" : "chevron-up"}
-            size={18}
-            color={colors.textFaint}
-          />
-        </TouchableOpacity>
+        {/* Chat + expand/collapse. The chat button lives HERE, in the strip
+            that is visible whether the panel is open or shut, rather than on
+            the passenger card below — the driver runs with the panel
+            collapsed, so a button that only appears when expanded is a button
+            they never see, and an unread message would go unnoticed for the
+            whole ride. */}
+        <View style={styles.sheetTopRow}>
+          <TouchableOpacity
+            style={styles.sheetChatBtn}
+            onPress={() => setChatVisible(true)}
+            activeOpacity={0.85}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="chatbubbles" size={16} color="#FFFFFF" />
+            {rideThread.unreadCount > 0 && (
+              <View style={styles.sheetChatBadge}>
+                <Text style={styles.sheetChatBadgeText}>
+                  {rideThread.unreadCount > 9 ? "9+" : rideThread.unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.sheetHandle}
+            onPress={() => setPanelExpanded(e => !e)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 40 }}
+          >
+            <Ionicons
+              name={panelExpanded ? "chevron-down" : "chevron-up"}
+              size={18}
+              color={colors.textFaint}
+            />
+          </TouchableOpacity>
+        </View>
 
         {/* Destination card — always visible */}
         <View style={styles.destinationCard}>
@@ -1539,20 +1561,6 @@ export default function DriverActiveRideScreen({
                 </View>
               </View>
             </View>
-            <TouchableOpacity
-              style={styles.passengerChatBtn}
-              onPress={() => setChatVisible(true)}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="chatbubbles" size={18} color="#FFFFFF" />
-              {rideThread.unreadCount > 0 && (
-                <View style={styles.passengerChatBadge}>
-                  <Text style={styles.passengerChatBadgeText}>
-                    {rideThread.unreadCount > 9 ? "9+" : rideThread.unreadCount}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
           </View>
         )}
 
@@ -1918,7 +1926,9 @@ const makeStyles = (colors: Colors) =>
       gap: 10,
     },
     sheetHandle: {
-      alignSelf: "flex-end",
+      // Was alignSelf: "flex-end" to push the chevron right in a column. It now
+      // sits in sheetTopRow, where the row's justifyContent does that job and
+      // alignSelf would instead push it to the bottom of the row.
       paddingBottom: 2,
     },
     destinationCard: {
@@ -1947,15 +1957,20 @@ const makeStyles = (colors: Colors) =>
     etaBlock: { alignItems: "center", minWidth: 40 },
     etaLarge: { fontSize: 22, fontWeight: "700", color: colors.accentAmber, lineHeight: 24 },
     etaUnit: { fontSize: 10, fontWeight: "600", color: colors.textSecondary },
-    passengerChatBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
+    sheetTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    sheetChatBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
       backgroundColor: colors.accentGreen,
       alignItems: "center",
       justifyContent: "center",
     },
-    passengerChatBadge: {
+    sheetChatBadge: {
       position: "absolute",
       top: -3,
       right: -3,
@@ -1967,7 +1982,7 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
       justifyContent: "center",
     },
-    passengerChatBadgeText: { fontSize: 10, fontWeight: "700", color: "#FFFFFF" },
+    sheetChatBadgeText: { fontSize: 10, fontWeight: "700", color: "#FFFFFF" },
     passengerCard: {
       flexDirection: "row",
       alignItems: "center",
