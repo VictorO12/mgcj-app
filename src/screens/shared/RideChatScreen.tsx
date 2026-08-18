@@ -15,7 +15,12 @@ import * as Speech from "expo-speech";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
-import { useRideThread, rideAcceptsMessages, type RideMessage } from "../../hooks/useRideThread";
+import {
+  useRideThread,
+  rideAcceptsMessages,
+  rideChatClosesAt,
+  type RideMessage,
+} from "../../hooks/useRideThread";
 
 export type RideThread = ReturnType<typeof useRideThread>;
 
@@ -56,6 +61,31 @@ const PASSENGER_QUICK_REPLIES = [
   "I'm at the front entrance",
   "Please wait a moment",
 ];
+
+/**
+ * How long is left, phrased the way someone would say it out loud.
+ *
+ * Deliberately coarse above an hour and exact below ten minutes: "1h 47m left"
+ * invites watching a clock during a window whose whole purpose is to be
+ * forgotten about, while "3 minutes left" is the point at which precision
+ * actually changes what someone does.
+ */
+function formatRemaining(ms: number): string {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins <= 1) return "less than a minute";
+  if (mins < 10) return `${mins} minutes`;
+  if (mins < 60) return `about ${Math.round(mins / 5) * 5} minutes`;
+  let hours = Math.floor(mins / 60);
+  let rem = Math.round((mins % 60) / 15) * 15;
+  // Rounding the remainder can carry into the next hour (119 min reads as two
+  // hours, not "1h 60m").
+  if (rem === 60) {
+    hours += 1;
+    rem = 0;
+  }
+  if (rem > 0) return `about ${hours}h ${rem}m`;
+  return hours === 1 ? "about an hour" : `about ${hours} hours`;
+}
 
 function dayKey(iso: string) {
   return new Date(iso).toDateString();
@@ -141,7 +171,26 @@ export default function RideChatScreen({
   }, [messages, otherLastReadAt, profile]);
   const isDriver = profile?.role === "driver";
   const quickReplies = isDriver ? DRIVER_QUICK_REPLIES : PASSENGER_QUICK_REPLIES;
-  const canSend = rideAcceptsMessages(rideStatus, completedAt);
+
+  const closesAt = rideChatClosesAt(rideStatus, completedAt);
+
+  // A clock, ticking only while there is a deadline to tick towards.
+  //
+  // This is not only for the countdown text. canSend was computed once per
+  // render, so a thread left open across the deadline kept an open composer
+  // whose sends would then be refused by the INSERT policy — an opaque failure
+  // at exactly the moment the passenger has been warned time is short. The
+  // same tick that moves the label closes the composer.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!closesAt) return;
+    // 30s is fine: the copy is coarse above ten minutes, and at the very end
+    // half a minute of lag on a two-hour window is not what anyone notices.
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [closesAt]);
+
+  const canSend = rideAcceptsMessages(rideStatus, completedAt, now);
 
   // On open, on close, AND on each inbound message while the screen is open.
   //
@@ -308,6 +357,19 @@ export default function RideChatScreen({
         </ScrollView>
       )}
 
+      {canSend && closesAt && (
+        // Shown only after the ride ends. During the ride there is no deadline
+        // and saying so would invent a worry that does not exist yet.
+        <View style={styles.expiryNotice}>
+          <Ionicons name="time-outline" size={14} color={colors.accentAmberText} />
+          <Text style={styles.expiryNoticeText}>
+            This ride has ended. You can message for{" "}
+            {formatRemaining(closesAt - now)} — after that this conversation
+            closes.
+          </Text>
+        </View>
+      )}
+
       {canSend ? (
         <>
           <ScrollView
@@ -469,6 +531,22 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "center",
     },
     sendBtnDisabled: { opacity: 0.4 },
+    expiryNotice: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 9,
+      borderTopWidth: 1,
+      borderTopColor: colors.borderSubtle,
+      backgroundColor: colors.surfaceOrangeTint,
+    },
+    expiryNoticeText: {
+      flex: 1,
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.accentAmberText,
+    },
     closedNotice: {
       flexDirection: "row",
       alignItems: "center",

@@ -37,11 +37,24 @@ export const RIDE_CHAT_GRACE_MS = 2 * 60 * 60 * 1000;
 export function rideAcceptsMessages(
   status: string | null | undefined,
   completedAt?: string | null,
+  now: number = Date.now(),
 ): boolean {
   if (!status) return false;
   if (LIVE_STATUSES.includes(status)) return true;
   if (status !== "completed" || !completedAt) return false;
-  return Date.now() - new Date(completedAt).getTime() < RIDE_CHAT_GRACE_MS;
+  return now - new Date(completedAt).getTime() < RIDE_CHAT_GRACE_MS;
+}
+
+/**
+ * When messaging closes, as a timestamp — or null if the ride is still live
+ * (no deadline yet) or already past it.
+ */
+export function rideChatClosesAt(
+  status: string | null | undefined,
+  completedAt?: string | null,
+): number | null {
+  if (status !== "completed" || !completedAt) return null;
+  return new Date(completedAt).getTime() + RIDE_CHAT_GRACE_MS;
 }
 
 /**
