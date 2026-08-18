@@ -129,6 +129,7 @@ export default function DriverApp() {
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
   const [openChatSignal, setOpenChatSignal] = useState(0);
   const [openRideChatSignal, setOpenRideChatSignal] = useState(0);
+  const [openRideChatFor, setOpenRideChatFor] = useState<string | null>(null);
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
@@ -507,6 +508,11 @@ export default function DriverApp() {
         // thread lives inside DriverActiveRideScreen, which is already the
         // mounted screen for this ride, so this only has to raise it.
         if (data.type === "ride_chat") {
+          // Carry the ride the push was about. A driver can be on ride Y while
+          // a passenger from just-completed ride X messages them inside the 2h
+          // window, and opening Y's thread for X's message shows the wrong
+          // conversation to the wrong person.
+          setOpenRideChatFor(typeof data.rideId === "string" ? data.rideId : null);
           setOpenRideChatSignal((n) => n + 1);
           return;
         }
@@ -934,6 +940,7 @@ export default function DriverApp() {
         onStatusChange={handleRideStatusChange}
         kickPendingRef={pendingKickRef}
         openChatSignal={openRideChatSignal}
+        openChatRideId={openRideChatFor}
       />
     );
   }

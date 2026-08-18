@@ -221,6 +221,8 @@ interface Props {
   kickPendingRef?: React.MutableRefObject<boolean>;
   /** Bumped when a ride_chat push is tapped, to raise the thread. */
   openChatSignal?: number;
+  /** The ride that push was about, so a stale one cannot open the wrong thread. */
+  openChatRideId?: string | null;
 }
 
 export default function DriverActiveRideScreen({
@@ -229,6 +231,7 @@ export default function DriverActiveRideScreen({
   onStatusChange,
   kickPendingRef,
   openChatSignal,
+  openChatRideId,
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
@@ -241,12 +244,24 @@ export default function DriverActiveRideScreen({
   // the map, not at the thread, which is the whole reason this needs a badge.
   const rideThread = useRideThread(ride.id);
 
-  // Guarded on truthiness, not just change: the initial 0 must not open the
-  // thread over the map on every mount. Same shape as DriverHomeScreen's
-  // openChatSignal.
+  // Compared against its value AT MOUNT, not against zero.
+  //
+  // The truthiness guard this replaces was wrong in a way that only appeared
+  // after the first chat push was ever tapped: the counter lives in DriverApp
+  // and only ever increases, while this screen is keyed on the ride id and so
+  // REMOUNTS for every ride. Once the counter had left zero, every subsequent
+  // ride mounted with a truthy signal and threw the thread over the map the
+  // moment the driver accepted. DriverHomeScreen never showed this because it
+  // does not remount per ride.
+  const chatSignalSeenRef = useRef(openChatSignal);
   useEffect(() => {
-    if (openChatSignal) setChatVisible(true);
-  }, [openChatSignal]);
+    if (openChatSignal === chatSignalSeenRef.current) return;
+    chatSignalSeenRef.current = openChatSignal;
+    // A push about a different ride (the 2h window keeps a finished ride's
+    // thread live) must not open this one.
+    if (openChatRideId && openChatRideId !== ride.id) return;
+    setChatVisible(true);
+  }, [openChatSignal, openChatRideId, ride.id]);
 
   const [location, setLocation] = useState<LatLng | null>(null);
   const locationRef = useRef<LatLng | null>(null);
