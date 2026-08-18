@@ -32,6 +32,8 @@ interface Props {
   statusLabel: string;
   onCancel: () => void;
   activeDrivers: any[];
+  onOpenChat: () => void;
+  chatUnread?: number;
 }
 
 export default function RideTrackingSheet({
@@ -39,6 +41,8 @@ export default function RideTrackingSheet({
   eta,
   statusLabel,
   onCancel,
+  onOpenChat,
+  chatUnread = 0,
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -291,13 +295,35 @@ export default function RideTrackingSheet({
             </View>
             <View style={styles.driverActions}>
               <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnPrimary]}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  onOpenChat();
+                }}
+              >
+                <Ionicons name="chatbubbles" size={18} color="#FFFFFF" />
+                {chatUnread > 0 && (
+                  <View style={styles.actionBadge}>
+                    <Text style={styles.actionBadgeText}>
+                      {chatUnread > 9 ? "9+" : chatUnread}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              {/* SMS stays alongside in-app chat for now, NOT replaced by it.
+                  Removing it is D2, and it can only happen once Phase 2's
+                  masked SMS exists — a guest passenger with no account still
+                  needs some way to reach their driver, and in-app chat is not
+                  it. Note this is the number-exposure G3 exists to close, so
+                  it is a deliberate temporary state, not an oversight. */}
+              <TouchableOpacity
                 style={styles.actionBtn}
                 onPress={(e) => {
                   e.stopPropagation?.();
                   smsDriver();
                 }}
               >
-                <Ionicons name="chatbubble-outline" size={18} color={colors.textOnSurfaceLight} />
+                <Ionicons name="chatbox-outline" size={18} color={colors.textOnSurfaceLight} />
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionBtn}
@@ -591,6 +617,23 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  actionBtnPrimary: {
+    backgroundColor: colors.accentOrange,
+    borderColor: colors.accentOrange,
+  },
+  actionBadge: {
+    position: "absolute",
+    top: -3,
+    right: -3,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.accentRed,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionBadgeText: { fontSize: 10, fontWeight: "700", color: "#FFFFFF" },
 
   // Amber, not the orange used by "Change destination" below it. The two rows
   // sit together and mean opposite things — one asks for help, the other

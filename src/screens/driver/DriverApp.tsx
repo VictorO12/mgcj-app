@@ -128,6 +128,7 @@ export default function DriverApp() {
   // pop open the inbox/chat overlay once it's mounted (0 = no pending request).
   const [openInboxSignal, setOpenInboxSignal] = useState(0);
   const [openChatSignal, setOpenChatSignal] = useState(0);
+  const [openRideChatSignal, setOpenRideChatSignal] = useState(0);
   const [confirmedScheduledRides, setConfirmedScheduledRides] = useState<
     ConfirmedScheduledRide[]
   >([]);
@@ -496,6 +497,17 @@ export default function DriverApp() {
         }
         if (data.type === "driver_chat") {
           setOpenChatSignal((s) => s + 1);
+          return;
+        }
+
+        // A message from the passenger on the ride the driver is currently on.
+        // Distinct from driver_chat, which is dispatch — different thread,
+        // different screen, and conflating them would open the wrong one.
+        // Deliberately does NOT fall through to the rideId guard below: the
+        // thread lives inside DriverActiveRideScreen, which is already the
+        // mounted screen for this ride, so this only has to raise it.
+        if (data.type === "ride_chat") {
+          setOpenRideChatSignal((n) => n + 1);
           return;
         }
 
@@ -921,6 +933,7 @@ export default function DriverApp() {
         onRideComplete={handleRideComplete}
         onStatusChange={handleRideStatusChange}
         kickPendingRef={pendingKickRef}
+        openChatSignal={openRideChatSignal}
       />
     );
   }

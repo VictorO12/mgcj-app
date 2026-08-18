@@ -27,6 +27,8 @@ import { useActiveRide } from "../../hooks/useActiveRide";
 import { supabase } from "../../lib/supabase";
 import { invokeFunction } from "../../lib/invokeFunction";
 import RideTrackingSheet from "../../components/RideTrackingSheet";
+import RideChatScreen from "../shared/RideChatScreen";
+import { useRideThread } from "../../hooks/useRideThread";
 import ProfileMenu from "../../components/ProfileMenu";
 import RideHistoryScreen from "../shared/RideHistoryScreen";
 import ScheduledRidesScreen from "./ScheduledRidesScreen";
@@ -276,6 +278,10 @@ export default function PassengerHomeScreen() {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data ?? {};
       if (data.type === "dispatch_message") setInboxVisible(true);
+      // From the driver, on the active ride. setChatVisible is declared below
+      // this effect but only read when the callback fires, which is after
+      // render — the same reason setInboxVisible above works from here.
+      if (data.type === "ride_chat") setChatVisible(true);
     });
     return () => sub.remove();
   }, []);
@@ -286,6 +292,13 @@ export default function PassengerHomeScreen() {
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
+  const [chatVisible, setChatVisible] = useState(false);
+
+  // Owned here, not inside RideChatScreen: the tracking sheet needs the unread
+  // count while the thread is closed, and one subscription has to serve both.
+  // Passing the ride id through means the channel follows the active ride and
+  // tears down when it clears.
+  const rideThread = useRideThread(ride?.id);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
   const [rideRouteCoords, setRideRouteCoords] = useState<LatLng[]>([]);
@@ -1101,7 +1114,8 @@ export default function PassengerHomeScreen() {
     !profileVisible &&
     !notificationsVisible &&
     !helpVisible &&
-    !driverProfileVisible;
+    !driverProfileVisible &&
+    !chatVisible;
   const { current: interstitialMessage, dismiss: dismissInterstitial } =
     useInterstitialQueue(interstitialGateOpen);
   const noDriversForImmediate = !isScheduled && (
@@ -1916,7 +1930,20 @@ export default function PassengerHomeScreen() {
           statusLabel={statusLabel(ride.status, ride.driver?.name)}
           onCancel={cancelRide}
           activeDrivers={activeDrivers}
+          onOpenChat={() => setChatVisible(true)}
+          chatUnread={rideThread.unreadCount}
         />
+      )}
+
+      {chatVisible && ride && (
+        <View style={StyleSheet.absoluteFill}>
+          <RideChatScreen
+            thread={rideThread}
+            rideStatus={ride.status}
+            counterpartName={ride.driver?.name}
+            onClose={() => setChatVisible(false)}
+          />
+        </View>
       )}
 
       {historyVisible && (

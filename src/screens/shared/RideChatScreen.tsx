@@ -17,8 +17,15 @@ import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import { useRideThread, CHATTABLE_STATUSES, type RideMessage } from "../../hooks/useRideThread";
 
+export type RideThread = ReturnType<typeof useRideThread>;
+
 interface Props {
-  rideId: string;
+  // The thread is OWNED BY THE HOST SCREEN and passed in, not created here.
+  // The host needs the unread count for its badge while this screen is closed,
+  // and two useRideThread instances would mean two subscriptions to the same
+  // private channel — supabase-js keys channels by topic, so the second one
+  // fights the first rather than doubling up harmlessly.
+  thread: RideThread;
   // The ride's live status, so the composer can explain itself rather than
   // letting an insert bounce off the RLS policy with an opaque error.
   rideStatus: string;
@@ -62,11 +69,11 @@ function formatDateLabel(iso: string) {
   return d.toLocaleDateString("en-CA", { month: "long", day: "numeric" });
 }
 
-export default function RideChatScreen({ rideId, rideStatus, counterpartName, onClose }: Props) {
+export default function RideChatScreen({ thread, rideStatus, counterpartName, onClose }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { messages, loading, send, markRead } = useRideThread(rideId);
+  const { messages, loading, send, markRead } = thread;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [speaking, setSpeaking] = useState(false);

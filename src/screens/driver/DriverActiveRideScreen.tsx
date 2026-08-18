@@ -21,6 +21,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
+import { useRideThread } from "../../hooks/useRideThread";
+import RideChatScreen from "../shared/RideChatScreen";
 import Constants from "expo-constants";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
@@ -217,6 +219,8 @@ interface Props {
    * fire the moment the ride clears — deliver the one accurate message.
    */
   kickPendingRef?: React.MutableRefObject<boolean>;
+  /** Bumped when a ride_chat push is tapped, to raise the thread. */
+  openChatSignal?: number;
 }
 
 export default function DriverActiveRideScreen({
@@ -224,11 +228,25 @@ export default function DriverActiveRideScreen({
   onRideComplete,
   onStatusChange,
   kickPendingRef,
+  openChatSignal,
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const mapRef = useRef<MapView>(null);
+
+  const [chatVisible, setChatVisible] = useState(false);
+  // Owned here rather than inside RideChatScreen so the passenger card can
+  // show an unread badge while the thread is closed — the driver is looking at
+  // the map, not at the thread, which is the whole reason this needs a badge.
+  const rideThread = useRideThread(ride.id);
+
+  // Guarded on truthiness, not just change: the initial 0 must not open the
+  // thread over the map on every mount. Same shape as DriverHomeScreen's
+  // openChatSignal.
+  useEffect(() => {
+    if (openChatSignal) setChatVisible(true);
+  }, [openChatSignal]);
 
   const [location, setLocation] = useState<LatLng | null>(null);
   const locationRef = useRef<LatLng | null>(null);
@@ -1521,6 +1539,20 @@ export default function DriverActiveRideScreen({
                 </View>
               </View>
             </View>
+            <TouchableOpacity
+              style={styles.passengerChatBtn}
+              onPress={() => setChatVisible(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="chatbubbles" size={18} color="#FFFFFF" />
+              {rideThread.unreadCount > 0 && (
+                <View style={styles.passengerChatBadge}>
+                  <Text style={styles.passengerChatBadgeText}>
+                    {rideThread.unreadCount > 9 ? "9+" : rideThread.unreadCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1685,6 +1717,17 @@ export default function DriverActiveRideScreen({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {chatVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <RideChatScreen
+            thread={rideThread}
+            rideStatus={ride.status}
+            counterpartName={ride.passenger_name}
+            onClose={() => setChatVisible(false)}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -1904,6 +1947,27 @@ const makeStyles = (colors: Colors) =>
     etaBlock: { alignItems: "center", minWidth: 40 },
     etaLarge: { fontSize: 22, fontWeight: "700", color: colors.accentAmber, lineHeight: 24 },
     etaUnit: { fontSize: 10, fontWeight: "600", color: colors.textSecondary },
+    passengerChatBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.accentGreen,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    passengerChatBadge: {
+      position: "absolute",
+      top: -3,
+      right: -3,
+      minWidth: 17,
+      height: 17,
+      borderRadius: 9,
+      paddingHorizontal: 4,
+      backgroundColor: colors.accentRed,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    passengerChatBadgeText: { fontSize: 10, fontWeight: "700", color: "#FFFFFF" },
     passengerCard: {
       flexDirection: "row",
       alignItems: "center",
