@@ -103,7 +103,15 @@ $$;
 -- error rather than an obvious one. Going through a definer bypasses that by
 -- construction -- the same reason participation goes through one.
 --
--- D4: the window stays open for RIDE_CHAT_GRACE after completion. That is not
+-- THIS FUNCTION IS THE AUTHORITY on the messaging window. There is exactly one
+-- mirror of it, rideAcceptsMessages() in src/hooks/useRideThread.ts, which
+-- exists so the composer can close with an explanation rather than bouncing an
+-- insert off this policy. Postgres and React Native cannot share a module the
+-- way the Deno functions share _shared/fare.ts, so two definitions is the
+-- floor -- but two is also the ceiling. Anything server-side that needs this
+-- rule calls this function; it does not restate the interval.
+--
+-- D4: the window stays open for 2 hours after completion. That is not
 -- a nicety -- "I left my bag in the car" is the single most common reason a
 -- passenger needs their driver after a ride, and closing the thread the
 -- instant the driver taps complete sends every one of those to dispatch, or

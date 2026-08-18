@@ -14,11 +14,18 @@ export interface RideMessage {
   created_at: string;
 }
 
-// Mirrors ride_accepts_messages() in 20260754_ride_messages.sql -- kept here so
-// the UI can close the composer with an explanation rather than letting the
-// insert fail with an opaque RLS error the passenger cannot act on. NOTHING
-// ENFORCES THIS PAIRING: if the SQL function's window changes, change this too,
-// or the two disagree and the visible symptom is a send button that does
+// ride_accepts_messages() in 20260754_ride_messages.sql IS THE AUTHORITY on
+// this window. What follows is the single client-side mirror of it, and exists
+// only so the UI can close the composer with an explanation instead of letting
+// the insert bounce off the policy with an error the passenger cannot act on.
+//
+// Two definitions is the floor, not a shortcut: the rule has to be enforced in
+// Postgres (it is a security boundary) and known in React Native (it is a UI
+// state), and those cannot share a module the way _shared/fare.ts and
+// _shared/presence.ts do for the Deno functions. So the discipline is: this is
+// the ONLY mirror -- no Edge Function and no other screen may restate the
+// window; anything server-side that needs it calls the SQL function. If the SQL
+// changes and this does not, the visible symptom is a send button that does
 // nothing.
 //
 // The 2h tail after completion is D4, and it exists for one case: "I left my

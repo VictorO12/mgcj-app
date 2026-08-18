@@ -87,14 +87,23 @@ function formatDateLabel(iso: string) {
  */
 function driverChangeIndices(messages: RideMessage[]): Set<number> {
   const changes = new Set<number>();
+  // undefined = no driver seen yet (so the first one is not a handover).
+  // null     = a driver whose account has been deleted.
   let lastDriverId: string | null | undefined;
   messages.forEach((m, i) => {
     if (m.sender_role !== "driver") return;
-    // A null sender_id is a deleted account, not a new driver -- it carries no
-    // identity to compare, so it must not fabricate a handover.
-    if (m.sender_id == null) return;
-    if (lastDriverId !== undefined && m.sender_id !== lastDriverId) changes.add(i);
-    lastDriverId = m.sender_id;
+    const id = m.sender_id ?? null;
+    // A null is treated as an identity in its own right rather than skipped.
+    // Skipping it left lastDriverId undefined, so a thread whose first
+    // driver-role message came from a deleted account showed NO divider when a
+    // real driver took over -- the exact case the divider exists for.
+    // Deletion nulls a sender's messages retroactively and a deleted account
+    // cannot send again, so real-then-null really is two different people.
+    // Two consecutive nulls are two indistinguishable deleted drivers; nothing
+    // can separate them, and claiming a handover we cannot prove is worse than
+    // missing one.
+    if (lastDriverId !== undefined && id !== lastDriverId) changes.add(i);
+    lastDriverId = id;
   });
   return changes;
 }

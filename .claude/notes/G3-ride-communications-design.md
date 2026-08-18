@@ -11,8 +11,8 @@ Edits to this file have silently failed to apply at least twice. §4 carried the
 superseded `ride_chat_state` design for a day. Worse, the entire final doc edit of
 the 2026-08-17 session was lost — four items, recovered on 2026-08-18 only because
 Victor still had the transcript: D4's agreed 2h window, D5's deferral, §5's
-cycled-driver read rules, and §14 (the deletion review). §11 still cites a "§15"
-that has never existed here. **Do not trust a cross-reference in this file without
+cycled-driver read rules, and §14 (the deletion review). (§11's phantom "§15" pointer has since been
+replaced with the real code reference.) **Do not trust a cross-reference in this file without
 checking it, and do not read "not recorded" as "not decided."**
 
 ---
@@ -397,14 +397,13 @@ Each phase is independently shippable.
 
 - **Phase 0** — **HALF DONE 2026-08-17.** Independently verified 2026-08-18 that the code
   matches this description: there is no T-30 SMS path left, and the T-15 SMS is gated on
-  `pax?.phone && !pax?.push_token` (`scheduled-release/index.ts:945`, `:972`). The "§15"
-  cited below is a dangling reference — this doc has no §15 — but the claim it supports is
-  true. `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+  `pax?.phone && !pax?.push_token` (`scheduled-release/index.ts:945`, `:972`). `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
   `TWILIO_FROM_NUMBER` are set and verified present. **The end-to-end send is still
   unproven** — no SMS has ever left this platform, so "secrets exist" is not the same as
   "SMS works".
-  Note the original wording ("verify one real T-30 reminder") is now obsolete: §15 removed
-  the T-30 SMS entirely. The check is now **one real T-15 SMS to a passenger with no
+  Note the original wording ("verify one real T-30 reminder") is now obsolete: the T-30 SMS
+  was removed entirely (the "§15" this used to cite has never existed in this file; the
+  change is real and lives in `scheduled-release/index.ts:945`). The check is now **one real T-15 SMS to a passenger with no
   `push_token`**, since that gate is the only path that sends. Watch `scheduled-release`
   logs for it — `send-sms` returns 503 naming missing secrets rather than a silent 200, so
   a failure will be visible.
