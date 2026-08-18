@@ -73,6 +73,32 @@ function formatDateLabel(iso: string) {
   return d.toLocaleDateString("en-CA", { month: "long", day: "numeric" });
 }
 
+/**
+ * Indices at which the driver on this ride changed hands.
+ *
+ * Driver cycling is routine here -- a 60s non-response reassigns the ride -- so
+ * one thread can hold messages from two different drivers, and the passenger is
+ * shown the earlier exchange on purpose (it is context the new driver needs).
+ * Without a divider the passenger reads two people as one continuous speaker,
+ * which is worse than not showing the history at all.
+ *
+ * Compares against the last DRIVER-role message rather than the previous
+ * message, so a passenger reply in between does not suppress the divider.
+ */
+function driverChangeIndices(messages: RideMessage[]): Set<number> {
+  const changes = new Set<number>();
+  let lastDriverId: string | null | undefined;
+  messages.forEach((m, i) => {
+    if (m.sender_role !== "driver") return;
+    // A null sender_id is a deleted account, not a new driver -- it carries no
+    // identity to compare, so it must not fabricate a handover.
+    if (m.sender_id == null) return;
+    if (lastDriverId !== undefined && m.sender_id !== lastDriverId) changes.add(i);
+    lastDriverId = m.sender_id;
+  });
+  return changes;
+}
+
 export default function RideChatScreen({
   thread,
   rideStatus,
@@ -89,6 +115,7 @@ export default function RideChatScreen({
   const [speaking, setSpeaking] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
+  const driverChanges = useMemo(() => driverChangeIndices(messages), [messages]);
   const isDriver = profile?.role === "driver";
   const quickReplies = isDriver ? DRIVER_QUICK_REPLIES : PASSENGER_QUICK_REPLIES;
   const canSend = rideAcceptsMessages(rideStatus, completedAt);
@@ -205,6 +232,12 @@ export default function RideChatScreen({
             </View>
           ) : (
             messages.map((m: RideMessage, i: number) => {
+              // Ownership comes from sender_id, NEVER sender_role. A cycled-out
+              // driver's messages also carry sender_role='driver', so the
+              // obvious role check would render driver A's words in driver B's
+              // own bubble -- telling B the passenger said something they
+              // never said. A null sender_id (deleted account, see §4) is
+              // correctly not-mine and renders as the other side.
               const isMine = m.sender_id === profile?.id;
               const showSeparator =
                 i === 0 || dayKey(m.created_at) !== dayKey(messages[i - 1].created_at);
@@ -213,6 +246,15 @@ export default function RideChatScreen({
                   {showSeparator && (
                     <View style={styles.dateSep}>
                       <Text style={styles.dateSepText}>{formatDateLabel(m.created_at)}</Text>
+                    </View>
+                  )}
+                  {driverChanges.has(i) && (
+                    <View style={styles.dateSep}>
+                      <Text style={styles.handoverText}>
+                        {isDriver
+                          ? "You took over this ride"
+                          : "Your ride was reassigned to a new driver"}
+                      </Text>
                     </View>
                   )}
                   <View
@@ -318,6 +360,12 @@ const makeStyles = (colors: Colors) =>
     scrollContent: { paddingVertical: 14, paddingHorizontal: 14, flexGrow: 1 },
     dateSep: { alignItems: "center", marginVertical: 12 },
     dateSepText: { fontSize: 12, color: colors.textSecondary },
+    handoverText: {
+      fontSize: 12,
+      color: colors.accentAmberText,
+      textAlign: "center",
+      paddingHorizontal: 24,
+    },
     bubbleRow: { marginBottom: 10, maxWidth: "82%" },
     bubbleRowLeft: { alignSelf: "flex-start" },
     bubbleRowRight: { alignSelf: "flex-end" },

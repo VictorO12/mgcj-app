@@ -186,10 +186,25 @@ CREATE TRIGGER stamp_ride_message_company_trg
 ALTER TABLE ride_messages   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ride_chat_reads ENABLE ROW LEVEL SECURITY;
 
--- SELECT stays open to participants FOREVER. Status gates INSERT only.
--- Putting status into the SELECT policy would make the thread vanish under
--- both parties the instant the driver taps complete -- and the thread is the
--- evidence when the ride is later disputed.
+-- SELECT is never gated on STATUS. Putting status into this policy would make
+-- the thread vanish under both parties the instant the driver taps complete --
+-- and the thread is the evidence when the ride is later disputed.
+--
+-- But "open forever" is the wrong words, and worth being precise about:
+-- participation is derived from the LIVE rides row, so access follows
+-- rides.driver_id. Driver cycling is routine here (a 60s non-response
+-- reassigns), and the moment a ride is cycled from driver A to driver B, A
+-- loses read access to the thread. That is the right privacy default and it
+-- falls out of the design rather than needing its own rule -- but do not
+-- describe this policy as permanent access, because for a cycled driver it is
+-- not.
+--
+-- Driver B, conversely, DOES see A's earlier exchange: the policy is
+-- ride-scoped, so it returns the whole thread with no assignment-window
+-- filtering. That is deliberate -- it is context the new driver needs. It
+-- lands a requirement on the UI, not here: message ownership must be derived
+-- from sender_id and never from sender_role, or B sees A's messages in B's own
+-- bubble. See driverChangeIndices() in RideChatScreen.
 CREATE POLICY ride_messages_select ON ride_messages
   FOR SELECT TO authenticated
   USING (public.is_ride_participant(ride_id));

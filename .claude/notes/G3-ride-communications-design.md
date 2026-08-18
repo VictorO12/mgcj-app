@@ -6,10 +6,14 @@ one-liner in the review-gap queue, which understated the job.
 Status: **Phase 1 built 2026-08-18, not yet applied or tested.** Phases 0, 2, 3 open.
 D1/D4 settled below; D2/D3/D5 still open but none of them block Phase 1.
 
-Note on this doc's own reliability: an earlier edit to §4 silently no-matched and
-the doc carried the superseded `ride_chat_state` design for a day, and §11 below
-still cites a "§15" that has never existed in this file. Re-read what you are
-about to rely on; do not trust a cross-reference here without checking it.
+**Note on this doc's own reliability — read this before trusting anything below.**
+Edits to this file have silently failed to apply at least twice. §4 carried the
+superseded `ride_chat_state` design for a day. Worse, the entire final doc edit of
+the 2026-08-17 session was lost — four items, recovered on 2026-08-18 only because
+Victor still had the transcript: D4's agreed 2h window, D5's deferral, §5's
+cycled-driver read rules, and §14 (the deletion review). §11 still cites a "§15"
+that has never existed here. **Do not trust a cross-reference in this file without
+checking it, and do not read "not recorded" as "not decided."**
 
 ---
 
@@ -196,7 +200,26 @@ participant.
   into `rides` — that subquery is the 42P17 recursion shape we've already been bitten by.
   Unlike `reap_stale_drivers`, this helper **needs** `EXECUTE` for `authenticated`;
   anonymous sign-in yields role `authenticated`, so guests are covered by it.
-- **SELECT stays open to participants forever.** Status gates INSERT only. Putting status
+- **SELECT is never gated on status.** ("Forever" was the wrong word, corrected
+  2026-08-17 and re-recorded 2026-08-18 after the correction was lost.) Participation is
+  derived from the **live** `rides` row, so read access follows `rides.driver_id`. Driver
+  cycling is routine — a 60s non-response reassigns — so the instant a ride cycles from
+  driver A to driver B, **A loses read access**. That is the right privacy default and it
+  falls out of the design rather than needing its own rule. Just don't describe this
+  policy as permanent access; for a cycled driver it isn't.
+- **Driver B sees A's earlier exchange (decided yes, 2026-08-17).** Costs nothing: the
+  policy is ride-scoped, so it already returns the whole thread with no assignment-window
+  filtering, and it is context the new driver needs. The cost lands on the **UI**:
+  ownership must be derived from `sender_id`, **never** `sender_role` — a cycled-out
+  driver's messages also carry `sender_role='driver'`, so the obvious role check renders
+  A's words inside B's own bubble, telling B that the passenger said something they never
+  said. A NULL `sender_id` (the deleted-account case in §4) is correctly not-mine and
+  renders as the other side; the null is load-bearing, don't assume non-null. And a
+  **"driver changed" divider** is required wherever `sender_id` changes between
+  consecutive driver-role messages — without it the passenger reads two people as one
+  continuous speaker, which is worse than not showing the history at all. Both
+  implemented in `RideChatScreen` (`driverChangeIndices`).
+- Status gates INSERT only. Putting status
   into the SELECT policy makes the thread vanish under both parties the instant the driver
   taps complete — and the thread is the evidence when the ride gets disputed.
 - **INSERT gated on `status IN ('assigned','driver_arriving','in_progress')`.**
@@ -470,7 +493,12 @@ Per `migration-files-are-not-applied-state` — these are easy to believe are do
   AND completed_at > now() - interval '2 hours')`, keyed on the frozen `completed_at`
   rather than `updated_at`. Cancelled rides get no grace — no `completed_at`, and nothing
   to have left in the car.
-  **This was briefly settled the other way earlier the same day and that was a mistake**,
+  **Confirmed 2026-08-18 from a transcript of the 2026-08-17 session: Victor agreed 2h,
+  and additionally asked for ride-history card actions that disappear once the window
+  elapses — which is why the history entry point exists.** That agreement never reached
+  this file; it was one of four items lost from that session's final doc edit (see §5's
+  cycled-driver rules and §14).
+  **It was then briefly settled the other way on 2026-08-18 and that was a mistake**,
   recorded because the reasoning is instructive. The argument for closing at zero was that
   "I left my bag" is a dispatch problem and a grace window costs "a fourth status in a
   security policy". Both halves were wrong: lost property is the single most common reason
@@ -483,8 +511,42 @@ Per `migration-files-are-not-applied-state` — these are easy to believe are do
   because it was blocking a migration, on the reasoning that this file's decision records
   were unreliable — which is exactly backwards. An unreliable record is a reason to ask,
   not a licence to decide.
-- **D5 — Does dispatch get a third leg** (dispatch↔passenger)? Out of scope for the build,
+- **D5 — Does dispatch get a third leg** (dispatch↔passenger)? **SETTLED DEFERRED,
+  2026-08-17 (Victor):** dispatch calling/messaging directly suffices for now, but the
+  design should make picking it up later cheap. It is: `sender_role`'s CHECK already
+  admits `'admin'` and `'dispatcher'`, and `ride_chat_reads` is one row per reader, so an
+  admin opening a thread just gets a row. No CHECK migration, no schema change — D5 is a
+  UI change plus one INSERT policy. D1's staff SELECT shipped read-only precisely so this
+  stays a deliberate later decision rather than an accident.
+- **D5 (original wording, kept for the schema rationale)** (dispatch↔passenger)? Out of scope for the build,
   but pre-empted in the schema: `sender_role`'s CHECK already admits `'admin'` (§4) so
   adding the leg later needs no CHECK migration. Still worth deciding whether it's wanted,
   since it affects whether D1's admin SELECT is read-only or read-write.
 
+---
+
+## 14. Account deletion is its own work item — NOT part of G3
+
+Split out 2026-08-17 (Victor), re-recorded 2026-08-18 after the original write-up was
+lost. `delete-account` was built quickly to get the flow done, and it needs a proper
+review before this table makes its gaps worse. Not a blocker for Phase 1 — `sender_id`
+being nullable is enough to keep passenger self-deletion working today (§4) — but do not
+treat that nullable FK as the answer to deletion.
+
+What the review has to cover:
+
+- **Detachment is probably not enough.** Nulling `sender_id` removes attribution, but the
+  message **body survives**, and bodies contain personal information — addresses, names,
+  "I'm the guy in the blue coat outside 14 Elm". "Delete my account" and "retain threads
+  as dispute evidence" genuinely conflict. That likely means **redaction-on-delete**, a
+  different mechanism from the detachment `ON DELETE SET NULL` gives us, and it interacts
+  with D3's retention window.
+- **Driver and staff deletion have no defined path at all.** `delete-account` refuses
+  anything but a passenger. There is no answer today for a driver leaving the platform.
+- **Scope beyond this table.** The review should cover every deletion path (passenger,
+  driver, staff), align with the relevant law, and be useful to *us* when a dispute or an
+  access request arrives — not just satisfy a delete button.
+- **GDPR is eventual, not current.** It bites with EU users, which the roadmap makes a
+  someday. Worth not precluding; not worth designing around now.
+
+---
