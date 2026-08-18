@@ -408,12 +408,6 @@ entrypoint = "./functions/notify-drivers/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/notify-drivers/*.html" ]
 
-[functions.process-scheduled-rides]
-enabled = true
-verify_jwt = false
-import_map = "./functions/process-scheduled-rides/deno.json"
-entrypoint = "./functions/process-scheduled-rides/index.ts"
-
 [functions.send-sms]
 enabled = true
 verify_jwt = false
@@ -424,11 +418,6 @@ entrypoint = "./functions/send-sms/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/notify-passenger/index.ts"
-
-[functions.schedule-rides]
-enabled = true
-verify_jwt = false
-entrypoint = "./functions/schedule-rides/index.ts"
 
 [functions.notify-review]
 enabled = true
@@ -502,9 +491,6 @@ verify_jwt = false
 [functions.expire-pending-rides]
 verify_jwt = false
 
-[functions.scheduled-ride-reminders]
-verify_jwt = false
-
 [functions.send-ride-receipt]
 verify_jwt = false
 
@@ -530,11 +516,6 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/broadcast-scheduled-ride/index.ts"
-
-[functions.scheduled-lifecycle]
-enabled = true
-verify_jwt = false
-entrypoint = "./functions/scheduled-lifecycle/index.ts"
 
 [functions.scheduled-coverage-monitor]
 enabled = true

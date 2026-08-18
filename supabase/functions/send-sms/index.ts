@@ -1,7 +1,7 @@
 // supabase/functions/send-sms/index.ts
 //
 // A tiny internal helper that sends SMS via Twilio.
-// Called by process-scheduled-rides — not exposed publicly.
+// Called by scheduled-release — not exposed publicly.
 //
 // Secrets to set in Supabase Dashboard → Settings → Edge Functions → Secrets:
 //   TWILIO_ACCOUNT_SID   — from twilio.com/console
