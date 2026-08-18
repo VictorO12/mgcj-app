@@ -66,6 +66,10 @@ export function useRideThread(rideId: string | null | undefined) {
   const [messages, setMessages] = useState<RideMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
+  // How far the OTHER participant has read. Drives the "Seen" marker. Null
+  // until known -- rendered as nothing rather than as "not seen", because
+  // "not seen" is a claim and we have not yet earned it.
+  const [otherLastReadAt, setOtherLastReadAt] = useState<string | null>(null);
 
   // Broadcast delivers our own inserts back to us, and a reconnect refetch can
   // race a live message. Dedupe by id on the way in rather than trying to make
@@ -109,6 +113,15 @@ export function useRideThread(rideId: string | null | undefined) {
       .channel(`ride:${rideId}`, { config: { private: true } })
       .on("broadcast", { event: "new_message" }, ({ payload }) => {
         appendMessage(payload as RideMessage);
+      })
+      // Read receipts ride the same topic, distinguished by event name -- one
+      // channel per ride, one authorization check, two kinds of traffic.
+      .on("broadcast", { event: "read_receipt" }, ({ payload }) => {
+        const r = payload as { profile_id: string; last_read_at: string };
+        if (r.profile_id === profile.id) return; // our own cursor, not a receipt
+        setOtherLastReadAt((prev) =>
+          prev && prev >= r.last_read_at ? prev : r.last_read_at,
+        );
       })
       .subscribe((status) => {
         // Broadcast has no replay, so anything sent while we were away is
@@ -188,17 +201,27 @@ export function useRideThread(rideId: string | null | undefined) {
   useEffect(() => {
     if (!rideId || !profile) {
       setLastReadAt(null);
+      setOtherLastReadAt(null);
       return;
     }
     let cancelled = false;
     (async () => {
+      // Both cursors in one round trip. The policy is ride-scoped now, so the
+      // other participant's row comes back too; ours is picked out by id and
+      // whatever else is there is by definition the other side.
       const { data } = await supabase
         .from("ride_chat_reads")
-        .select("last_read_at")
-        .eq("ride_id", rideId)
-        .eq("profile_id", profile.id)
-        .maybeSingle();
-      if (!cancelled) setLastReadAt(data?.last_read_at ?? "1970-01-01");
+        .select("profile_id, last_read_at")
+        .eq("ride_id", rideId);
+      if (cancelled) return;
+      const mine = data?.find((r: any) => r.profile_id === profile.id);
+      const theirs = data
+        ?.filter((r: any) => r.profile_id !== profile.id)
+        .map((r: any) => r.last_read_at)
+        .sort()
+        .pop();
+      setLastReadAt(mine?.last_read_at ?? "1970-01-01");
+      setOtherLastReadAt(theirs ?? null);
     })();
     return () => {
       cancelled = true;
@@ -212,5 +235,13 @@ export function useRideThread(rideId: string | null | undefined) {
     );
   }, [messages, profile, lastReadAt]);
 
-  return { messages, loading, unreadCount, send, markRead, refetch: fetchThread };
+  return {
+    messages,
+    loading,
+    unreadCount,
+    otherLastReadAt,
+    send,
+    markRead,
+    refetch: fetchThread,
+  };
 }

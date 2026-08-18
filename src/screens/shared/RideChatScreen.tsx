@@ -118,28 +118,49 @@ export default function RideChatScreen({
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { messages, loading, send, markRead } = thread;
+  const { messages, loading, send, markRead, otherLastReadAt } = thread;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const driverChanges = useMemo(() => driverChangeIndices(messages), [messages]);
+
+  // The index of the last message I sent that the other person has read.
+  // Rendered once, under that message, rather than as a tick on every bubble:
+  // in a two-party thread everything above the marker is read by definition,
+  // so per-message state would be repeating one fact N times.
+  const lastSeenIndex = useMemo(() => {
+    if (!otherLastReadAt || !profile) return -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.sender_id !== profile.id) continue;
+      return m.created_at <= otherLastReadAt ? i : -1;
+    }
+    return -1;
+  }, [messages, otherLastReadAt, profile]);
   const isDriver = profile?.role === "driver";
   const quickReplies = isDriver ? DRIVER_QUICK_REPLIES : PASSENGER_QUICK_REPLIES;
   const canSend = rideAcceptsMessages(rideStatus, completedAt);
 
-  // On open, and again on close. NOT once per inbound message: that was an
-  // upsert per message, and it is unnecessary now that markRead advances the
-  // local cursor -- a thread being actively watched shows no badge because the
-  // count is maintained in memory, and the write only has to be durable by the
-  // time the screen goes away.
+  // On open, on close, AND on each inbound message while the screen is open.
+  //
+  // The per-message write was dropped once as unnecessary, and read receipts
+  // make it necessary again: the cursor is now what the OTHER person's "Seen"
+  // is derived from, so deferring it until close means someone sitting in the
+  // thread reading every message still shows as not having read them. The
+  // badge could be maintained in memory; a receipt cannot -- it has to be
+  // durable and broadcast at the moment of reading.
+  //
+  // Keyed on the last message id rather than on length so a refetch that
+  // returns the same tail does not re-write.
+  const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
   useEffect(() => {
     markRead();
     return () => {
       markRead();
     };
-  }, [markRead]);
+  }, [markRead, lastMessageId]);
 
   const hasScrolledInitialRef = useRef(false);
   useEffect(() => {
@@ -277,6 +298,7 @@ export default function RideChatScreen({
                         hour: "numeric",
                         minute: "2-digit",
                       })}
+                      {i === lastSeenIndex ? " · Seen" : ""}
                     </Text>
                   </View>
                 </React.Fragment>

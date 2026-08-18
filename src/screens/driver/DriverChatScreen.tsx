@@ -78,6 +78,11 @@ export default function DriverChatScreen({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // How far dispatch has read. NOTE this is a SHARED inbox cursor
+  // (last_read_by_admin_at) -- it means "someone at the company opened this",
+  // not "a named person read it", which is why the marker says "Seen by
+  // dispatch" rather than naming anyone.
+  const [adminLastReadAt, setAdminLastReadAt] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -108,6 +113,34 @@ export default function DriverChatScreen({ onClose }: Props) {
     };
   }, [profile]);
 
+  // driver_chat_state is already in the supabase_realtime publication, so this
+  // side uses postgres_changes rather than Broadcast. Deliberately asymmetric
+  // with the ride thread: each table keeps the transport it already has, and
+  // this one is low-volume enough that the publication argument that pushed
+  // ride_messages onto Broadcast does not apply.
+  useEffect(() => {
+    if (!profile || profile.role !== "driver") return;
+    const channel = supabase
+      .channel("driver-chat-seen-" + profile.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "driver_chat_state",
+          filter: `driver_id=eq.${profile.id}`,
+        },
+        (payload) => {
+          const next = (payload.new as any)?.last_read_by_admin_at;
+          if (next) setAdminLastReadAt(next);
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
+
   const hasScrolledInitialRef = useRef(false);
   useEffect(() => {
     // Guard on `loading` too: setMessages fires before the awaited markRead()
@@ -117,6 +150,17 @@ export default function DriverChatScreen({ onClose }: Props) {
     scrollRef.current?.scrollToEnd({ animated: hasScrolledInitialRef.current });
     hasScrolledInitialRef.current = true;
   }, [messages, loading]);
+
+  // Last message the driver sent that dispatch has read. One marker, not a
+  // tick per bubble: everything above it is read by definition.
+  const lastSeenIndex = useMemo(() => {
+    if (!adminLastReadAt) return -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].sender_role !== "driver") continue;
+      return messages[i].created_at <= adminLastReadAt ? i : -1;
+    }
+    return -1;
+  }, [messages, adminLastReadAt]);
 
   async function fetchThread() {
     if (!profile) {
@@ -132,6 +176,12 @@ export default function DriverChatScreen({ onClose }: Props) {
         .order("created_at", { ascending: true })
         .limit(300);
       setMessages(data ?? []);
+      const { data: state } = await supabase
+        .from("driver_chat_state")
+        .select("last_read_by_admin_at")
+        .eq("driver_id", profile.id)
+        .maybeSingle();
+      setAdminLastReadAt(state?.last_read_by_admin_at ?? null);
       await markRead();
     } finally {
       setLoading(false);
@@ -225,6 +275,7 @@ export default function DriverChatScreen({ onClose }: Props) {
                         hour: "numeric",
                         minute: "2-digit",
                       })}
+                      {i === lastSeenIndex ? " · Seen by dispatch" : ""}
                     </Text>
                   </View>
                 </React.Fragment>

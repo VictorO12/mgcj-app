@@ -165,3 +165,29 @@ SELECT id, ride_id, sender_role, left(body, 40) AS body, created_at
   FROM ride_messages
  ORDER BY created_at DESC
  LIMIT 5;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- 5. Read receipts — 20260755_ride_chat_read_receipts.sql
+-- ═══════════════════════════════════════════════════════════════════════
+-- Apply after 20260754. Two changes: ride_chat_reads_select widens from
+-- own-row to any-participant (you cannot build a receipt out of your own
+-- cursor), and cursor writes broadcast on the SAME ride:<id> topic under the
+-- event name 'read_receipt'.
+--
+-- No new realtime.messages policy is needed -- same topic, already authorized.
+--
+-- The dispatch<->driver side needed NO migration: driver_chat_state already
+-- holds both cursors and both sides could already read the row. Both apps were
+-- already writing their own cursor, so that half was rendering only.
+--
+-- Verify the widened policy does not leak past a ride: run as a profile that is
+-- NOT on the ride and expect zero rows, not an error.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub', '<A PROFILE NOT ON THIS RIDE>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT count(*) AS should_be_zero
+    FROM ride_chat_reads WHERE ride_id = '<A REAL RIDE UUID>'::uuid;
+ROLLBACK;
