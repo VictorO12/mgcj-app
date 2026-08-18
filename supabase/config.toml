@@ -434,6 +434,11 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/send-driver-chat-push/index.ts"
 
+[functions.send-ride-chat-push]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/send-ride-chat-push/index.ts"
+
 [functions.notify-dispatch-report]
 enabled = true
 verify_jwt = false
