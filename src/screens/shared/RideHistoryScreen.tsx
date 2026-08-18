@@ -626,32 +626,41 @@ export default function RideHistoryScreen({ onClose }: Props) {
                         </View>
                       </View>
 
-                      {/* Other party */}
+                      {/* Other party. The name IS the profile link -- the
+                          separate "View profile" chip made this row too busy
+                          once Messages joined it. Only the passenger side gets
+                          a profile sheet, so for a driver the name stays plain
+                          text rather than becoming a dead touch target. */}
                       {ride.other_party_name && (
                         <View style={styles.otherPartyRow}>
-                          <Text style={styles.otherParty}>
-                            {isDriver ? "Passenger" : "Driver"}:{" "}
-                            <Text style={styles.otherPartyName}>
-                              {ride.other_party_name}
-                            </Text>
-                          </Text>
-                          {!isDriver && ride.other_party_id && (
+                          {!isDriver && ride.other_party_id ? (
                             <TouchableOpacity
-                              style={styles.viewProfileBtn}
+                              style={styles.otherPartyLink}
                               onPress={() =>
                                 openDriverProfile(ride.other_party_id!, ride.id)
                               }
                               activeOpacity={0.7}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                             >
                               <Ionicons
                                 name="person-outline"
-                                size={11}
+                                size={12}
                                 color={colors.avatarText}
                               />
-                              <Text style={styles.viewProfileBtnText}>
-                                View profile
+                              <Text style={styles.otherParty}>
+                                Driver:{" "}
+                                <Text style={styles.otherPartyNameLink}>
+                                  {ride.other_party_name}
+                                </Text>
                               </Text>
                             </TouchableOpacity>
+                          ) : (
+                            <Text style={styles.otherParty}>
+                              {isDriver ? "Passenger" : "Driver"}:{" "}
+                              <Text style={styles.otherPartyName}>
+                                {ride.other_party_name}
+                              </Text>
+                            </Text>
                           )}
                           {/* D4: the card action expires with the messaging
                               window, so a finished ride stops offering a way
@@ -1137,6 +1146,14 @@ const makeStyles = (colors: Colors) =>
     },
     otherParty: { fontSize: 12, color: colors.textSecondary },
     otherPartyName: { color: colors.textTertiary, fontWeight: "500" },
+    otherPartyLink: { flexDirection: "row", alignItems: "center", gap: 5 },
+    // Underlined rather than only recoloured: the row already carries several
+    // colours, so colour alone would not read as "this is tappable".
+    otherPartyNameLink: {
+      color: colors.avatarText,
+      fontWeight: "600",
+      textDecorationLine: "underline",
+    },
     viewProfileBtn: {
       flexDirection: "row",
       alignItems: "center",
