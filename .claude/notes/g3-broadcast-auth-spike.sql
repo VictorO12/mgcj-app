@@ -30,7 +30,30 @@
 
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- ORDER OF OPERATIONS — query 2 will fail if you run it out of turn
+-- ═══════════════════════════════════════════════════════════════════════
+--   1. Run query 1.                              (needs nothing applied)
+--   2. Apply SECTIONS 1-6 of 20260754_ride_messages.sql.
+--   3. Run query 2.                              (tests what step 2 created)
+--   4. Apply SECTION 7 of the migration          (only if query 1 passed).
+--   5. Create the Database Webhook by hand.      (see step 4 below)
+--   6. Run step 3 from a device.
+--
+-- Running query 2 before step 2 gives
+--   ERROR 42883: function public.ride_participant_role(unknown) does not exist
+-- which means "not applied yet", NOT "the design is wrong".
+
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- 1. Does realtime.topic() exist, and what is its signature?
+--    RESULT 2026-08-18: PASS.
+--      send  | payload jsonb, event text, topic text, private boolean
+--      topic | (no arguments)
+--    Both present, and `send`'s 4 positional args are exactly what
+--    broadcast_ride_message() passes. `topic()` taking no arguments is what
+--    the realtime.messages policy needs. Broadcast is viable here; the
+--    postgres_changes fallback is NOT required, so section 7 can be applied
+--    and ride_messages stays out of the supabase_realtime publication.
 -- ═══════════════════════════════════════════════════════════════════════
 -- Verifying in pg_proc rather than in the docs, per
 -- migration-files-are-not-applied-state.
@@ -56,8 +79,12 @@ SELECT p.proname,
 -- question, and it is worth knowing separately, because a failure here would
 -- also break the ordinary table policies, not just the broadcast channel.
 --
--- Run AFTER sections 1-6 of 20260754_ride_messages.sql are applied.
--- Substitute a real ride uuid and the passenger's or driver's profile id.
+-- RUN AFTER SECTIONS 1-6 OF 20260754_ride_messages.sql ARE APPLIED. Before
+-- that it can only fail, and it fails as "function does not exist".
+-- Substitute a real ride uuid and that ride's passenger or driver profile id.
+-- Use a ride that is CURRENTLY LIVE (assigned/driver_arriving/in_progress) or
+-- completed within 2h, or accepts_messages returns false correctly and looks
+-- like a failure.
 BEGIN;
   SELECT set_config('request.jwt.claims',
                     json_build_object('sub', '<A REAL PASSENGER OR DRIVER UUID>',
@@ -68,8 +95,11 @@ BEGIN;
   -- EXPECT: 'passenger' or 'driver', and true.
   -- NULL/false means auth.uid() is not resolving, or that profile is not on
   -- that ride -- check which before blaming the policy.
-  SELECT public.ride_participant_role('<A REAL RIDE UUID>') AS my_role,
-         public.is_ride_participant('<A REAL RIDE UUID>')   AS is_participant;
+  -- Casts are explicit on purpose: a bare literal is `unknown`, and an
+  -- unknown-argument failure reads identically to the function being absent.
+  SELECT public.ride_participant_role('<A REAL RIDE UUID>'::uuid)  AS my_role,
+         public.is_ride_participant('<A REAL RIDE UUID>'::uuid)    AS is_participant,
+         public.ride_accepts_messages('<A REAL RIDE UUID>'::uuid)  AS accepts_messages;
 
   -- And the topic-parsing wrapper the policy actually calls. The two false
   -- cases matter as much as the true one: a malformed topic must return false,
