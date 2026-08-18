@@ -135,3 +135,39 @@ SELECT ticket_id, right(token_sent, 8) AS token_tail, created_at FROM push_ticke
 -- If the row never appears, sending is not going through _shared/push.ts.
 -- If it appears and never clears, the sweep is not running — check
 -- scheduled-coverage-monitor logs for '[receipts] polled N, retired N, swept N'.
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- 8. FORCED TEST RESULT — PASSED 2026-08-18
+-- ═══════════════════════════════════════════════════════════════════════
+-- Ticket parked 00:24:15 (dispatch→driver chat push, driver with a healthy token).
+-- Receipt-eligible 00:39:15; the 00:40 scheduled-coverage-monitor tick resolved it;
+-- zero rows at ~00:45. End to end, that proves:
+--   * _shared/push.ts parks accepted ticket ids
+--   * pollPushReceipts() is actually running inside the 10-min cron
+--   * the Expo getReceipts call authenticates and parses
+--   * resolved rows are deleted, so retention works and push_tickets stays bounded
+-- Deletion specifically implies Expo RETURNED a receipt for that id: `resolved`
+-- only ever contains ids present in the response, so an unresolved ticket would
+-- have survived to the next tick rather than being swept.
+--
+-- STILL UNTESTED: the retire branch. This test used a healthy token, so the
+-- receipt came back ok and retire_push_token was never reached. See 9.
+
+-- 9a. NEGATIVE CHECK — did we wrongly retire a healthy token?
+--     Compare against the 2026-08-17 baseline: 4 with token / 7 without.
+--     A drop in drivers_with_token after a successful send would mean the sweep
+--     is retiring live tokens, which would knock real drivers out of dispatch.
+SELECT
+  (SELECT count(*) FROM drivers WHERE push_token IS NOT NULL) AS drivers_with_token,   -- expect 4
+  (SELECT count(*) FROM drivers WHERE push_token IS NULL)     AS drivers_without;      -- expect 7
+
+-- 9b. POSITIVE TEST of the retire branch (the actual point of this work).
+--     Must be an UNINSTALL, not a permission revoke: revoking now triggers the
+--     client-side clearOwnPushToken at next app open, which nulls the token before
+--     any push is attempted and masks the server path entirely.
+--     Steps: note the driver's token below, uninstall the app on their device,
+--     send them a push (dispatch chat), wait ~25 min, then re-run.
+--     Expect: push_token NULL, and is_active false (they are not mid-ride).
+SELECT d.id, p.name, right(d.push_token, 8) AS token_tail, d.is_active
+  FROM drivers d JOIN profiles p ON p.id = d.id
+ WHERE d.push_token IS NOT NULL;
