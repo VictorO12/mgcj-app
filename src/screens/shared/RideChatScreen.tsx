@@ -15,7 +15,7 @@ import * as Speech from "expo-speech";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
-import { useRideThread, CHATTABLE_STATUSES, type RideMessage } from "../../hooks/useRideThread";
+import { useRideThread, rideAcceptsMessages, type RideMessage } from "../../hooks/useRideThread";
 
 export type RideThread = ReturnType<typeof useRideThread>;
 
@@ -29,6 +29,10 @@ interface Props {
   // The ride's live status, so the composer can explain itself rather than
   // letting an insert bounce off the RLS policy with an opaque error.
   rideStatus: string;
+  // Needed alongside the status because the window stays open for 2h after
+  // completion (D4). Frozen once by set_ride_completed_at, so it is safe to
+  // compare against.
+  completedAt?: string | null;
   // Who the OTHER side is, for the header. Not read from the thread: a ride
   // can have zero messages and still needs a title.
   counterpartName?: string | null;
@@ -69,7 +73,13 @@ function formatDateLabel(iso: string) {
   return d.toLocaleDateString("en-CA", { month: "long", day: "numeric" });
 }
 
-export default function RideChatScreen({ thread, rideStatus, counterpartName, onClose }: Props) {
+export default function RideChatScreen({
+  thread,
+  rideStatus,
+  completedAt,
+  counterpartName,
+  onClose,
+}: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -81,7 +91,7 @@ export default function RideChatScreen({ thread, rideStatus, counterpartName, on
 
   const isDriver = profile?.role === "driver";
   const quickReplies = isDriver ? DRIVER_QUICK_REPLIES : PASSENGER_QUICK_REPLIES;
-  const canSend = CHATTABLE_STATUSES.includes(rideStatus);
+  const canSend = rideAcceptsMessages(rideStatus, completedAt);
 
   // On open, and again on close. NOT once per inbound message: that was an
   // upsert per message, and it is unnecessary now that markRead advances the
@@ -273,12 +283,13 @@ export default function RideChatScreen({ thread, rideStatus, counterpartName, on
         </>
       ) : (
         // The thread stays readable forever -- it is the record if the ride is
-        // later disputed -- but only a live ride accepts new messages. Saying
+        // later disputed -- but messaging closes 2h after the ride ends. Saying
         // so beats a send button that silently fails.
         <View style={styles.closedNotice}>
           <Ionicons name="lock-closed-outline" size={15} color={colors.textSecondary} />
           <Text style={styles.closedNoticeText}>
-            This ride has ended. Messages are closed, but the conversation stays here.
+            Messaging has closed for this ride. The conversation stays here, and
+            dispatch can still help.
           </Text>
         </View>
       )}

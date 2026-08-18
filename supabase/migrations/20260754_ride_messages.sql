@@ -102,6 +102,20 @@ $$;
 -- ride. Tightening rides RLS later would then break chat with an opaque policy
 -- error rather than an obvious one. Going through a definer bypasses that by
 -- construction -- the same reason participation goes through one.
+--
+-- D4: the window stays open for RIDE_CHAT_GRACE after completion. That is not
+-- a nicety -- "I left my bag in the car" is the single most common reason a
+-- passenger needs their driver after a ride, and closing the thread the
+-- instant the driver taps complete sends every one of those to dispatch, or
+-- to nobody. It also keeps this consistent with Phase 2, where the proxy
+-- number is released on completion PLUS a grace window; a chat that dies at
+-- zero while the phone line stays live for two hours is the odd half.
+--
+-- Keyed on completed_at, which is set once by set_ride_completed_at on the
+-- transition into 'completed' and then frozen -- never updated_at, which any
+-- later write to the row would move (see the ops_revenue misattribution).
+-- Cancelled rides get no grace: there is no completed_at, and nothing to
+-- have left in the car.
 CREATE OR REPLACE FUNCTION public.ride_accepts_messages(p_ride_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -110,10 +124,19 @@ STABLE
 SET search_path = public
 AS $$
 DECLARE
-  v_status text;
+  v_status       text;
+  v_completed_at timestamptz;
 BEGIN
-  SELECT status INTO v_status FROM rides WHERE id = p_ride_id;
-  RETURN v_status IN ('assigned','driver_arriving','in_progress');
+  SELECT status, completed_at INTO v_status, v_completed_at
+    FROM rides WHERE id = p_ride_id;
+
+  IF v_status IN ('assigned','driver_arriving','in_progress') THEN
+    RETURN true;
+  END IF;
+
+  RETURN v_status = 'completed'
+     AND v_completed_at IS NOT NULL
+     AND v_completed_at > now() - interval '2 hours';
 END;
 $$;
 

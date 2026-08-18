@@ -17,6 +17,9 @@ export interface Driver {
 export interface ActiveRide {
   id: string
   status: string
+  // Carried so the ride chat can honour its 2h post-completion window (D4)
+  // during the brief period this hook keeps a completed ride in state.
+  completed_at: string | null
   pickup_address: string
   pickup_lat: number
   pickup_lng: number
@@ -248,6 +251,7 @@ export function useActiveRide(passengerId: string | undefined) {
     const assembled: ActiveRide = {
       id: rideRow.id,
       status: rideRow.status,
+      completed_at: rideRow.completed_at ?? null,
       pickup_address: rideRow.pickup_address,
       pickup_lat: rideRow.pickup_lat,
       pickup_lng: rideRow.pickup_lng,

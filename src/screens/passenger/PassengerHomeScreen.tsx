@@ -1940,6 +1940,7 @@ export default function PassengerHomeScreen() {
           <RideChatScreen
             thread={rideThread}
             rideStatus={ride.status}
+            completedAt={ride.completed_at}
             counterpartName={ride.driver?.name}
             onClose={() => setChatVisible(false)}
           />

@@ -12,6 +12,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useRideThread } from "../../hooks/useRideThread";
+import RideChatScreen from "./RideChatScreen";
 import RideReviewModal from "../../components/RideReviewModal";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 import { useTheme } from "../../theme/ThemeContext";
@@ -20,6 +22,7 @@ import type { Colors } from "../../theme/colors";
 interface RideRecord {
   id: string;
   status: string;
+  completed_at: string | null;
   pickup_address: string;
   dropoff_address: string;
   fare_estimate: number | null;
@@ -132,6 +135,14 @@ export default function RideHistoryScreen({ onClose }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(0);
+  // Which past rides actually have a thread. Without this the button would sit
+  // on every row, and most rides have no messages at all.
+  const [ridesWithThread, setRidesWithThread] = useState<Set<string>>(new Set());
+  const [chatRide, setChatRide] = useState<RideRecord | null>(null);
+  // Safe to own here rather than in a host: history only ever lists
+  // completed/cancelled rides, so this can never collide with the active
+  // ride's channel on the screen underneath.
+  const historyThread = useRideThread(chatRide?.id);
   const [filter, setFilter] = useState<"all" | "completed" | "cancelled">(
     "all",
   );
@@ -276,7 +287,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
       .from("rides")
       .select(
         `id, status, pickup_address, dropoff_address, fare_estimate,
-         fare_final, payment_method, created_at, driver_id, passenger_id,
+         fare_final, payment_method, created_at, completed_at, driver_id, passenger_id,
          settlement_route, stripe_fee, platform_fee_percent_at_completion,
          refunded_amount_cents, transfer_reversed_cents,
          driver:drivers!rides_driver_id_fkey(profiles(name)),
@@ -307,6 +318,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
       return {
         id: ride.id,
         status: ride.status,
+        completed_at: ride.completed_at,
         pickup_address: ride.pickup_address,
         dropoff_address: ride.dropoff_address,
         fare_estimate: ride.fare_estimate,
@@ -328,6 +340,24 @@ export default function RideHistoryScreen({ onClose }: Props) {
     });
 
     setRides((prev) => (mode === "more" ? [...prev, ...mapped] : mapped));
+
+    // One id-only query per page rather than a join: ride_messages has its own
+    // RLS, and a row coming back at all is proof this user may read that
+    // thread. Failure is silent on purpose -- a missing chat button is a
+    // smaller problem than a history page that will not load.
+    if (mapped.length) {
+      const { data: threaded } = await supabase
+        .from("ride_messages")
+        .select("ride_id")
+        .in("ride_id", mapped.map((r) => r.id));
+      if (threaded) {
+        const ids = new Set(threaded.map((t: any) => t.ride_id));
+        setRidesWithThread((prev) =>
+          mode === "more" ? new Set([...prev, ...ids]) : ids,
+        );
+      }
+    }
+
     setHasMore(data.length === PAGE_SIZE);
     setPage(targetPage);
     if (mode === "initial") setLoading(false);
@@ -615,6 +645,22 @@ export default function RideHistoryScreen({ onClose }: Props) {
                               />
                               <Text style={styles.viewProfileBtnText}>
                                 View profile
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          {ridesWithThread.has(ride.id) && (
+                            <TouchableOpacity
+                              style={styles.viewProfileBtn}
+                              onPress={() => setChatRide(ride)}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons
+                                name="chatbubbles-outline"
+                                size={11}
+                                color={colors.avatarText}
+                              />
+                              <Text style={styles.viewProfileBtnText}>
+                                Messages
                               </Text>
                             </TouchableOpacity>
                           )}
@@ -931,6 +977,18 @@ export default function RideHistoryScreen({ onClose }: Props) {
           setSelectedRideId(null);
         }}
       />
+
+      {chatRide && (
+        <View style={StyleSheet.absoluteFill}>
+          <RideChatScreen
+            thread={historyThread}
+            rideStatus={chatRide.status}
+            completedAt={chatRide.completed_at}
+            counterpartName={chatRide.other_party_name}
+            onClose={() => setChatRide(null)}
+          />
+        </View>
+      )}
     </View>
   );
 }

@@ -410,17 +410,17 @@ Each phase is independently shippable.
   this may the `tel:`/`sms:` call sites be removed.
 - **Phase 3** — NOT STARTED. Dispatch-side thread view; retention cron.
 
-**Known gap in Phase 1, deliberate — no post-ride read path (2026-08-18).** §5 keeps
-SELECT open forever on the argument that "the thread is the evidence when the ride gets
-disputed", but nothing built in Phase 1 can actually reach a thread after the ride ends:
-the passenger's host clears when `useActiveRide` drops the completed ride, the driver's
-screen unmounts when `DriverApp` routes away, and D1's staff policy has no dashboard
-behind it until Phase 3. The composer-closed state renders only in the narrow case of a
-ride completing while the thread is already open. So the policy is right and the UI has
-not caught up to it yet — the evidence is durable and retrievable by SQL, just not by
-anyone in an app. Closing this is a `RideHistoryScreen` entry point (passenger + driver)
-and the Phase 3 dispatch view; **do not "fix" it by gating SELECT on status**, which
-would destroy the evidence rather than surface it.
+**Post-ride read path — CLOSED 2026-08-18, and D4 is why.** This was briefly written up
+as a deferred gap: §5 keeps SELECT open forever because "the thread is the evidence when
+the ride gets disputed", yet nothing could reach a thread after the ride, since the
+passenger's host clears when `useActiveRide` drops the completed ride and the driver's
+screen unmounts when `DriverApp` routes away. Settling D4 at 2h is what made it
+load-bearing rather than cosmetic: a two-hour window nobody can reach is not a window.
+Both roles now open the thread from `RideHistoryScreen`, on rides that actually have one
+(one id-only query per page against `ride_messages`, whose own RLS is the check — a row
+coming back at all is proof the user may read that thread). Dispatch's view is still
+Phase 3. **Do not ever "fix" any version of this by gating SELECT on status** — that
+destroys the evidence rather than surfacing it.
 
 **G3 is not closed until Phase 2 lands** and those four `tel:`/`sms:` call sites are gone.
 Phase 1 alone leaves number exposure exactly where it is.
@@ -465,13 +465,24 @@ Per `migration-files-are-not-applied-state` — these are easy to believe are do
 - **D3 — Retention window.** Floor is the 120-day chargeback filing window, *not* a round
   number; ceiling is PIPEDA minimisation and is the lawyer's question. **180 days**
   proposed. See §9.
-- **D4 — Grace window after completion. SETTLED NO GRACE for thread INSERT, 2026-08-18.**
-  Phase 1 ships with INSERT gated strictly on `assigned`/`driver_arriving`/`in_progress`;
-  the composer closes the moment the driver taps complete and the UI says so, rather than
-  failing an insert against the policy. The 2h proposal was about a passenger finishing a
-  sentence, which is not worth a fourth status in a security policy — "I left my bag" is
-  a dispatch problem, and dispatch is reachable by other means. Proxy release keeps its
-  own grace window; that is a Phase 2 question and is untouched by this.
+- **D4 — Grace window after completion. SETTLED 2h, 2026-08-18**, as originally proposed.
+  Implemented in `ride_accepts_messages()` as `status IN (live…) OR (status = 'completed'
+  AND completed_at > now() - interval '2 hours')`, keyed on the frozen `completed_at`
+  rather than `updated_at`. Cancelled rides get no grace — no `completed_at`, and nothing
+  to have left in the car.
+  **This was briefly settled the other way earlier the same day and that was a mistake**,
+  recorded because the reasoning is instructive. The argument for closing at zero was that
+  "I left my bag" is a dispatch problem and a grace window costs "a fourth status in a
+  security policy". Both halves were wrong: lost property is the single most common reason
+  a passenger needs their driver after a ride — it is the very case this doc cited when it
+  proposed 2h — and `completed_at` already exists and is frozen, so it is a time window,
+  not a new state. It is also the half that keeps Phase 1 consistent with §6.2, where the
+  proxy number is released on completion *plus* a grace window; a chat that dies at zero
+  while the phone line stays live for two hours is the odd one out.
+  **The deeper lesson is about the doc, not the window:** it was settled unilaterally
+  because it was blocking a migration, on the reasoning that this file's decision records
+  were unreliable — which is exactly backwards. An unreliable record is a reason to ask,
+  not a licence to decide.
 - **D5 — Does dispatch get a third leg** (dispatch↔passenger)? Out of scope for the build,
   but pre-empted in the schema: `sender_role`'s CHECK already admits `'admin'` (§4) so
   adding the leg later needs no CHECK migration. Still worth deciding whether it's wanted,

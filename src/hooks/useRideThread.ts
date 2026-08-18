@@ -14,12 +14,28 @@ export interface RideMessage {
   created_at: string;
 }
 
-// Statuses in which the INSERT policy will accept a message. Mirrors
-// ride_accepts_messages() in 20260754_ride_messages.sql -- kept here so the UI
-// can disable the composer with an explanation rather than letting the insert
-// fail with an opaque RLS error the passenger cannot act on. If that function's
-// status list changes, change this too; nothing enforces the pairing.
-export const CHATTABLE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
+// Mirrors ride_accepts_messages() in 20260754_ride_messages.sql -- kept here so
+// the UI can close the composer with an explanation rather than letting the
+// insert fail with an opaque RLS error the passenger cannot act on. NOTHING
+// ENFORCES THIS PAIRING: if the SQL function's window changes, change this too,
+// or the two disagree and the visible symptom is a send button that does
+// nothing.
+//
+// The 2h tail after completion is D4, and it exists for one case: "I left my
+// bag in the car". Cancelled rides get no tail -- there is no completed_at on
+// them, and nothing to have left behind.
+const LIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
+export const RIDE_CHAT_GRACE_MS = 2 * 60 * 60 * 1000;
+
+export function rideAcceptsMessages(
+  status: string | null | undefined,
+  completedAt?: string | null,
+): boolean {
+  if (!status) return false;
+  if (LIVE_STATUSES.includes(status)) return true;
+  if (status !== "completed" || !completedAt) return false;
+  return Date.now() - new Date(completedAt).getTime() < RIDE_CHAT_GRACE_MS;
+}
 
 /**
  * The passenger <-> driver thread for one ride.
