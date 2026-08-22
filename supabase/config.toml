@@ -539,3 +539,30 @@ entrypoint = "./functions/scheduled-release/index.ts"
 [functions.edit-ride]
 enabled = true
 verify_jwt = false
+
+# G3 Phase 2 — masked telephony.
+
+# Called by a Database Webhook on rides UPDATE, which cannot present a JWT.
+# Gated by WEBHOOK_SECRET in the function body, same as notify-passenger.
+[functions.sync-ride-contact]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/sync-ride-contact/index.ts"
+
+# Called by the mobile app AND (later) the dispatch dashboard. verify_jwt is
+# false so the browser's OPTIONS preflight isn't 401'd into an opaque CORS
+# error; the function calls supabase.auth.getUser() itself, which is strictly
+# stronger than the gateway check — the gateway only proves the caller holds the
+# anon key, and the anon key ships inside the app bundle.
+[functions.ride-contact]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/ride-contact/index.ts"
+
+# Called by Twilio, which cannot present a JWT. Gated by X-Twilio-Signature
+# inside the function — see the header comment there for why that check is not
+# optional on a verify_jwt = false endpoint.
+[functions.twilio-proxy-callback]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/twilio-proxy-callback/index.ts"
