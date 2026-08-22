@@ -31,7 +31,12 @@ export interface RideMessage {
 // The 2h tail after completion is D4, and it exists for one case: "I left my
 // bag in the car". Cancelled rides get no tail -- there is no completed_at on
 // them, and nothing to have left behind.
-const LIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
+// Exported for useRideContact's pre-flight skip. Sharing the array rather than
+// letting it write its own is the same single-mirror discipline as the window
+// itself: the masked phone line opens on exactly these statuses too, because
+// sync-ride-contact allocates on ride_accepts_messages()' live set.
+export const RIDE_CHAT_LIVE_STATUSES = ["assigned", "driver_arriving", "in_progress"];
+const LIVE_STATUSES = RIDE_CHAT_LIVE_STATUSES;
 export const RIDE_CHAT_GRACE_MS = 2 * 60 * 60 * 1000;
 
 export function rideAcceptsMessages(

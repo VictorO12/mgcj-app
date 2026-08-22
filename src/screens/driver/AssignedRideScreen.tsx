@@ -7,7 +7,6 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
-  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
@@ -161,10 +160,24 @@ export default function AssignedRideScreen({
     );
   }
 
-  function callPassenger() {
-    if (!ride.passenger_phone) return;
-    Linking.openURL(`tel:${ride.passenger_phone}`);
-  }
+  // G3 Phase 2 — the "call passenger" button that used to live on this screen
+  // has been REMOVED, not masked. Recorded here because it is a deliberate
+  // capability reduction and would otherwise look like an oversight.
+  //
+  // This screen is only ever shown for a ride the driver has been offered and
+  // has NOT yet accepted (DriverApp routes elsewhere the moment they do). No
+  // masked line exists at that point: sync-ride-contact allocates on
+  // assigned/driver_arriving/in_progress only, because an immediate offer
+  // expires in 60 seconds and gets cycled, so allocating per offer would burn
+  // a session each time and hand a line to a driver who had not taken the job.
+  //
+  // The button therefore could only ever dial `ride.passenger_phone` — the raw
+  // number — which is exactly the exposure G3 exists to close. Masking it was
+  // not an option, so it is gone. If pre-acceptance contact turns out to
+  // matter (most plausibly for a dispatch-assigned SCHEDULED ride, where the
+  // driver has hours rather than seconds to decide), the fix is to widen
+  // CONTACTABLE in sync-ride-contact, at the cost of pool capacity held for
+  // every outstanding offer. Do not fix it by restoring the tel: link.
 
   return (
     <View style={styles.container}>
@@ -226,11 +239,7 @@ export default function AssignedRideScreen({
           </Text>
           <Text style={styles.passengerSub}>Passenger</Text>
         </View>
-        {ride.passenger_phone && (
-          <TouchableOpacity style={styles.callBtn} onPress={callPassenger}>
-            <Ionicons name="call-outline" size={18} color={colors.textOnSurfaceLight} />
-          </TouchableOpacity>
-        )}
+
       </View>
 
       {/* Route */}

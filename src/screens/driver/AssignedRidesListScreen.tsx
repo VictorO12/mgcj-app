@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
+import { useRideContact } from "../../hooks/useRideContact";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 
@@ -439,10 +440,6 @@ export default function AssignedRidesListScreen({
     );
   }
 
-  function callPassenger(phone: string) {
-    Linking.openURL(`tel:${phone}`);
-  }
-
   function minutesUntil(scheduledAt: string): number {
     return Math.round((new Date(scheduledAt).getTime() - Date.now()) / 60000);
   }
@@ -537,9 +534,6 @@ export default function AssignedRidesListScreen({
                   countdownLabel={null}
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
-                  onCall={() =>
-                    ride.passenger_phone && callPassenger(ride.passenger_phone)
-                  }
                 />
               ))}
             </>
@@ -562,9 +556,6 @@ export default function AssignedRidesListScreen({
                   }
                   onAccept={() => acceptRide(ride)}
                   onDecline={() => declineRide(ride)}
-                  onCall={() =>
-                    ride.passenger_phone && callPassenger(ride.passenger_phone)
-                  }
                 />
               ))}
             </>
@@ -592,9 +583,6 @@ export default function AssignedRidesListScreen({
                   }
                   onAccept={() => {}}
                   onDecline={() => releasePlannedRide(ride)}
-                  onCall={() =>
-                    ride.passenger_phone && callPassenger(ride.passenger_phone)
-                  }
                 />
               ))}
             </>
@@ -621,9 +609,6 @@ export default function AssignedRidesListScreen({
               }
               onAccept={() => claimOpenRide(ride)}
               onDecline={() => {}}
-              onCall={() =>
-                ride.passenger_phone && callPassenger(ride.passenger_phone)
-              }
             />
           ))}
           <View style={{ height: 40 }} />
@@ -643,7 +628,6 @@ function RideCard({
   countdownLabel,
   onAccept,
   onDecline,
-  onCall,
 }: {
   ride: AssignedRide;
   isImmediate: boolean;
@@ -654,10 +638,15 @@ function RideCard({
   countdownLabel: string | null;
   onAccept: () => void;
   onDecline: () => void;
-  onCall: () => void;
 }) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  // G3 Phase 2 — masked. Resolved per card rather than passed down from the
+  // list, because the number is per-ride and per-caller and there is no longer
+  // a phone on the ride object worth threading through. Most cards here are
+  // open or offered rides with no driver committed, so the hook's pre-flight
+  // skip means they cost no request at all.
+  const contact = useRideContact(ride.id, ride.status);
   const isAccepting = actionLoading === ride.id;
   const isDeclining = actionLoading === ride.id + "-decline";
 
@@ -719,8 +708,8 @@ function RideCard({
           )}
         </View>
 
-        {ride.passenger_phone && (
-          <TouchableOpacity style={styles.callBtn} onPress={onCall}>
+        {contact.canContact && (
+          <TouchableOpacity style={styles.callBtn} onPress={contact.call}>
             <Ionicons name="call-outline" size={15} color={colors.textOnSurfaceLight} />
           </TouchableOpacity>
         )}

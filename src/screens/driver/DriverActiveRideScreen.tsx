@@ -23,6 +23,7 @@ import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
 import { useRideThread } from "../../hooks/useRideThread";
 import RideChatScreen from "../shared/RideChatScreen";
+import { useRideContact } from "../../hooks/useRideContact";
 import Constants from "expo-constants";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
@@ -239,6 +240,15 @@ export default function DriverActiveRideScreen({
   const mapRef = useRef<MapView>(null);
 
   const [chatVisible, setChatVisible] = useState(false);
+  // G3 Phase 2 — the masked line, on the surface that needs it most.
+  //
+  // This screen had chat and nothing else, which is fine right up until the
+  // passenger is one of dispatch's GUEST profiles: booked by phone, no app, no
+  // account, structurally unreachable by in-app chat (§7). That is not an edge
+  // case here — it is how a book-and-pencil taxi company's customers arrive.
+  // For them the phone is the only channel, and before Phase 2 the only way to
+  // offer it was to hand over the driver's real number.
+  const contact = useRideContact(ride.id, ride.status);
   // Owned here rather than inside RideChatScreen so the passenger card can
   // show an unread badge while the thread is closed — the driver is looking at
   // the map, not at the thread, which is the whole reason this needs a badge.
@@ -1461,6 +1471,10 @@ export default function DriverActiveRideScreen({
             they never see, and an unread message would go unnoticed for the
             whole ride. */}
         <View style={styles.sheetTopRow}>
+          {/* Chat and call are grouped in their own row: sheetTopRow is
+              space-between, so a third direct child would float the call button
+              into the middle of the strip instead of sitting beside chat. */}
+          <View style={styles.sheetActionGroup}>
           <TouchableOpacity
             style={styles.sheetChatBtn}
             onPress={() => setChatVisible(true)}
@@ -1476,6 +1490,21 @@ export default function DriverActiveRideScreen({
               </View>
             )}
           </TouchableOpacity>
+          {/* Masked call, beside chat and for the same reason: the driver runs
+              with this panel collapsed, so anything on the passenger card below
+              is a control they never see. Renders only when a live session
+              exists — fail closed (§6.3), never a fallback to the real number. */}
+          {contact.canContact && (
+            <TouchableOpacity
+              style={styles.sheetCallBtn}
+              onPress={contact.call}
+              activeOpacity={0.85}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="call" size={16} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+          </View>
           <TouchableOpacity
             style={styles.sheetHandle}
             onPress={() => setPanelExpanded(e => !e)}
@@ -1977,11 +2006,27 @@ const makeStyles = (colors: Colors) =>
       alignItems: "center",
       justifyContent: "space-between",
     },
+    sheetActionGroup: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
     sheetChatBtn: {
       width: 34,
       height: 34,
       borderRadius: 17,
       backgroundColor: colors.accentGreen,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    // Deliberately NOT the green of the chat button: two identical circles side
+    // by side in a strip the driver glances at while moving is how you get a
+    // call placed instead of a message opened. Different colour, different icon.
+    sheetCallBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      marginLeft: 8,
+      backgroundColor: colors.accentBlue,
       alignItems: "center",
       justifyContent: "center",
     },

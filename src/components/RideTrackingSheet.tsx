@@ -21,6 +21,7 @@ import ReportDriverModal from "./ReportDriverModal";
 import RideProblemModal from "./RideProblemModal";
 import AddressPickerModal, { type PickedAddress } from "./AddressPickerModal";
 import { invokeFunction } from "../lib/invokeFunction";
+import { useRideContact } from "../hooks/useRideContact";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
 
@@ -103,17 +104,12 @@ export default function RideTrackingSheet({
     Animated.spring(sheetY, { toValue: 0, useNativeDriver: true }).start();
   }
 
-  function callDriver() {
-    const phone = ride.driver?.phone;
-    if (!phone) return;
-    Linking.openURL(`tel:${phone}`);
-  }
-
-  function smsDriver() {
-    const phone = ride.driver?.phone;
-    if (!phone) return;
-    Linking.openURL(`sms:${phone}`);
-  }
+  // G3 Phase 2 — both buttons now dial a MASKED number, resolved per-caller by
+  // the server. `ride.driver?.phone` is deliberately no longer read here: the
+  // real number is not fetched, so there is nothing in this component to leak.
+  // If there is no live session, `canContact` is false and the buttons do not
+  // render at all — never a fallback to the real number (see useRideContact).
+  const contact = useRideContact(ride.id, ride.status);
 
   function handleCancel() {
     const isEnRoute =
@@ -332,30 +328,42 @@ export default function RideTrackingSheet({
                   </View>
                 )}
               </TouchableOpacity>
-              {/* SMS stays alongside in-app chat for now, NOT replaced by it.
-                  Removing it is D2, and it can only happen once Phase 2's
-                  masked SMS exists — a guest passenger with no account still
-                  needs some way to reach their driver, and in-app chat is not
-                  it. Note this is the number-exposure G3 exists to close, so
-                  it is a deliberate temporary state, not an oversight. */}
-              <TouchableOpacity
-                style={styles.actionBtn}
-                onPress={(e) => {
-                  e.stopPropagation?.();
-                  smsDriver();
-                }}
-              >
-                <Ionicons name="chatbox-outline" size={18} color={colors.textOnSurfaceLight} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.actionBtn}
-                onPress={(e) => {
-                  e.stopPropagation?.();
-                  callDriver();
-                }}
-              >
-                <Ionicons name="call-outline" size={18} color={colors.textOnSurfaceLight} />
-              </TouchableOpacity>
+              {/* SMS and voice both go through the masked line now (Phase 2),
+                  so the number-exposure this used to carry is closed.
+                  D2 recommended REMOVING these once masked SMS existed, on the
+                  grounds that leaving them meant leaking a real number out of
+                  habit. Masking removes that grounds: there is no real number
+                  here to leak. So they are kept and re-pointed rather than
+                  deleted, which is strictly better — it keeps the one channel
+                  that reaches a guest passenger with no app, which in-app chat
+                  structurally cannot (§7). Flagged for Victor to confirm.
+
+                  They render only when a live session exists. That is the
+                  fail-closed rule (§6.3): pool exhausted, telephony down or
+                  the 2h window elapsed all mean no button, never a real
+                  number. */}
+              {contact.canContact && (
+                <>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      contact.text();
+                    }}
+                  >
+                    <Ionicons name="chatbox-outline" size={18} color={colors.textOnSurfaceLight} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      contact.call();
+                    }}
+                  >
+                    <Ionicons name="call-outline" size={18} color={colors.textOnSurfaceLight} />
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           </TouchableOpacity>
         )}
