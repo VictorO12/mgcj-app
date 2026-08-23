@@ -96,17 +96,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
         (payload) => {
-          // Merge, don't replace. Realtime's WAL filter applies the subscribed
-          // role's column privileges, so once the private columns are revoked
-          // (`.claude/notes/g3-phone-column-revoke-plan.md`) `payload.new`
-          // arrives WITHOUT them — and a straight assignment would blank the
-          // user's own phone/email a moment after any unrelated write to their
-          // row, undoing the values fetched through the definer RPC.
+          // Merge, don't replace — correct under both answers to a question
+          // we have NOT verified: whether Realtime's WAL filter applies the
+          // subscribed role's column privileges. If it does, then once the
+          // private columns are revoked (`.claude/notes/
+          // g3-phone-column-revoke-plan.md`) `payload.new` arrives without
+          // them, and a straight assignment would blank the user's own
+          // phone/email a moment after any unrelated write to their row,
+          // undoing what the definer RPC merged in. If it doesn't, merging is
+          // a no-op. Deliberately not asserting which — an unverified claim
+          // stated as fact in a comment is how 20260714's "execute granted
+          // only to service_role" survived for months while anon could call it.
           //
-          // Correct either way: a key that IS present still applies, including
-          // when its value is null, so this loses no genuine clear. Written
-          // before the revoke on purpose — the alternative is a bug that only
-          // appears once the migration lands, in a screen nobody re-tests.
+          // A key that IS present still applies, null included, so this loses
+          // no genuine clear.
           setProfile((prev) =>
             prev
               ? { ...prev, ...(payload.new as Partial<Profile>) }
