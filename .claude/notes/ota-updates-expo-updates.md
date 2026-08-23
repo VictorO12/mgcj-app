@@ -76,6 +76,22 @@ fingerprint from EAS preview env  e34a2506a6215dce89054888470a75e772c6628a   PAR
 explicit `--path`, and delete the pulled file afterwards — it contains sensitive values
 in plaintext.
 
+### Every build profile must declare `environment` explicitly
+
+`preview` and `production` declared no `environment`, and EAS defaults an undeclared
+profile to the **production** environment. So `eas build --profile preview` would have
+resolved the *empty* production env — shipping a broken binary and, worse, one whose
+fingerprint could never match a preview publish. Step 1's env fix would have looked done
+and changed nothing.
+
+All three profiles now name their environment. Never leave it implicit: the entire
+failure mode in this document is an env mismatch nobody can see.
+
+Note `eas.json` is itself a fingerprint source, so this edit changed the runtime version
+(`e34a2506…` → `a6156ffb…`). Harmless now — no build exists yet — and exactly why
+fingerprint sources must be settled **before** cutting one. Parity re-verified after the
+change.
+
 ### `production` left empty ON PURPOSE
 
 It is not needed until go-live, and the choice there is between two failure modes.
