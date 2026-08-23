@@ -253,6 +253,38 @@ look fixed while nothing changed.
 
 ---
 
+## Open before §1 is applied — checks, not code
+
+1. **Does Realtime actually apply column grants on this project?** The §2 note
+   assumes it does (WAL filter honours the subscribed role's privileges), which
+   is why `payload.new` would arrive short of the withheld columns. If it does
+   NOT, realtime is a channel that bypasses the revoke, and the same reasoning
+   has to be re-run over the `rides` subscriptions in `DriverApp` that embed
+   profile data. Live check with a real subscription, not a code read — this is
+   exactly the class of assumption that produced the `service_role` incident.
+
+2. **A driver must get `null` from `profile_phone()`.** Drivers are not staff, so
+   they should fall through both branches — but that depends on `is_staff()`
+   gating the ride branch as well as the company branch, and the `and`/`or`
+   parenthesisation in §1 is the kind that survives a later edit wrong. Add the
+   case to `g3-profiles-phone-exposure-check.sql`: driver JWT, passenger they
+   actually carried, expect `null`.
+
+3. **Can a retired guest still mint a duplicate?** `find_passenger_by_phone()`
+   deliberately will not match `guest_phone`, so a signed-up former guest resolves
+   only to their new profile — intended. But `DashboardPage.tsx:2638`'s comment
+   warns that a missed match mints a duplicate guest for a number that already
+   has one, and "retired guest row + real profile" is the state where that could
+   happen a third time. `create-guest-passenger`'s server-side re-check and its
+   23505 path (`9ce76a8`) are now the only backstop; confirm they cover it.
+
+4. **The grant list is hand-maintained in three places** — both repos'
+   `PROFILE_COLUMNS` and the migration. A column added to `profiles` without
+   three edits reads empty rather than failing. Put a `COMMENT ON TABLE profiles`
+   saying so in the same migration as the revoke.
+
+---
+
 ## Not covered by this plan
 
 **Access is still unbounded in time for the rest of the row.** A driver can read
