@@ -200,6 +200,27 @@ guest merge with `claim_guest_rides()`, which takes **no arguments**: caller and
 phone both come from the verified JWT. The enumeration-oracle risk flagged here
 never has to be built.
 
+## 2b. ▲ The revoke is a hard break for every app build that predates phase 2
+
+Phase 0 did not make old builds safe — it made them *fail differently*. Its
+`PROFILE_COLUMNS` NAMES `phone, email, student_email, stripe_customer_id,
+guest_phone`, so once `20260765` lands, an installed build asking for those
+columns gets `permission denied for column phone` in `fetchProfile`, on the auth
+path, exactly as the star would have. The dashboard is fine — Vercel serves one
+version — but the mobile rollout is not atomic and old builds linger, the same
+constraint that made `last_seen_at IS NULL` mean "live" with no backfill.
+
+So the phase 2 build is the **forward-compatible** one: its `PROFILE_COLUMNS`
+must name none of the withheld columns, and the values must come from
+`my_private_profile()`. The gate on `20260765` is therefore **adoption of that
+build**, not "it works on my device" — a device test proves the new build is
+fine and says nothing about the old ones still installed.
+
+Cheap right now, and worth applying while it is: there are no live customers, so
+the installed population is Victor's devices and the demo phones. Post-launch
+this same step needs a min-version gate or an EAS-update adoption check. Do not
+carry this plan forward to a later revoke without re-reading this section.
+
 ## 3. The revoke
 
 **Rehearsed live 2026-08-23 — `REVOKE SELECT (phone)` does nothing.** Run inside
@@ -274,9 +295,23 @@ Also settle in the same pass:
   revoking the write would break signup. Named because "revoked the phone column"
   will later sound like it covered both directions.
 
-Writes are unaffected by the read revoke: the two `profiles` upserts in
-`OTPVerifyScreen` (:151, :227) do not `.select()` back, so there is no RETURNING
-clause needing SELECT on the columns they write. Checked, not assumed.
+Writes are unaffected by the read revoke. Every `profiles` write in either repo
+was checked for a chained `.select()`, since RETURNING needs SELECT on the
+columns it returns: the two `OTPVerifyScreen` upserts (:151, :227),
+`ProfileScreen.tsx:137` (which writes `email`) and
+`DriverEditProfileScreen.tsx:305` are all bare updates with no RETURNING;
+`SettingsPage.tsx:179` and `DashboardPage.tsx:3160/3165` do return rows but name
+only non-withheld columns. Checked, not assumed.
+
+**Verify the realtime subscription still fires AT ALL, immediately after
+applying.** §2's note assumes the WAL filter narrows the payload's columns. The
+worse possibility is that WALRUS's visibility check wants table-level SELECT,
+finds none, and drops the change entirely — the subscription goes silent rather
+than arriving short, and `AuthContext` stops seeing its own profile updates.
+There is a natural canary: `DiscountsScreen`'s student-verification flow does
+nothing until that subscription delivers `student_verified`. Run it end to end
+right after the revoke. This also answers open question #1 empirically, which
+reading `realtime.apply_rls` only answers by inference.
 
 Then re-run check query 5 and expect a **permission error**, not a null. A null
 would mean the row was denied for some other reason and would leave the actual
