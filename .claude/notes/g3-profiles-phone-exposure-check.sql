@@ -285,8 +285,13 @@ BEGIN;
                     json_build_object('sub',  '<ADMIN AT THE RIDE COMPANY>',
                                       'role', 'authenticated')::text, true);
   SET LOCAL ROLE authenticated;
-  SELECT profile_phone(id) AS must_be_the_number, name
-    FROM profiles WHERE is_guest AND guest_phone IS NOT NULL LIMIT 1;
+  -- UUID hardcoded on purpose. `WHERE guest_phone IS NOT NULL` under the
+  -- authenticated role would ERROR post-revoke (column privileges apply to
+  -- WHERE) before profile_phone() was ever evaluated -- and that error reads
+  -- like the revoke working, so the coalesce would go untested.
+  -- Pick the id first, as a superuser, with:
+  --   SELECT id, name FROM profiles WHERE is_guest AND guest_phone IS NOT NULL LIMIT 1;
+  SELECT profile_phone('<RETIRED GUEST PROFILE UUID>'::uuid) AS must_be_the_number;
 ROLLBACK;
 
 -- (f) anon must not be able to call it at all -- expect 42501.

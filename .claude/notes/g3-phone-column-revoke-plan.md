@@ -23,6 +23,21 @@ Shipped as a behavioural no-op, both repos, dashboard build clean and app
 `tsc` error count identical to baseline (337, all pre-existing). Still needs
 real-device confirmation before §3 goes anywhere near the DB.
 
+Two further sweeps completed 2026-08-23, both clean — the first grep found
+neither, because it started from `from("profiles")`:
+
+- **Embedded selects.** `.from("rides").select("*, passenger:profiles(*)")`
+  expands to every column of `profiles` and fails post-revoke exactly like a
+  top-level star. Swept table-agnostically (`profiles?\s*\(|profiles!`): two
+  hits, `RideHistoryScreen.tsx:293-294`, both requesting `(name)` explicitly.
+- **Edge Functions on the caller's JWT.** `service_role` keeps its table grant,
+  so anything on the service client is untouched — but three functions read
+  `profiles` through the caller's client before switching: `capture-payment:76`,
+  `delete-account:33`, `delete-driver:46`. All three select only `role` /
+  `company_id`, both of which stay granted. Worth having checked: a payment path
+  breaking on the revoke would break quietly, mid-ride, which is worse than a
+  login path breaking loudly.
+
 One trap found while doing it: `PROFILE_COLUMNS` has to be a single string
 **literal**. supabase-js infers the row type from the literal type of the select
 string, so an array `.join()` — and a `+` concatenation — widens it to `string`
@@ -84,7 +99,10 @@ begin
                         or r.driver_id    = p_profile_id))
      ))
   then
-    select phone into v from profiles where id = p_profile_id;
+    -- coalesce, not `phone`: claim_guest_rides() moves a retiring guest's
+    -- number to guest_phone, and dispatch still needs it on that guest's
+    -- historic rides. This is the only reader that delivers it.
+    select coalesce(phone, guest_phone) into v from profiles where id = p_profile_id;
     return v;
   end if;
   return null;   -- fail closed, same as ride-contact
@@ -123,9 +141,23 @@ email columns are contact PII of exactly the same class reaching exactly the
 same counterparty through the same policy branch, and both are only ever read
 about oneself in either repo (`ProfileScreen.tsx:34`, `DiscountsScreen.tsx:229`),
 so they join the self-bundle at no extra round trip. `stripe_customer_id` has
-zero client readers and is free. `push_token` stays granted: `useNotifications.ts:172`
-does a real self-read of it to skip a redundant write, and that path is
-load-bearing for dispatch.
+zero client readers and is free.
+
+**▲ `push_token` should probably join them — new information, 2026-08-23.**
+It was kept out because `useNotifications.ts:172` self-reads it. But
+`_shared/push.ts:120` sends to Expo with **no `Authorization` header**, so this
+project does not have Expo's Enhanced Security for Push Notifications enabled:
+possession of an `ExponentPushToken` is sufficient to push anything to that
+device. Keeping the column granted therefore means a driver can read a
+passenger's token through `shares_ride_with` and send them "Your ride has been
+cancelled" from a stranger — and the passenger can do the same back.
+
+The cost of withholding turns out to be near zero: that self-read is a pure
+optimisation to skip a redundant write, and the same function already keeps the
+token in `AsyncStorage` under `LAST_TOKEN_KEY` and compares against it at
+`:40`. Drop the DB read, or add `push_token` to the self bundle phase 2 is
+building anyway. Verify the Expo project setting before acting — the absent
+header is strong evidence, not proof.
 
 **▲ The realtime subscription will fight the merge.** `AuthContext` subscribes to
 `postgres_changes` on the user's own `profiles` row and does
@@ -136,6 +168,14 @@ the RPC merged in, blanking the user's own phone/email a moment after any
 unrelated profile write. Merge the payload over the existing state, keeping the
 private fields, rather than replacing.
 
+
+**▲ The private bundle must be fetched inside `fetchProfile`, not merged in
+beside it.** `fetchProfile` and `refetch` both do a straight `setProfile(data)`
+— the same replace-clobbers-merge bug just fixed in the realtime handler, one
+door over. `refetch()` is called from the OTP path and from `DiscountsScreen`'s
+subscription, so a bundle merged in anywhere else is dropped the next time
+either fires. One function constructs a complete profile; everything else calls
+it. This changes the shape of the phase 2 edit rather than adding to it.
 
 **Self-phone, displayed in 4 places** — `ProfileScreen.tsx:258`,
 `DriverEditProfileScreen.tsx:416`, `ProfileMenu.tsx:252`, and
