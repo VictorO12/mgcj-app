@@ -96,7 +96,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
         (payload) => {
-          setProfile(payload.new as Profile);
+          // Merge, don't replace. Realtime's WAL filter applies the subscribed
+          // role's column privileges, so once the private columns are revoked
+          // (`.claude/notes/g3-phone-column-revoke-plan.md`) `payload.new`
+          // arrives WITHOUT them — and a straight assignment would blank the
+          // user's own phone/email a moment after any unrelated write to their
+          // row, undoing the values fetched through the definer RPC.
+          //
+          // Correct either way: a key that IS present still applies, including
+          // when its value is null, so this loses no genuine clear. Written
+          // before the revoke on purpose — the alternative is a bug that only
+          // appears once the migration lands, in a screen nobody re-tests.
+          setProfile((prev) =>
+            prev
+              ? { ...prev, ...(payload.new as Partial<Profile>) }
+              : (payload.new as Profile),
+          );
         },
       )
       .subscribe();
