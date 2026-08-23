@@ -133,7 +133,7 @@ oracle**. `phone_is_registered()` has the same shape and is worth re-reading
 first. Keep the existing role filter semantics (`role.eq.passenger,role.is.null`)
 inside the function; the comment at `:2638` explains why NULL must be tolerated.
 
-## 2. Reroute the legitimate readers
+## 2. Reroute the legitimate readers — DONE 2026-08-23 (`28e6a87` app, `5d268cd` dashboard)
 
 **Scope settled 2026-08-23:** the withheld set is `phone`, `guest_phone`,
 `email`, `student_email`, `stripe_customer_id` — not `phone` alone. The two
@@ -320,11 +320,20 @@ dispatch still sees passenger numbers through the RPC, and a driver still sees
 the passenger's **name and avatar** — that is the whole reason we revoked the
 column instead of narrowing the policy.
 
-## 4. Only then, the client cleanup
+## 4. ~~Only then, the client cleanup~~ — WRONG, and done in phase 2 instead
 
-Removing the raw fetches earlier is theatre — the number stays equally reachable
-to anyone with the app bundle and a real JWT, and the diff makes the codebase
-look fixed while nothing changed.
+The claim was that removing the seven counterparty-phone fetches before the
+revoke is theatre. That is true of their SECURITY value — the number stays
+reachable to anyone with the bundle and a real JWT until the server refuses it —
+and it is the wrong conclusion, because those fetches **name `phone`
+explicitly**. Post-revoke they do not go stale, they ERROR: on
+`showRideRequestPopup` (the ride-offer popup), on `AssignedRidesListScreen` (the
+driver ride list) and in `useActiveRide` (passenger live tracking). Not optional
+cleanup — breakage. Removed in `28e6a87`.
+
+They fed nothing: G3 Phase 2 replaced every consumer with `useRideContact`'s
+masked line, and a grep for real reads turned up only comments describing that
+removal. The type fields went with them.
 
 ---
 
