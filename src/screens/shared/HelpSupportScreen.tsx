@@ -12,6 +12,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import ReportProblemModal from "../../components/ReportProblemModal";
+import * as Updates from "expo-updates";
+import { getBuildInfo, formatBuildInfo } from "../../lib/updates";
 
 interface Props {
   onClose: () => void;
@@ -50,6 +52,13 @@ const FAQ_ITEMS = [
 
 export default function HelpSupportScreen({ onClose }: Props) {
   const { colors } = useTheme();
+  // Real build identity, not a hardcoded string. OTA breaks the assumption that
+  // a store version identifies the code — two users on the same store build can
+  // now be running different JS — so a bug report is unactionable without the
+  // bundle id. See `.claude/notes/ota-runtime-design.md`.
+  const { currentlyRunning } = Updates.useUpdates();
+  const buildLine = formatBuildInfo(getBuildInfo(currentlyRunning));
+
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [reportVisible, setReportVisible] = useState(false);
@@ -162,7 +171,7 @@ export default function HelpSupportScreen({ onClose }: Props) {
         </TouchableOpacity>
 
         {/* Version */}
-        <Text style={styles.versionText}>M&G C&J Driver App · v1.0</Text>
+        <Text style={styles.versionText}>M&G C&J Driver App · {buildLine}</Text>
         <Text style={styles.poweredBy}>POWERED BY VELLON</Text>
       </ScrollView>
 

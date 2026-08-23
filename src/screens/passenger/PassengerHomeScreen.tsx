@@ -43,6 +43,8 @@ import HelpSupportScreen from "./HelpSupportScreen";
 import InboxScreen from "../shared/InboxScreen";
 import { useInboxUnreadCount } from "../../hooks/useInboxUnreadCount";
 import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
+import { useOtaUpdate } from "../../hooks/useOtaUpdate";
+import type { ReloadBlock } from "../../lib/updates";
 import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 import { useTheme } from "../../theme/ThemeContext";
@@ -1118,6 +1120,42 @@ export default function PassengerHomeScreen() {
     !chatVisible;
   const { current: interstitialMessage, dismiss: dismissInterstitial } =
     useInterstitialQueue(interstitialGateOpen);
+
+  // Deliberately NOT interstitialGateOpen. That predicate answers "is it rude to
+  // show a card"; this one answers "is it safe to destroy all in-memory state",
+  // and they differ in both directions. An open menu closes the interstitial
+  // gate but holds nothing worth keeping; an in-flight create-payment-intent
+  // doesn't close it but is exactly what must not be interrupted.
+  //
+  // HARD: an active ride, or a booking sheet holding a typed destination and a
+  // payment choice (this is also where create-payment-intent runs).
+  // SOFT: overlays and menus — recoverable, so they defer a reload but never
+  // block it indefinitely.
+  const otaBlock: ReloadBlock =
+    hasActiveRide || sheet !== null
+      ? // `id` keys the escape-hatch clock, and a null id means "never escapes".
+        // Only a real ride id gets one: the hatch exists for stuck server-side
+        // ride state (E7). The booking sheet is local UI the passenger is
+        // actively driving — it must never be reloaded out from under them, and
+        // a constant id here would be worse than useless, since the stored clock
+        // is never cleared, so every booking after the first would escape on a
+        // stale timestamp and eat the typed destination.
+        { level: "hard", id: hasActiveRide ? (ride?.id ?? null) : null }
+      : menuVisible ||
+          historyVisible ||
+          inboxVisible ||
+          scheduledVisible ||
+          paymentVisible ||
+          discountsVisible ||
+          profileVisible ||
+          notificationsVisible ||
+          helpVisible ||
+          driverProfileVisible ||
+          chatVisible ||
+          !!reviewTarget
+        ? { level: "soft" }
+        : { level: "none" };
+  useOtaUpdate(otaBlock);
   const noDriversForImmediate = !isScheduled && (
     vehicleClasses.length > 1
       ? selectedClassId != null && (classAvailability[selectedClassId] ?? 0) === 0

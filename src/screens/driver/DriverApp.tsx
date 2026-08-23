@@ -3,6 +3,8 @@ import * as Notifications from "expo-notifications";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useDriverLocationBroadcast } from "../../hooks/useDriverLocationBroadcast";
+import { useOtaUpdate } from "../../hooks/useOtaUpdate";
+import type { ReloadBlock } from "../../lib/updates";
 import DriverHomeScreen from "./DriverHomeScreen";
 import DriverActiveRideScreen from "./DriverActiveRideScreen";
 import DriverSetupScreen from "./DriverSetupScreen";
@@ -138,6 +140,36 @@ export default function DriverApp() {
   const [startedScheduledRideId, setStartedScheduledRideId] = useState<
     string | null
   >(null);
+
+  // OTA updates are checked/applied here rather than in DriverHomeScreen on
+  // purpose: DriverApp is mounted for a driver's entire session, whereas
+  // DriverHomeScreen unmounts for the whole active ride. Mounting on the home
+  // screen would make "never reload mid-ride" structural, but it would also
+  // unmount the escape hatch — so a driver pinned in a stuck `in_progress` ride
+  // (the E7 bug) could never receive the fix for it.
+  //
+  // HARD = a ride the driver is on or being offered: reloading drops nav state,
+  // the cash fare entry, or an in-flight capture-payment. Everything else is
+  // recoverable, and DriverHomeScreen's own overlay flags aren't visible from
+  // here by design — they're SOFT, and we only apply on a foreground resume the
+  // driver initiated anyway.
+  // `id` keys the escape-hatch clock, so it must identify the specific ride
+  // doing the blocking — a fresh ride must never inherit a stuck one's elapsed
+  // time. Ride ids are server-side and stable across remounts.
+  //
+  // A null id means "hard block that never escapes", which is deliberate: the
+  // hatch exists for stuck server-side ride state (E7), and the stored clock is
+  // never cleared (clearing it would reintroduce the remount bug, since the
+  // async activeRide fetch makes the first render after a remount read "none").
+  // A constant id would therefore never reset either, so `showAssigned` with no
+  // ride would escape on its own two-day-old timestamp.
+  const otaBlocker =
+    activeRide?.id ?? assignedRide?.id ?? pendingRide?.id ?? null;
+  const otaBlock: ReloadBlock =
+    otaBlocker || showAssigned
+      ? { level: "hard", id: otaBlocker }
+      : { level: "none" };
+  useOtaUpdate(otaBlock);
 
   // Ref so handleDeclinePendingRide always reads the latest pendingRide
   // even when called from a stale closure (e.g. timer timeout after 30s)

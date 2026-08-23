@@ -3,6 +3,22 @@ export default {
   slug: "mgcj-app",
   scheme: "mgcjapp",
   version: "1.0.0",
+  // OTA updates. `fingerprint` policy: the runtime version changes automatically
+  // when native deps/config change, so a JS bundle can never land on a binary
+  // that lacks a native module it calls. Do NOT switch to the `appVersion`
+  // policy — bumping `version` above would orphan every installed build.
+  runtimeVersion: { policy: "fingerprint" },
+  updates: {
+    url: "https://u.expo.dev/1df2c110-8290-4853-9574-2fe4b71799b0",
+    // Block at the native splash for up to 4s to fetch and launch the NEW bundle,
+    // so a launch-crash fix applies on the FIRST relaunch, before the crashing JS
+    // ever runs. `0` (launch from cache, download in the background) is the
+    // setting LEAST able to handle a launch crash — the crash races the download
+    // and usually wins — and a launch crash is the exact incident this exists for.
+    // Cost is up to 4s of cold start on a bad network; on timeout it falls back to
+    // the cached bundle and keeps downloading. Do not set this to 0.
+    fallbackToCacheTimeout: 4000,
+  },
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   icon: "./assets/icon.png",
