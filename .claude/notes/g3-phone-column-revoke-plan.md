@@ -253,35 +253,62 @@ look fixed while nothing changed.
 
 ---
 
-## Open before §1 is applied — checks, not code
+## Open before §1 is applied — worked 2026-08-23
 
-1. **Does Realtime actually apply column grants on this project?** The §2 note
-   assumes it does (WAL filter honours the subscribed role's privileges), which
-   is why `payload.new` would arrive short of the withheld columns. If it does
-   NOT, realtime is a channel that bypasses the revoke, and the same reasoning
-   has to be re-run over the `rides` subscriptions in `DriverApp` that embed
-   profile data. Live check with a real subscription, not a code read — this is
-   exactly the class of assumption that produced the `service_role` incident.
+**1. Realtime column filtering — fixed by construction, premise still unverified.**
+Both auth hooks now MERGE `payload.new` over the existing profile instead of
+replacing it (`AuthContext.tsx`, `useAuth.ts`), so the answer no longer gates
+phase 2: if the WAL payload arrives short of the private columns the merge keeps
+them, and if it arrives complete the merge is a no-op. A key that IS present
+still applies, null included, so no genuine clear is lost.
 
-2. **A driver must get `null` from `profile_phone()`.** Drivers are not staff, so
-   they should fall through both branches — but that depends on `is_staff()`
-   gating the ride branch as well as the company branch, and the `and`/`or`
-   parenthesisation in §1 is the kind that survives a later edit wrong. Add the
-   case to `g3-profiles-phone-exposure-check.sql`: driver JWT, passenger they
-   actually carried, expect `null`.
+Resolved while checking the blast radius: the `rides` subscriptions never
+carried profile data — `postgres_changes` payloads are single rows, no joins —
+so there is nothing to re-examine there. `DiscountsScreen.tsx:102` reads only
+`student_verified`, which stays granted, and calls `refetch()` anyway.
 
-3. **Can a retired guest still mint a duplicate?** `find_passenger_by_phone()`
-   deliberately will not match `guest_phone`, so a signed-up former guest resolves
-   only to their new profile — intended. But `DashboardPage.tsx:2638`'s comment
-   warns that a missed match mints a duplicate guest for a number that already
-   has one, and "retired guest row + real profile" is the state where that could
-   happen a third time. `create-guest-passenger`'s server-side re-check and its
-   23505 path (`9ce76a8`) are now the only backstop; confirm they cover it.
+Still worth answering, because it decides whether realtime is a channel that
+BYPASSES the revoke for anyone's row, not just one's own:
 
-4. **The grant list is hand-maintained in three places** — both repos'
-   `PROFILE_COLUMNS` and the migration. A column added to `profiles` without
-   three edits reads empty rather than failing. Put a `COMMENT ON TABLE profiles`
-   saying so in the same migration as the revoke.
+```sql
+-- Does Supabase's WAL filter consult column privileges at all?
+SELECT pg_get_functiondef(p.oid)
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'realtime' AND p.proname IN ('apply_rls','list_changes');
+-- look for has_column_privilege(...) in the body
+
+-- And whether the publication itself carries a column list (prattrs), which is
+-- a SEPARATE mechanism from grants and would filter regardless.
+SELECT pr.prattrs, c.relname, p.pubname
+  FROM pg_publication_rel pr
+  JOIN pg_class c ON c.oid = pr.prrelid
+  JOIN pg_publication p ON p.oid = pr.prpubid
+ WHERE c.relname = 'profiles';
+```
+
+**2. `profile_phone()` denial cases — written, not yet runnable.** Added as
+section 9 of `g3-profiles-phone-exposure-check.sql`: driver→carried passenger
+must be null, staff-at-another-company must be null, own-company dispatch must
+get the number, self must get own, a retired guest must resolve through
+`guest_phone`, and anon must get 42501 **via curl with the publishable key** —
+`SET ROLE anon` in a superuser session does not reproduce a PostgREST request.
+Every wrong parenthesisation of that function fails OPEN, which is why the
+denials are tested and not just the grants.
+
+**3. Retired guest minting a duplicate — CLEAR, checked in code.**
+`create-guest-passenger`'s `findPassenger()` matches on `phone`, and
+`claim_guest_rides()` sets the retiring guest's `phone` to NULL (moving it to
+`guest_phone`). So the retired row is invisible to the lookup by construction
+and the number resolves only to the real profile; no third row can be minted.
+`profiles_phone_key` permits many NULLs, so retired guests never collide with
+each other either. `find_passenger_by_phone()` must mirror this exactly — match
+`phone` only, never `guest_phone` — and the reason is now a real dependency, not
+a preference.
+
+**4. The hand-maintained grant list.** Both repos' `PROFILE_COLUMNS` plus the
+migration: three edits per new column, or it silently reads empty. Ship a
+`COMMENT ON TABLE public.profiles` in the revoke migration saying exactly that,
+naming both file paths.
 
 ---
 
