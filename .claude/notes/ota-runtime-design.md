@@ -416,6 +416,12 @@ would itself change the block level to `soft`).
 while an active ride passes a **real ride id** (escape armed). Whichever of the two was
 not exercised here is still unverified — they are deliberately different code paths.
 
+### Test 12 (Expo Go unaffected) — PASS, 2026-08-23
+
+Expo Go reads `v1.0.0 · base`. That also exercises the fallback path: `otaEnabled()` is
+false there, `currentlyRunning` is empty, and `getBuildInfo` defaults `embedded` to true.
+Day-to-day iteration is unchanged.
+
 ### Remaining steps
 
 Config-layer steps 1–7 are in `ota-updates-expo-updates.md`. These extend it.
