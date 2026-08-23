@@ -168,47 +168,9 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
     // ── PASSENGER PATH ───────────────────────────────────────────
     console.log("[OTP] passenger path");
 
-    // Check if a guest profile exists for this phone number
-    // (created by dispatch when booking a ride for an unregistered passenger)
-    if (!existing) {
-      const { data: guestProfile } = await supabase
-        .from("profiles")
-        .select("id, name, role")
-        .eq("phone", phone)
-        .eq("role", "passenger")
-        .maybeSingle();
-
-      console.log("[OTP] guest profile by phone:", guestProfile);
-
-      if (guestProfile && guestProfile.id !== userId) {
-        console.log(
-          "[OTP] merging guest profile:",
-          guestProfile.id,
-          "→",
-          userId,
-        );
-        const { error: mergeError } = await supabase.rpc(
-          "merge_guest_profile",
-          {
-            p_old_id: guestProfile.id,
-            p_new_id: userId,
-            p_new_name: name ?? "",
-          },
-        );
-
-        if (mergeError) {
-          console.log("[OTP] merge error:", mergeError);
-          // Fall through to normal upsert — passenger won't see prior ride history
-        } else {
-          console.log("[OTP] guest merge complete");
-          await refetch();
-          setLoading(false);
-          return;
-        }
-      }
-    }
-
-    // No guest profile found — handle normal sign-in / sign-up
+    // Handle normal sign-in / sign-up. A dispatch-created guest profile on
+    // this number is NOT merged here: guest ride history stays with the guest
+    // row, and only live rides are re-pointed (see claim_guest_rides).
     if (!existing && !isNewUser) {
       // Sign-in attempt but no profile exists — number not registered
       console.log("[OTP] sign-in blocked: no profile for this number");
@@ -229,15 +191,51 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
       return;
     }
 
-    if (!existing && isNewUser) {
-      // New signup — upsert the full profile
+    // A dispatch-created guest profile may be holding this number. Hand over
+    // any ride that is still *happening* — the passenger may be waiting on it
+    // right now — and retire the guest row. Completed history is deliberately
+    // left behind.
+    //
+    // MUST run BEFORE the upsert below. profiles.phone carries a global unique
+    // constraint (profiles_phone_key), so the guest row has to release the
+    // number before the real profile can take it. Running it after produced a
+    // 23505 on signup for anyone dispatch had booked before.
+    //
+    // Safe this early because on_auth_user_created has already created this
+    // user's profiles row (phone NULL), which is all rides.passenger_id needs.
+    // Idempotent, returns 0 when there is no guest row.
+    const { data: claimedRides, error: claimError } =
+      await supabase.rpc("claim_guest_rides");
+    if (claimError) {
+      console.log("[OTP] guest ride claim failed:", claimError);
+    } else if (claimedRides) {
+      console.log("[OTP] claimed live guest rides:", claimedRides);
+    }
+
+    if (isNewUser) {
+      // Unconditional, matching the driver path above. This was gated on
+      // `!existing`, which has been dead code since the on_auth_user_created
+      // trigger began inserting a bare profiles row at auth-user creation:
+      // `existing` is already non-null here on a brand-new signup (verified in
+      // a live log, name: null, role: passenger). Two consequences, both
+      // long-standing and both fixed by removing the gate — the name typed at
+      // sign-up was never written, and the row kept the phone the trigger
+      // copied from auth.users, which Supabase stores WITHOUT the leading '+'
+      // and so never matched an E.164 lookup from dispatch.
       const { error: upsertError } = await supabase
         .from("profiles")
         .upsert(
-          { id: userId, phone, name: name ?? null, role: "passenger" },
+          {
+            id: userId,
+            // Route param is E.164 (with '+'); auth.users.phone is not.
+            phone,
+            // Never clobber a name already on the row with null.
+            name: name?.trim() || existing?.name || null,
+            role: "passenger",
+          },
           { onConflict: "id" },
         );
-      console.log("[OTP] passenger profile upsert:", upsertError);
+      console.log("[OTP] passenger profile upsert:", upsertError ?? "ok");
     }
 
     await refetch();

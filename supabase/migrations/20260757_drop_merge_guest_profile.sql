@@ -1,0 +1,39 @@
+-- Remove merge_guest_profile: an anon-callable account-takeover primitive.
+--
+-- The function was SECURITY DEFINER with GRANT EXECUTE to anon (proacl showed
+-- `anon=X/postgres`), i.e. callable over PostgREST with the publishable key that
+-- ships inside the mobile app bundle. Both profile ids were caller-supplied and
+-- never compared against auth.uid(), so any caller holding a victim's profile
+-- UUID -- which drivers see as rides.passenger_id on every ride they take --
+-- could pass p_old_id = victim, p_new_id = self and cause the function to:
+--
+--   * re-point the victim's rides and ride_reviews onto the caller,
+--   * DELETE the victim's profiles row, and
+--   * write the victim's phone onto the caller's profile via the
+--     ON CONFLICT (id) DO UPDATE SET phone = EXCLUDED.phone clause.
+--
+-- Since dispatch books against profiles.phone, that last step made the victim's
+-- number resolve to the attacker's account.
+--
+-- rides_passenger_id_fkey is NO ACTION and would normally have blocked the
+-- DELETE, but the function's own `UPDATE rides SET passenger_id = p_new_id`
+-- ran first and cleared every referencing row. Collateral for a passenger
+-- victim: payment_methods (ON DELETE CASCADE) destroyed, ride_reviews and
+-- ride_messages authorship set null. For a driver victim: drivers_id_fkey is
+-- ON DELETE CASCADE, so the driver row went too. Admins happened to survive
+-- because dispatch_events_dispatcher_id_fkey is NO ACTION and rolled it back.
+--
+-- No replacement is installed here. The guest model no longer merges ride
+-- history at all -- a guest profile is retired (phone cleared) on signup and
+-- only *live* rides are re-pointed, by a separate no-argument function that
+-- derives both the caller and the phone from the verified JWT.
+--
+-- The sole caller was the guest-merge branch in mgcj-app's OTPVerifyScreen,
+-- removed in the same change.
+--
+-- This is the second instance of the pattern in 20260734: Supabase's default
+-- privileges grant EXECUTE directly to anon/authenticated, so a definer
+-- function is reachable by anon until it is revoked from those roles BY NAME.
+-- `revoke from public` alone does not cover it.
+
+DROP FUNCTION IF EXISTS public.merge_guest_profile(uuid, uuid, text);
