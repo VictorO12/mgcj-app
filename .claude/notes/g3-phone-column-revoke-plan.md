@@ -17,7 +17,19 @@ live and proved to be a no-op — the real form is drop-and-re-grant.
 
 ---
 
-## 0. The prerequisite — ship this ALONE, before anything else
+## 0. The prerequisite — ▲ DONE 2026-08-23 (`2f298c5` app, `d88fd8b` dashboard)
+
+Shipped as a behavioural no-op, both repos, dashboard build clean and app
+`tsc` error count identical to baseline (337, all pre-existing). Still needs
+real-device confirmation before §3 goes anywhere near the DB.
+
+One trap found while doing it: `PROFILE_COLUMNS` has to be a single string
+**literal**. supabase-js infers the row type from the literal type of the select
+string, so an array `.join()` — and a `+` concatenation — widens it to `string`
+and degrades every field to `GenericStringError`. The comment in both files says
+so; do not "tidy" it into a list.
+
+### Why it had to go first
 
 `REVOKE SELECT (phone)` breaks `SELECT *`. Postgres expands the star to every
 column and requires the privilege on all of them, so the statement errors with
@@ -104,6 +116,26 @@ first. Keep the existing role filter semantics (`role.eq.passenger,role.is.null`
 inside the function; the comment at `:2638` explains why NULL must be tolerated.
 
 ## 2. Reroute the legitimate readers
+
+**Scope settled 2026-08-23:** the withheld set is `phone`, `guest_phone`,
+`email`, `student_email`, `stripe_customer_id` — not `phone` alone. The two
+email columns are contact PII of exactly the same class reaching exactly the
+same counterparty through the same policy branch, and both are only ever read
+about oneself in either repo (`ProfileScreen.tsx:34`, `DiscountsScreen.tsx:229`),
+so they join the self-bundle at no extra round trip. `stripe_customer_id` has
+zero client readers and is free. `push_token` stays granted: `useNotifications.ts:172`
+does a real self-read of it to skip a redundant write, and that path is
+load-bearing for dispatch.
+
+**▲ The realtime subscription will fight the merge.** `AuthContext` subscribes to
+`postgres_changes` on the user's own `profiles` row and does
+`setProfile(payload.new as Profile)`. Realtime's WAL filter applies **column
+grants** for the subscribed role, so after the revoke `payload.new` arrives
+without the five withheld columns — and that raw assignment clobbers whatever
+the RPC merged in, blanking the user's own phone/email a moment after any
+unrelated profile write. Merge the payload over the existing state, keeping the
+private fields, rather than replacing.
+
 
 **Self-phone, displayed in 4 places** — `ProfileScreen.tsx:258`,
 `DriverEditProfileScreen.tsx:416`, `ProfileMenu.tsx:252`, and
