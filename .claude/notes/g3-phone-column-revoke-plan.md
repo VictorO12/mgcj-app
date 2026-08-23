@@ -12,8 +12,8 @@ number is the only part that needs to disappear.
 
 **Revised 2026-08-23** after the guest rework (`3e38c88`, `c00c633`, `9ce76a8`)
 and a re-read of the grant mechanics. Three changes, all marked ▲ below:
-§0 keeps `phone`, §2's OTPVerify item is gone, §3's revoke statement is probably
-a no-op as written and has to be rehearsed before it is trusted.
+§0 keeps `phone`, §2's OTPVerify item is gone, and §3's revoke statement was rehearsed
+live and proved to be a no-op — the real form is drop-and-re-grant.
 
 ---
 
@@ -130,40 +130,60 @@ never has to be built.
 
 ## 3. The revoke
 
-▲ **The statement in the first draft is probably a no-op.** Query 3 showed a
-*table-level* SELECT grant to `anon` and `authenticated`. A table-wide SELECT
-covers every column and a column-level REVOKE does not carve a hole in it —
-Postgres emits a warning and access is unchanged. The failure mode is "revoke
-ran, no error, still readable": the same false-relief shape as
+**Rehearsed live 2026-08-23 — `REVOKE SELECT (phone)` does nothing.** Run inside
+a transaction against a real driver JWT, the passenger's `+19023852308` still
+came back. Postgres warned rather than erroring: query 3's *table-level* SELECT
+grant to `anon`/`authenticated` covers every column, and a column-level revoke
+cannot carve a hole in it. Had this shipped as written it would have read as a
+clean apply, closed the ticket, and changed nothing — the same shape as
 `cron.job_run_details` reporting SUCCESS while the function 401'd.
 
-**Rehearse before believing either form.** In one transaction: run the revoke,
-re-run check query 5(a), `ROLLBACK`. If the phone still comes back, the real
-shape is drop-and-re-grant:
+The real form is drop the table grant and re-grant an explicit column list:
 
 ```sql
-revoke select on public.profiles from authenticated, anon;
-grant  select (id, name, role, company_id, avatar_url, /* … enumerate … */)
-  on public.profiles to authenticated, anon;
+revoke select on public.profiles from anon;            -- no re-grant: see below
+revoke select on public.profiles from authenticated;
+grant  select (<every column except phone>) on public.profiles to authenticated;
 ```
 
-Also check for a `PUBLIC` grant in the same pass — check query 3's
-`grantee IN (...)` filter excluded the row that would show it, and both roles
-inherit PUBLIC. And check live for any **view** over `profiles`: a non-
-`security_invoker` view keeps its owner's access and would mask the revoke
-entirely. None exists in the migrations, which per the standing lesson is not
-evidence about the live DB.
+`anon` gets nothing back. Every policy on `profiles` is `TO authenticated`, so
+RLS already denies anon every row; the grant is dead weight that only widens the
+blast radius of a future policy written without a role clause. Guest bookers are
+`authenticated` (anonymous sign-in is a real user), and the pre-session flows
+(`phone_is_registered`) are definer RPCs, not table reads — so nothing anon-side
+reads this table today.
 
-Consequence to accept with the explicit-column form: `profiles` columns become a
-maintenance surface. Every new-column migration needs a grant line, the same way
-new tables need one post-Oct-2026.
+**The column list must come from the live DB**, not from the migrations — a
+column present live but missing from the grant is a silently-empty field, not an
+error. Enumerate with the `information_schema.columns` query in the check file,
+and add a line to the migration listing what was granted so the next person can
+diff it.
 
-Then re-run query 5 and expect a **permission error**, not a null. A null would
-mean the row was denied for some other reason and would leave the actual
+Consequence to accept: `profiles` columns become a maintenance surface. Every
+new-column migration needs a grant line, the same way new tables have needed one
+since Oct 2026. Worth a comment on the table itself saying so.
+
+Also settle in the same pass:
+- **A `PUBLIC` grant**, which both roles inherit. Check query 3's
+  `grantee IN (...)` filter excluded the only row that would show it.
+- **Any view over `profiles`** — a non-`security_invoker` view keeps its owner's
+  access and would leave the number readable through a different door. None in
+  the migrations, which per the standing lesson says nothing about live.
+- **`UPDATE (phone)` is untouched and stays that way.** RLS confines a client to
+  its own row, and `OTPVerifyScreen`'s upsert writes `phone` on every sign-in —
+  revoking the write would break signup. Named because "revoked the phone column"
+  will later sound like it covered both directions.
+
+Writes are unaffected by the read revoke: the two `profiles` upserts in
+`OTPVerifyScreen` (:151, :227) do not `.select()` back, so there is no RETURNING
+clause needing SELECT on the columns they write. Checked, not assumed.
+
+Then re-run check query 5 and expect a **permission error**, not a null. A null
+would mean the row was denied for some other reason and would leave the actual
 question unanswered. Confirm the opposite direction in the same session:
-dispatch still sees passenger numbers, and a driver still sees the passenger's
-**name and avatar** — that is the whole reason we revoked the column instead of
-narrowing the policy.
+dispatch still sees passenger numbers through the RPC, and a driver still sees
+the passenger's **name and avatar** — that is the whole reason we revoked the
+column instead of narrowing the policy.
 
 ## 4. Only then, the client cleanup
 
