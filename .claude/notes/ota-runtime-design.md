@@ -79,7 +79,31 @@ passenger mid-booking. That is worse than every bug it could fix.
 If a force channel is ever genuinely needed, it belongs in a Supabase row (the app
 already holds a realtime connection), **never** in the manifest — see §1(b).
 
-**This section is PROVISIONAL until test-plan step 8 runs.** The argument above makes
+**SETTLED 2026-08-23 — §3 stands, and the reasoning is now sharper than it was.**
+Test 8 ran on the preview build. See §8 for the evidence; the short version is that the
+two failure modes have two different mechanisms, and neither substitutes for the other:
+
+| failure | what saves you |
+|---|---|
+| a bad OTA over a good bundle | expo-updates' automatic error recovery — reverts unaided |
+| a crashing **embedded** bundle from the store | `fallbackToCacheTimeout: 4000` fetching the fix at splash |
+
+The crash test exercised **row 1**, which is not the row this feature was bought for.
+Row 2 is the scar-tissue scenario: there, error recovery has nothing to revert *to* —
+the embedded bundle is the floor — so the splash-block fetch is the only thing that can
+help, and `0` would have no answer at all because the crash would race a background
+download and win. That is the precise justification for `4000`, and it is stronger than
+the one originally written here.
+
+Row 2 is **reasoned, not measured**: proving it needs a build with a deliberately broken
+embedded bundle, to demonstrate a code path already watched working (the smoke test
+applied inside the splash window at launch — same mechanism). Recorded honestly as such
+rather than claimed as tested.
+
+The original wording is kept below because the argument it makes is still the load-
+bearing one.
+
+**(Superseded) This section was PROVISIONAL until test-plan step 8 ran.** The argument above makes
 crash-recovery behaviour load-bearing for a design decision, where before it was only a
 verification nicety. Step 8 must separate two distinct mechanisms: (i) does
 `fallbackToCacheTimeout: 4000` actually fetch and apply a fix on relaunch, and (ii) does
@@ -310,7 +334,66 @@ still gets the bytes down, so the apply is instant when the resume comes.
 
 ---
 
-## 8. Runtime test plan (needs a preview build on a device)
+## 8. Runtime test plan — RESULTS
+
+**Verified 2026-08-23 on the preview build** (`b867d5ea`, commit `56bd1e2`,
+`runtimeVersion a6156ffb…`, channel `preview`):
+
+- **Parity, end-to-end.** The build's runtime version equals the published update's
+  runtime version equals the locally computed fingerprint — `a6156ffb…` all three. The
+  silent failure this whole document is about is closed, confirmed against real
+  artifacts rather than a simulated env.
+- **Test 9 (delivery) PASS** and **test 13 (build identity) PASS**: a no-op update
+  (`01a030d1`) published to `preview` landed on relaunch, and the Help & Support footer
+  moved from `base` to `01a030d1 · Aug 23`. The build-identity line doubles as the
+  delivery probe, which is why the first test could be made zero-risk.
+- Older `development` builds report `runtimeVersion: None` — no expo-updates in them, so
+  they can never receive an update. Expected; noted so it isn't mistaken for a fault.
+
+**Ordering correction, important.** An earlier draft put the crash test (8) first
+because it settles §3. That is wrong and dangerous: if delivery were broken and a
+crashing bundle went out first, the device would be bricked to a reinstall with no OTA
+path back. **Always prove delivery with a benign update before deliberately shipping a
+crash.**
+
+### Test 8 (crash recovery) — PASS, 2026-08-23
+
+Method: injected a module-scope `throw` at the top of `App.tsx`, published to `preview`
+as `01a030da`, then published the fix. Two false starts worth keeping:
+
+- **"It's not crashing" is not evidence of anything.** That observation is equally
+  consistent with "the bad bundle never arrived" and "it arrived, crashed, and was
+  reverted before the user saw it" — from outside the app the two are identical. Do not
+  reason from it; instrument instead.
+- **Verify the crash reached the bundle.** `expo export` produces Hermes bytecode, so a
+  plain `grep` finds nothing; the string table concatenates entries, so the marker shows
+  up as `…RECORD_AUDIO` + `TA crash test: …` under `strings -a`. Confirmed present, which
+  ruled out a no-op publish before any device time was spent.
+
+Resolved with `Updates.readLogEntriesAsync()`, surfaced as a temporary long-press on the
+Help & Support version line. A raw dump was 381 entries — unreadable and uncopyable in an
+`Alert` — so the second iteration computed a verdict instead. Result:
+
+```
+running 01a030e9
+SEEN: 17 entries reference 01a030da — it reached the device
+total=440  crashRefs=17  errors=1
+codes: Unknown x1, JSRuntimeError x1
+```
+
+`JSRuntimeError` is the crash firing. The device downloaded the bad bundle, launched it,
+it threw, and expo-updates reverted to the last good update **unaided and fast enough
+that nothing was visible to the user**. Measurement (ii): PASS.
+
+Consequence to remember: a failed update is marked failed *on that device* and is never
+retried, so re-testing a crash requires a **new update id** — republishing the same
+content will not do it.
+
+Also confirmed incidentally: ~380–440 log entries per 24h is normal volume, not a
+symptom. expo-updates logs every check, and ours runs at launch, on every foreground
+resume, and every 30 minutes.
+
+### Remaining steps
 
 Config-layer steps 1–7 are in `ota-updates-expo-updates.md`. These extend it.
 
