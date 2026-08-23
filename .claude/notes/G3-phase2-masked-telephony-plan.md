@@ -168,7 +168,7 @@ Two distinct risks, and only the first is Twilio-credential-shaped:
 ships behind one real message observed arriving, plus a look at message *status* in the
 Twilio console (`delivered`, not merely `sent` or `accepted`).
 
-## 7. Build order — CODE COMPLETE 2026-08-18, nothing applied or deployed
+## 7. Build order — CODE COMPLETE 2026-08-18; APPLIED + DEPLOYED, verified live 2026-08-23
 
 1. ✅ `20260756_ride_contact_sessions.sql` — table, `expires_at`, interaction counters,
    company-stamp trigger, RLS **deny-all with no grants** (see §5 note below),
@@ -187,9 +187,30 @@ Twilio console (`delivered`, not merely `sent` or `accepted`).
    `DriverActiveRideScreen`**, which had chat and nothing else. That last one is the
    surface that matters most: a guest passenger with no app cannot be reached by chat at
    all, and this screen is where the driver actually is when they need them.
-7. ⏳ Hand-applied — `.claude/notes/g3-phase2-setup-and-checks.md`. Proxy Service,
-   number pool, secrets, migration, deploys, the Database Webhook, and an 8-scenario
-   live test plan. **None of it done.**
+7. ⏳ Hand-applied — `.claude/notes/g3-phase2-setup-and-checks.md`. **Checked against the
+   live project 2026-08-23, not read off this file** — the previous "None of it done" was
+   badly stale and that is how the internalAuth incident started:
+
+   - ✅ §1 Proxy Service created; ✅ §3 all five secrets set (`TWILIO_ACCOUNT_SID`,
+     `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TWILIO_PROXY_SERVICE_SID`,
+     `WEBHOOK_SECRET`); ✅ §4 `20260756` applied (`ride_contact_sessions` reachable) and
+     all three functions ACTIVE (`sync-ride-contact`, `ride-contact`,
+     `twilio-proxy-callback`); ✅ §6 Phase 0 SMS passed 2026-08-22.
+   - ❌ §2 **number pool — the blocker**, gated on the Twilio compliance profile.
+   - ❓ §5 Database Webhook (`rides` UPDATE → `sync-ride-contact`) — configured by hand in
+     the dashboard, so it is invisible to the CLI and to any query. Confirm by eye.
+   - ❌ §7 verification SQL, ❌ §8 the 8-scenario live test.
+
+   **Incidental, found while checking §4:** this migration says in capitals "NO GRANTS TO
+   `authenticated`. NONE." — but anon reaches `ride_contact_sessions` over PostgREST with a
+   200, so the grant exists. Supabase default privileges granted it; *not granting* is not
+   the same as *no grant*, which is `definer-revoke-anon-by-name` in another costume. Not a
+   leak — RLS is deny-all and returns empty, confirmed alongside eight other tables
+   (`rides`, `drivers`, `payment_methods`, `driver_invites`, `companies`, `ride_messages`,
+   `dispatch_reports`, `ride_reviews`, all empty to anon). It is the *defence in depth this
+   file claims to have and does not*, and the hazard is a later policy added on the belief
+   that no grant backs it. One line: `REVOKE ALL ON public.ride_contact_sessions FROM anon,
+   authenticated;`
 
 ### D2, resolved differently than recommended — confirm this
 
