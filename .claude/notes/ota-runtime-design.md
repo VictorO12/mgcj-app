@@ -393,6 +393,29 @@ Also confirmed incidentally: ~380–440 log entries per 24h is normal volume, no
 symptom. expo-updates logs every check, and ours runs at launch, on every foreground
 resume, and every 30 minutes.
 
+### Test 10 (HARD block holds, then releases) — PASS, 2026-08-23
+
+Update `01a030f8` published while the device ran `01a030ef`.
+
+- **Part A, holds:** with a HARD block active, background → foreground left the state
+  untouched. No reload. This is the real path, not a shortcut: on that resume the hook
+  applies-then-checks, downloads the update, gets `fetched: true`, attempts an immediate
+  apply, and the HARD block refuses it.
+- **Part B, releases:** with the block cleared, the next background → foreground applied
+  the update and the build line moved to `01a030f8`.
+
+Part B matters as much as Part A. A gate that never opens is as broken as one that never
+closes, and it is the half the escape hatch exists to backstop.
+
+**Useful property of this test:** the block phase needs no version-checking. If the app
+reloads, the booking sheet/ride screen is gone and the user is back at home — so the
+state surviving *is* the pass condition, observable without opening Help & Support (which
+would itself change the block level to `soft`).
+
+**Variant still untested:** the booking-sheet block passes `id: null` (never escapes),
+while an active ride passes a **real ride id** (escape armed). Whichever of the two was
+not exercised here is still unverified — they are deliberately different code paths.
+
 ### Remaining steps
 
 Config-layer steps 1–7 are in `ota-updates-expo-updates.md`. These extend it.
