@@ -493,6 +493,11 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# Browser-called (dashboard) — same CORS/verify_jwt rationale as create-staff-account.
+[functions.create-guest-passenger]
+enabled = true
+verify_jwt = false
+
 [functions.expire-pending-rides]
 verify_jwt = false
 
