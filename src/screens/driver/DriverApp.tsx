@@ -28,7 +28,6 @@ interface ActiveRide {
   dropoff_lng: number;
   fare_estimate: number | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
   passenger_avatar_url: string | null;
   payment_method: string | null;
   scheduled_at: string | null;
@@ -46,7 +45,6 @@ interface AssignedRide {
   fare_estimate: number | null;
   scheduled_at: string | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
   payment_method: string | null;
 }
 
@@ -60,7 +58,6 @@ interface PendingRide {
   dropoff_lng: number;
   fare_estimate: number | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
   passenger_avatar_url: string | null;
   scheduled_at: string | null;
 }
@@ -579,7 +576,7 @@ export default function DriverApp() {
   async function showRideRequestPopup(rideRow: any) {
     const { data: passenger } = await supabase
       .from("profiles")
-      .select("name, phone, avatar_url")
+      .select("name, avatar_url")
       .eq("id", rideRow.passenger_id)
       .maybeSingle();
 
@@ -593,7 +590,6 @@ export default function DriverApp() {
       dropoff_lng: rideRow.dropoff_lng,
       fare_estimate: rideRow.fare_estimate,
       passenger_name: passenger?.name ?? null,
-      passenger_phone: passenger?.phone ?? null,
       passenger_avatar_url: passenger?.avatar_url ?? null,
       scheduled_at: rideRow.scheduled_at ?? null,
     });
@@ -703,7 +699,7 @@ export default function DriverApp() {
     if (ride.en_route_at) setStartedScheduledRideId(ride.id);
     const { data: passenger } = await supabase
       .from("profiles")
-      .select("name, phone, avatar_url")
+      .select("name, avatar_url")
       .eq("id", ride.passenger_id)
       .single();
     setActiveRide({
@@ -717,7 +713,6 @@ export default function DriverApp() {
       dropoff_lng: ride.dropoff_lng,
       fare_estimate: ride.fare_estimate,
       passenger_name: passenger?.name ?? null,
-      passenger_phone: passenger?.phone ?? null,
       passenger_avatar_url: passenger?.avatar_url ?? null,
       payment_method: ride.payment_method ?? null,
       scheduled_at: ride.scheduled_at ?? null,
@@ -801,7 +796,7 @@ export default function DriverApp() {
     const ride = rides[0];
     const { data: passenger } = await supabase
       .from("profiles")
-      .select("name, phone")
+      .select("name")
       .eq("id", ride.passenger_id)
       .single();
     setAssignedRide({
@@ -815,7 +810,6 @@ export default function DriverApp() {
       fare_estimate: ride.fare_estimate,
       scheduled_at: ride.scheduled_at,
       passenger_name: passenger?.name ?? null,
-      passenger_phone: passenger?.phone ?? null,
       payment_method: ride.payment_method ?? null,
     });
   }

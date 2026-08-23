@@ -48,7 +48,6 @@ interface AssignedRide {
   fare_estimate: number | null;
   scheduled_at: string | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
 }
 
 interface LatLng {

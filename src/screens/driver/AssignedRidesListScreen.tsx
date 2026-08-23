@@ -29,7 +29,6 @@ interface AssignedRide {
   /** Set when THIS driver soft-claimed the ride off the Available board. */
   claimed_at?: string | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
 }
 
 interface Props {
@@ -161,13 +160,12 @@ export default function AssignedRidesListScreen({
       data.map(async (ride) => {
         const { data: p } = await supabase
           .from("profiles")
-          .select("name, phone")
+          .select("name")
           .eq("id", ride.passenger_id)
           .single();
         return {
           ...ride,
           passenger_name: p?.name ?? null,
-          passenger_phone: p?.phone ?? null,
         };
       }),
     );
@@ -197,13 +195,12 @@ export default function AssignedRidesListScreen({
       data.map(async (ride) => {
         const { data: p } = await supabase
           .from("profiles")
-          .select("name, phone")
+          .select("name")
           .eq("id", ride.passenger_id)
           .maybeSingle();
         return {
           ...ride,
           passenger_name: p?.name ?? null,
-          passenger_phone: p?.phone ?? null,
         };
       }),
     );
@@ -311,13 +308,12 @@ export default function AssignedRidesListScreen({
       data.map(async (ride) => {
         const { data: p } = await supabase
           .from("profiles")
-          .select("name, phone")
+          .select("name")
           .eq("id", ride.passenger_id)
           .single();
         return {
           ...ride,
           passenger_name: p?.name ?? null,
-          passenger_phone: p?.phone ?? null,
         };
       }),
     );

@@ -45,12 +45,16 @@ const AuthContext = createContext<AuthContextType | null>(null);
  * so a future bare call reintroduces the hazard. Use this constant.
  */
 const PROFILE_COLUMNS =
-  // Withheld at the revoke and rerouted through the definer RPC:
-  // phone, email, student_email, stripe_customer_id, guest_phone.
+  // phone, email, student_email, stripe_customer_id and guest_phone are
+  // deliberately ABSENT: 20260765 withholds them from the client roles, so
+  // naming one here fails the whole query with `permission denied for column
+  // <x>` — on the auth path, which is nobody logging in. They come from
+  // my_private_profile() instead, merged in below.
+  //
   // Kept on ONE literal line: supabase-js infers the row type from the literal
   // type of this string, and any concatenation or .join() widens it to `string`,
   // which degrades every field to GenericStringError.
-  "id, name, role, company_id, avatar_url, created_at, is_active, deactivation_pending, deleted_at, notification_prefs, push_token, is_guest, student_verified, student_institution_id, student_verified_at, phone, email, student_email, stripe_customer_id, guest_phone";
+  "id, name, role, company_id, avatar_url, created_at, is_active, deactivation_pending, deleted_at, notification_prefs, push_token, is_guest, student_verified, student_institution_id, student_verified_at";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -121,6 +125,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { supabase.removeChannel(channel); };
   }, [session?.user?.id]);
 
+  /**
+   * The columns withheld by 20260765, for the signed-in user only.
+   *
+   * Separate round trip because there is no way to ask for them alongside the
+   * row — that is the entire point of withholding them. The function takes no
+   * argument: the caller is auth.uid(), so there is nothing to aim at someone
+   * else, the same shape as claim_guest_rides() replacing merge_guest_profile().
+   *
+   * A failure here must NOT fail the login. The user loses their own phone and
+   * email from the profile screen until the next fetch; they do not lose the
+   * app. Returns an empty object so the merge below is a no-op.
+   */
+  async function fetchPrivateFields(): Promise<Partial<Profile>> {
+    const { data, error } = await supabase
+      .rpc("my_private_profile")
+      .maybeSingle();
+    if (error) {
+      console.log("[Auth] private profile fields unavailable:", error.message);
+      return {};
+    }
+    return (data ?? {}) as Partial<Profile>;
+  }
+
   async function fetchProfile(userId: string, retries = 10) {
     fetchingForRef.current = userId;
 
@@ -144,7 +171,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     fetchingForRef.current = null;
     console.log("[Auth] profile settled:", data?.role ?? "none");
-    setProfile(data ?? null);
+    // Merged HERE, not by the callers. fetchProfile and refetch are the only
+    // two places a complete profile is constructed, and both go through this
+    // shape on purpose: a bundle merged in anywhere else is dropped the next
+    // time either one runs -- the same replace-clobbers-merge bug as the
+    // realtime handler above, one door over.
+    setProfile(data ? { ...data, ...(await fetchPrivateFields()) } : null);
     if (!loadingHeldRef.current) {
       setLoading(false);
     }
@@ -159,7 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq("id", userId)
       .maybeSingle();
     if (data) {
-      setProfile(data);
+      setProfile({ ...data, ...(await fetchPrivateFields()) });
       setLoading(false);
     }
   }

@@ -26,7 +26,6 @@ interface PendingRide {
   dropoff_lng: number;
   fare_estimate: number | null;
   passenger_name: string | null;
-  passenger_phone: string | null;
   passenger_avatar_url: string | null;
   scheduled_at: string | null;
 }
