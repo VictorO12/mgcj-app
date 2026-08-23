@@ -24,6 +24,34 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+/**
+ * Every column of `profiles`, enumerated rather than starred.
+ *
+ * A star select asks Postgres to expand it to every column and requires SELECT
+ * on all of them — so once `phone` is revoked (see
+ * `.claude/notes/g3-phone-column-revoke-plan.md`) a star does not silently omit
+ * the column, it fails the whole query with `permission denied for column
+ * phone`. This is the auth path: that is not a degraded profile screen, it is
+ * nobody being able to log into the app.
+ *
+ * This list is deliberately IDENTICAL to what the star returns today. The
+ * revoke has not happened yet and this change is a behavioural no-op on
+ * purpose, so it can ship and be confirmed on real devices by itself. The five
+ * columns marked below leave this list in the same commit that reroutes their
+ * readers through the definer RPC; removing one before then just blanks a
+ * field.
+ *
+ * PostgREST defaults to the star when `.select()` is called with no argument,
+ * so a future bare call reintroduces the hazard. Use this constant.
+ */
+const PROFILE_COLUMNS =
+  // Withheld at the revoke and rerouted through the definer RPC:
+  // phone, email, student_email, stripe_customer_id, guest_phone.
+  // Kept on ONE literal line: supabase-js infers the row type from the literal
+  // type of this string, and any concatenation or .join() widens it to `string`,
+  // which degrades every field to GenericStringError.
+  "id, name, role, company_id, avatar_url, created_at, is_active, deactivation_pending, deleted_at, notification_prefs, push_token, is_guest, student_verified, student_institution_id, student_verified_at, phone, email, student_email, stripe_customer_id, guest_phone";
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -80,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("*")
+      .select(PROFILE_COLUMNS)
       .eq("id", userId)
       .maybeSingle();
 
@@ -109,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!userId) return;
     const { data } = await supabase
       .from("profiles")
-      .select("*")
+      .select(PROFILE_COLUMNS)
       .eq("id", userId)
       .maybeSingle();
     if (data) {
