@@ -17,6 +17,44 @@ live and proved to be a no-op — the real form is drop-and-re-grant.
 
 ---
 
+## APPLIED AND VERIFIED LIVE — 2026-08-23
+
+`20260764` (definer readers) and `20260765` (the revoke) are **applied to the live
+DB**, and both clients are shipped: app build cut and on device, dashboard deployed
+from `5d268cd`. Dispatch board and both app roles confirmed working by hand after
+the revoke — numbers rendering, no blank fields, no errors.
+
+Evidence, so a later session does not have to re-derive it (and does not mistake
+these files for proof the SQL ran — see `migration-files-are-not-applied-state`):
+
+| check | result |
+|---|---|
+| `has_column_privilege` over all 20 columns of `profiles` | exactly 5 false — `phone`, `guest_phone`, `email`, `student_email`, `stripe_customer_id` — and 15 true, matching the GRANT list one-for-one |
+| `profile_phone()` — unrelated driver / own-company staff / self | null / number / number |
+| `profile_phone`, `profile_phones` via publishable key (curl) | `401` `42501 permission denied for function` |
+| `SELECT` on `profiles` via publishable key (curl) | `401` `42501 permission denied for table` |
+| `phone_is_registered` via publishable key (curl) | `200` — pre-session signup path intact |
+
+Two things learned in the applying that are not obvious from the migration:
+
+- **The grant list's completeness is a separate check from its correctness.** Verifying
+  that `phone` is false and `name` is true proves the intended withholds landed; it does
+  not prove no live column was missed when the list was enumerated by hand. A missed
+  column does not read empty — the client still requests it and PostgREST fails the
+  **whole select** with `42501`. That is a hard dispatch outage, not a blank field, and it
+  is a different signature from the `PROFILE_COLUMNS` drift the table comment warns about.
+  Run the `pg_attribute` enumeration, not a spot check.
+- **Order was push-then-revoke, and it mattered.** The dashboard was 4 commits behind on
+  origin, still selecting `phone` in `batchProfiles` and filtering `.eq("phone", ...)` on
+  manual booking. Applying the revoke against that deployment would have taken out the ride
+  board, driver list, staff table and guest booking — dispatch, not the app. The mobile half
+  of the gate is a build on devices; the dashboard half is a deploy, and it is easy to
+  count only the first.
+
+Rollback, if it is ever needed: `GRANT SELECT ON public.profiles TO authenticated;`
+
+---
+
 ## 0. The prerequisite — ▲ DONE 2026-08-23 (`2f298c5` app, `d88fd8b` dashboard)
 
 Shipped as a behavioural no-op, both repos, dashboard build clean and app
@@ -337,7 +375,7 @@ removal. The type fields went with them.
 
 ---
 
-## Open before §1 is applied — worked 2026-08-23
+## Open before §1 is applied — worked 2026-08-23, CLOSED except item 1
 
 **1. Realtime column filtering — fixed by construction, premise still unverified.**
 Both auth hooks now MERGE `payload.new` over the existing profile instead of
@@ -370,7 +408,7 @@ SELECT pr.prattrs, c.relname, p.pubname
  WHERE c.relname = 'profiles';
 ```
 
-**2. `profile_phone()` denial cases — written, not yet runnable.** Added as
+**2. `profile_phone()` denial cases — DONE 2026-08-23, all ran, all passed.** Added as
 section 9 of `g3-profiles-phone-exposure-check.sql`: driver→carried passenger
 must be null, staff-at-another-company must be null, own-company dispatch must
 get the number, self must get own, a retired guest must resolve through
@@ -389,7 +427,7 @@ each other either. `find_passenger_by_phone()` must mirror this exactly — matc
 `phone` only, never `guest_phone` — and the reason is now a real dependency, not
 a preference.
 
-**4. The hand-maintained grant list.** Both repos' `PROFILE_COLUMNS` plus the
+**4. The hand-maintained grant list — DONE, the `COMMENT ON TABLE` shipped in `20260765`.** Both repos' `PROFILE_COLUMNS` plus the
 migration: three edits per new column, or it silently reads empty. Ship a
 `COMMENT ON TABLE public.profiles` in the revoke migration saying exactly that,
 naming both file paths.
