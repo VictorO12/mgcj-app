@@ -375,38 +375,39 @@ removal. The type fields went with them.
 
 ---
 
-## Open before §1 is applied — worked 2026-08-23, CLOSED except item 1
+## Open before §1 is applied — worked 2026-08-23, ALL CLOSED
 
-**1. Realtime column filtering — fixed by construction, premise still unverified.**
-Both auth hooks now MERGE `payload.new` over the existing profile instead of
-replacing it (`AuthContext.tsx`, `useAuth.ts`), so the answer no longer gates
-phase 2: if the WAL payload arrives short of the private columns the merge keeps
-them, and if it arrives complete the merge is a no-op. A key that IS present
-still applies, null included, so no genuine clear is lost.
+**1. Realtime column filtering — ANSWERED 2026-08-23. Not a bypass.**
 
-Resolved while checking the blast radius: the `rides` subscriptions never
-carried profile data — `postgres_changes` payloads are single rows, no joins —
-so there is nothing to re-examine there. `DiscountsScreen.tsx:102` reads only
-`student_verified`, which stays granted, and calls `refetch()` anyway.
+`realtime.apply_rls` calls `pg_catalog.has_column_privilege(working_role, entity_,
+c.name, 'SELECT')` in three places: computing `is_selectable` for `columns`, again for
+`old_columns`, and when building the payload's `columns` metadata. Both the `record` and
+`old_record` aggregations then filter on `is_selectable`. `working_role` is
+`subs.claims_role` — the role off the subscriber's JWT — so the withheld columns are
+stripped from the WAL payload per subscriber, before it leaves Postgres.
 
-Still worth answering, because it decides whether realtime is a channel that
-BYPASSES the revoke for anyone's row, not just one's own:
+`pg_publication_rel.prattrs` for `profiles` in `supabase_realtime` is **null**: no
+publication-level column list, which is a separate mechanism from grants and would have
+filtered regardless. So the answer rested entirely on `apply_rls`, and `apply_rls`
+honours the grant.
 
-```sql
--- Does Supabase's WAL filter consult column privileges at all?
-SELECT pg_get_functiondef(p.oid)
-  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
- WHERE n.nspname = 'realtime' AND p.proname IN ('apply_rls','list_changes');
--- look for has_column_privilege(...) in the body
+Two consequences:
 
--- And whether the publication itself carries a column list (prattrs), which is
--- a SEPARATE mechanism from grants and would filter regardless.
-SELECT pr.prattrs, c.relname, p.pubname
-  FROM pg_publication_rel pr
-  JOIN pg_class c ON c.oid = pr.prrelid
-  JOIN pg_publication p ON p.oid = pr.prpubid
- WHERE c.relname = 'profiles';
-```
+- **The merge fix is load-bearing, not defensive.** Payloads on `profiles` now genuinely
+  DO arrive short of the private columns — that is designed behaviour, not a maybe. Had
+  the auth hooks still been replacing the profile on `payload.new`, the first realtime
+  update to one's own row after the revoke would have blanked phone and email in-app.
+  `df8e971` / `f3f4aae` fixed a certainty, not a risk. Do not revert them to a replace.
+- **A withheld primary key would hard-fail.** `apply_rls` returns `Error 401:
+  Unauthorized` for a role with no SELECT on the pkey. `id` is granted to `authenticated`,
+  so this is fine — but `anon` now has SELECT on NOTHING in `profiles`, `id` included, so
+  any anon subscription to that table takes the 401 path. Nothing subscribes anonymously
+  today. Tripwire for later.
+
+Blast radius, checked while answering: the `rides` subscriptions never carried profile
+data — `postgres_changes` payloads are single rows, no joins — so there is nothing to
+re-examine there. `DiscountsScreen.tsx:102` reads only `student_verified`, which stays
+granted, and calls `refetch()` anyway.
 
 **2. `profile_phone()` denial cases — DONE 2026-08-23, all ran, all passed.** Added as
 section 9 of `g3-profiles-phone-exposure-check.sql`: driver→carried passenger
