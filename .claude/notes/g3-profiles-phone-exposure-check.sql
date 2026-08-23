@@ -180,3 +180,126 @@ BEGIN;
   SELECT count(*) AS should_be_zero
     FROM profiles WHERE id = '<PASSENGER PROFILE UUID>'::uuid;
 ROLLBACK;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- 8. POST-APPLY -- the revoke actually took effect
+-- ═══════════════════════════════════════════════════════════════════════
+-- Run only AFTER the revoke migration. Query 5 rehearsed live 2026-08-23
+-- showed `REVOKE SELECT (phone)` is a NO-OP against a table-level grant --
+-- Postgres warns, access is unchanged. So the migration drops the table
+-- grant and re-grants a column list, and this is how we know it landed.
+--
+-- Expect a PERMISSION ERROR (42501), not a null. A null would mean the row
+-- was denied for some other reason and would leave the question unanswered --
+-- the same false-relief shape as cron.job_run_details reporting SUCCESS.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<DRIVER PROFILE UUID>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  -- must ERROR:
+  SELECT phone FROM profiles WHERE id = '<PASSENGER PROFILE UUID>'::uuid;
+ROLLBACK;
+
+-- ...and the row itself must STILL be readable. Revoking the column instead of
+-- narrowing the policy was the whole point: ride history and DriverProfileSheet
+-- need the name and avatar. This must return a row.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<DRIVER PROFILE UUID>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT id, name, avatar_url FROM profiles WHERE id = '<PASSENGER PROFILE UUID>'::uuid;
+ROLLBACK;
+
+-- The star must fail too, which is what phase 0 (2f298c5 / d88fd8b) existed to
+-- get ahead of. If this does NOT error, the revoke did not land.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<DRIVER PROFILE UUID>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT * FROM profiles WHERE id = auth.uid();
+ROLLBACK;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- 9. POST-APPLY -- profile_phone() admits exactly who it should
+-- ═══════════════════════════════════════════════════════════════════════
+-- The `and`/`or` nesting in that function is the kind that survives a later
+-- edit wrong, and every wrong version FAILS OPEN (returns a number to someone
+-- who should get null). Test the denials, not just the grants.
+
+-- (a) A DRIVER must get NULL for a passenger they actually carried.
+--     Drivers are not staff, so they should fall through both branches. This
+--     is the exact relationship that made the original leak, so it is the one
+--     case that must not come back.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<DRIVER PROFILE UUID>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT profile_phone('<PASSENGER PROFILE UUID>'::uuid) AS must_be_null;
+ROLLBACK;
+
+-- (b) Staff at ANOTHER company must get NULL for that same passenger.
+--     This is the `OR role = 'passenger'` hole in the existing policy, which
+--     is exactly what the ride/company scope exists to not reproduce.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<ADMIN AT A DIFFERENT COMPANY>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT profile_phone('<PASSENGER PROFILE UUID>'::uuid) AS must_be_null;
+ROLLBACK;
+
+-- (c) Dispatch at the passenger's OWN company must get the number back.
+--     The negative cases above are worthless without this: a function that
+--     returns null to everyone passes (a) and (b) and breaks dispatch.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<ADMIN AT THE RIDE COMPANY>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT profile_phone('<PASSENGER PROFILE UUID>'::uuid) AS must_be_the_number;
+ROLLBACK;
+
+-- (d) Anyone must get their OWN number.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<PASSENGER PROFILE UUID>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT profile_phone(auth.uid()) AS must_be_the_number;
+ROLLBACK;
+
+-- (e) A RETIRED GUEST's number still resolves for dispatch, via guest_phone.
+--     claim_guest_rides() moves the number off `phone` onto `guest_phone` when
+--     a guest signs up for real, so a guest's historic rides would otherwise
+--     show a blank number to the dispatcher looking at them. Nothing in either
+--     client reads guest_phone today, so the coalesce in profile_phone() is
+--     what finally delivers what 20260758 moved the column for.
+BEGIN;
+  SELECT set_config('request.jwt.claims',
+                    json_build_object('sub',  '<ADMIN AT THE RIDE COMPANY>',
+                                      'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  SELECT profile_phone(id) AS must_be_the_number, name
+    FROM profiles WHERE is_guest AND guest_phone IS NOT NULL LIMIT 1;
+ROLLBACK;
+
+-- (f) anon must not be able to call it at all -- expect 42501.
+--     `revoke from public` does NOT cover this: Supabase default privileges
+--     grant EXECUTE directly to anon and authenticated, a distinct grant that
+--     survives revoking PUBLIC. Bitten three times (20260757, 20260762, 20260763).
+--     Run this one from curl with the publishable key, not here -- SET ROLE anon
+--     inside a superuser session does not reproduce a PostgREST request.
+--
+--   curl -s -o /dev/null -w '%{http_code}\n' \
+--     -X POST "$SUPABASE_URL/rest/v1/rpc/profile_phone" \
+--     -H "apikey: $SUPABASE_ANON_KEY" \
+--     -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+--     -H 'Content-Type: application/json' \
+--     -d '{"p_profile_id":"<PASSENGER PROFILE UUID>"}'
+--   -> expect 401/404, never 200
