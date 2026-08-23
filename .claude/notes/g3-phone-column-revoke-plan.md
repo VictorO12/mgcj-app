@@ -138,13 +138,36 @@ cannot carve a hole in it. Had this shipped as written it would have read as a
 clean apply, closed the ticket, and changed nothing — the same shape as
 `cron.job_run_details` reporting SUCCESS while the function 401'd.
 
-The real form is drop the table grant and re-grant an explicit column list:
+The real form is drop the table grant and re-grant an explicit column list.
+Live column list captured 2026-08-23:
 
 ```sql
 revoke select on public.profiles from anon;            -- no re-grant: see below
 revoke select on public.profiles from authenticated;
-grant  select (<every column except phone>) on public.profiles to authenticated;
+grant  select (
+  id, name, role, created_at, push_token, avatar_url, stripe_customer_id,
+  email, company_id, student_verified, student_email, student_institution_id,
+  student_verified_at, is_active, deactivation_pending, deleted_at,
+  notification_prefs, is_guest
+) on public.profiles to authenticated;
 ```
+
+### ▲ `guest_phone` must be withheld too — it is the same number
+
+`20260758` added `profiles.guest_phone`: when a guest signs up for real,
+`claim_guest_rides()` moves the number off `phone` onto `guest_phone` so the
+retired shell row stops colliding with the new profile "while staying visible to
+dispatch on historic rides". It holds a **real phone number**. Granting it while
+revoking `phone` reopens the exposure through the new column — a driver who
+carried that guest reads their number via the same `shares_ride_with` branch,
+and the migration would look like it had closed the leak.
+
+Nothing reads `guest_phone` in either client today (grepped both repos: zero
+hits), so withholding it breaks nothing. `profile_phone()` should return
+`coalesce(phone, guest_phone)` — that actually *delivers* the dispatch
+visibility the column was added for, which no code currently provides.
+`find_passenger_by_phone()` must NOT match against it: a retired guest never
+matching a dispatch lookup again is the whole point of the move.
 
 `anon` gets nothing back. Every policy on `profiles` is `TO authenticated`, so
 RLS already denies anon every row; the grant is dead weight that only widens the
@@ -153,22 +176,27 @@ blast radius of a future policy written without a role clause. Guest bookers are
 (`phone_is_registered`) are definer RPCs, not table reads — so nothing anon-side
 reads this table today.
 
-**The column list must come from the live DB**, not from the migrations — a
-column present live but missing from the grant is a silently-empty field, not an
-error. Enumerate with the `information_schema.columns` query in the check file,
-and add a line to the migration listing what was granted so the next person can
-diff it.
+**The column list came from the live DB**, not from the migrations — a column
+present live but missing from the grant is a silently-empty field, not an error.
+Re-enumerate before applying in case anything landed in between, and keep the
+list in the migration body so the next person can diff it.
 
 Consequence to accept: `profiles` columns become a maintenance surface. Every
 new-column migration needs a grant line, the same way new tables have needed one
 since Oct 2026. Worth a comment on the table itself saying so.
 
 Also settle in the same pass:
-- **A `PUBLIC` grant**, which both roles inherit. Check query 3's
-  `grantee IN (...)` filter excluded the only row that would show it.
-- **Any view over `profiles`** — a non-`security_invoker` view keeps its owner's
-  access and would leave the number readable through a different door. None in
-  the migrations, which per the standing lesson says nothing about live.
+- ~~**A `PUBLIC` grant**~~ — checked 2026-08-23, `relacl` is
+  `{postgres,anon,authenticated,service_role}` with no PUBLIC entry. Clear.
+- ~~**Any view over `profiles`**~~ — checked live, no view or matview references
+  the table. Clear.
+- **Three `{public}`-role policies on `profiles`** (`Anonymous users can insert
+  their own profile`, `profiles: insert own`, `profiles: update own`) — all
+  INSERT/UPDATE, so none of them keeps a read alive after the SELECT revoke. But
+  the first is very likely dead since `9ce76a8` moved guest creation to the
+  service role, and `{public}` is the role clause you do not want on a policy
+  someone later widens to SELECT. Separate cleanup, named here so it is on the
+  record.
 - **`UPDATE (phone)` is untouched and stays that way.** RLS confines a client to
   its own row, and `OTPVerifyScreen`'s upsert writes `phone` on every sign-in —
   revoking the write would break signup. Named because "revoked the phone column"
