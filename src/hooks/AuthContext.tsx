@@ -65,12 +65,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadingHeldRef = useRef(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      sessionRef.current = session;
-      if (session) fetchProfile(session.user.id);
-      else setLoading(false);
-    });
+    // The .catch is load-bearing, not defensive dressing: getSession() awaits
+    // the client's initialize(), which reads SecureStore and can fire a token
+    // refresh over the network. An unhandled rejection there left `loading`
+    // true with nothing scheduled to ever set it false — the same forever
+    // spinner as the fetchProfile latch below, one call earlier. Treat a
+    // failure to READ the session as no session: the Welcome screen is a
+    // recoverable state, a spinner is not.
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        setSession(session);
+        sessionRef.current = session;
+        if (session) fetchProfile(session.user.id);
+        else setLoading(false);
+      })
+      .catch((err) => {
+        console.warn("[Auth] getSession failed:", err);
+        setLoading(false);
+      });
 
     const {
       data: { subscription },
@@ -148,37 +161,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return (data ?? {}) as Partial<Profile>;
   }
 
+  /**
+   * Both exits — the ref and the loading flag — are in a `finally`, and that is
+   * the whole point of the shape.
+   *
+   * They used to be plain statements on the happy path, so anything that
+   * *rejected* rather than returning `{ error }` (a fetch that never resolves
+   * is one thing, a fetch that throws is another) skipped both. That left
+   * `loading` true, which is a full-screen spinner with no exit, AND left
+   * `fetchingForRef` pinned to this user id — which made the spinner
+   * permanent rather than transient, because the early-return in
+   * `onAuthStateChange` above (`if (fetchingForRef.current === session.user.id)
+   * return;`) then discarded every later event for that user, TOKEN_REFRESHED
+   * included. Nothing but a reload could clear it, which is exactly the
+   * reported symptom: cold start hangs, force-quit and reopen is fine.
+   *
+   * The retry loop was never the culprit — it is bounded (10 x 600ms) and ends
+   * by settling `loading`.
+   */
   async function fetchProfile(userId: string, retries = 10) {
     fetchingForRef.current = userId;
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .select(PROFILE_COLUMNS)
-      .eq("id", userId)
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select(PROFILE_COLUMNS)
+        .eq("id", userId)
+        .maybeSingle();
 
-    // No row yet — retry (trigger hasn't fired or upsert pending)
-    if (!data && retries > 0) {
-      await new Promise((r) => setTimeout(r, 600));
-      return fetchProfile(userId, retries - 1);
-    }
+      if (error) console.log("[Auth] profile query error:", error.message);
 
-    // Row exists but no role yet — retry briefly (driver upsert may be in flight)
-    if (data && !data.role && retries > 0) {
-      await new Promise((r) => setTimeout(r, 600));
-      return fetchProfile(userId, retries - 1);
-    }
+      // No row yet — retry (trigger hasn't fired or upsert pending)
+      if (!data && retries > 0) {
+        await new Promise((r) => setTimeout(r, 600));
+        return await fetchProfile(userId, retries - 1);
+      }
 
-    fetchingForRef.current = null;
-    console.log("[Auth] profile settled:", data?.role ?? "none");
-    // Merged HERE, not by the callers. fetchProfile and refetch are the only
-    // two places a complete profile is constructed, and both go through this
-    // shape on purpose: a bundle merged in anywhere else is dropped the next
-    // time either one runs -- the same replace-clobbers-merge bug as the
-    // realtime handler above, one door over.
-    setProfile(data ? { ...data, ...(await fetchPrivateFields()) } : null);
-    if (!loadingHeldRef.current) {
-      setLoading(false);
+      // Row exists but no role yet — retry briefly (driver upsert may be in flight)
+      if (data && !data.role && retries > 0) {
+        await new Promise((r) => setTimeout(r, 600));
+        return await fetchProfile(userId, retries - 1);
+      }
+
+      console.log("[Auth] profile settled:", data?.role ?? "none");
+      // Merged HERE, not by the callers. fetchProfile and refetch are the only
+      // two places a complete profile is constructed, and both go through this
+      // shape on purpose: a bundle merged in anywhere else is dropped the next
+      // time either one runs -- the same replace-clobbers-merge bug as the
+      // realtime handler above, one door over.
+      setProfile(data ? { ...data, ...(await fetchPrivateFields()) } : null);
+    } catch (err) {
+      // Deliberately does NOT clear `profile`: a transient failure on a later
+      // refetch must not blank a profile that is already correct. Releasing
+      // the gate is the part that matters.
+      console.warn("[Auth] profile fetch threw:", err);
+    } finally {
+      fetchingForRef.current = null;
+      if (!loadingHeldRef.current) {
+        setLoading(false);
+      }
     }
   }
 

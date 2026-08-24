@@ -39,9 +39,15 @@ function RootNavigator() {
   }, [profile?.deleted_at]);
 
   if (loading) {
+    // The two full-screen spinners in this file (this one and the font gate in
+    // <App/>) used to be pixel-identical, which made a "stuck on a spinner"
+    // report impossible to attribute: fonts and session are completely
+    // different failure paths. Label them under __DEV__ so the next occurrence
+    // names itself instead of needing a guess.
     return (
       <View style={[styles.loading, { backgroundColor: colors.background }]}>
         <ActivityIndicator color={colors.accentOrange} size="large" />
+        {__DEV__ && <Text style={styles.gateLabel}>session</Text>}
       </View>
     );
   }
@@ -94,13 +100,26 @@ function RootNavigator() {
 }
 
 export default function App() {
-  const [fontsLoaded] = useFonts(FONTS);
+  const [fontsLoaded, fontError] = useFonts(FONTS);
 
-  if (!fontsLoaded) {
+  // Proceed on a font ERROR as well as on success. Discarding the second
+  // element meant any font-load failure pinned `fontsLoaded` at false forever
+  // and the app sat on this spinner with no way out but a relaunch — a
+  // permanent hang for a purely cosmetic asset. applyFontPatch() maps weights
+  // onto Manrope but the platform default is a working fallback, so an
+  // unstyled app beats an app that never launches.
+  const fontsReady = fontsLoaded || !!fontError;
+
+  useEffect(() => {
+    if (fontError) console.warn("[Fonts] load failed, continuing:", fontError);
+  }, [fontError]);
+
+  if (!fontsReady) {
     // Brief; the native splash covers cold start, this covers the font-load tail.
     return (
       <View style={[styles.loading, { backgroundColor: "#111827" }]}>
         <ActivityIndicator color="#E8500A" size="large" />
+        {__DEV__ && <Text style={styles.gateLabel}>fonts</Text>}
       </View>
     );
   }
@@ -125,6 +144,12 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+  },
+  gateLabel: {
+    marginTop: 12,
+    color: "#6B7280",
+    fontSize: 12,
+    letterSpacing: 1,
   },
   suspended: {
     flex: 1,
