@@ -12,6 +12,12 @@
 # service-role key (RLS hides every row from anon).
 #
 # Run:  SERVICE_KEY=<service_role key> bash .claude/notes/liveness-or-test.sh
+#
+# RESULT 2026-08-23 -- PASS: C=5, A=0, B=0. PostgREST AND-combines repeated
+# `or=` params, so the liveness filter and the vehicle-class filter both apply
+# on a class-restricted release. The control (C) is what makes A=0 and B=0
+# meaningful -- a bad key, a malformed request or an empty table would also
+# produce A=0, and would look identical to a pass.
 
 U="https://hhsqwmftrrmtodvvuyxq.supabase.co"
 K="${SERVICE_KEY:?paste the service_role key: SERVICE_KEY=... bash $0}"
