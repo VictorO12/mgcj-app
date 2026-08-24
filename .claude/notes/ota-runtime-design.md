@@ -422,6 +422,54 @@ Expo Go reads `v1.0.0 · base`. That also exercises the fallback path: `otaEnabl
 false there, `currentlyRunning` is empty, and `getBuildInfo` defaults `embedded` to true.
 Day-to-day iteration is unchanged.
 
+### Test 11 (escape hatch) — PASS, all cases, 2026-08-23
+
+Harness: `HARD_BLOCK_ESCAPE_MS` temporarily 2 min, plus a long-press readout of the
+persisted `ota.blockSince` (blocker id, clock age, threshold, armed y/n). Both reverted
+afterwards; the shipped constant was re-verified as 2h against a clean tree before
+republishing.
+
+- **No inheritance from a dead ride (the v3 regression) — PASS.** A stale, *armed*
+  record for a previous ride sat in storage; booking a new ride showed a new blocker id
+  with age `0s` and `escape: not yet`. Both earlier implementations would have failed
+  here.
+- **Case c, held while the clock is young — PASS.** The resume downloaded the bait,
+  got `fetched: true`, tried an immediate apply, and the young clock refused it.
+- **Case a, applied once armed — PASS.** Same pending update, same hard block, refused
+  at ~60s and applied at ~130s. Only the clock changed. This is the E7 answer: a ride
+  that pins the block cannot starve the device of its own fix.
+- **Case d, booking sheet never escapes — PASS.** Held across a 3+ minute wait and
+  repeated background/foreground cycles, then applied immediately once the sheet closed.
+  `id: null` means `blockSinceRef` stays null and `applyIfSafe` refuses on the
+  `since !== null` check regardless of elapsed time.
+
+**Test-design lesson, cost one wasted run:** the first attempt put a publish round-trip
+*inside* the 2-minute window, so the clock armed while waiting on the operator and case c
+never got a fair run. Publish the bait **before** the timed sequence starts, so nothing
+in the measured window depends on another party. The bait being undownloaded at that
+point is a feature — the resume both fetches and refuses it, which is the exact code
+path under test.
+
+### Known sharp edge (documented, not fixed)
+
+`ota.blockSince` is deliberately never cleared — clearing it on `level !== "hard"` would
+reintroduce the remount bug, since the async ride fetch makes the first render after a
+remount read `none`. The consequence is that **a ride id which blocks, stops blocking,
+then blocks again inherits its original clock.** The realistic path is a driver offered
+ride X (a 30s `pendingRide` block), timing out, then being re-offered the same ride on
+`assign-ride`'s second cycling pass. At the shipped 2h threshold this is unreachable —
+offers cycle in minutes — so it is recorded rather than fixed; the fix would be worse
+than the problem.
+
+### What a cold start does, and why the gate can't stop it
+
+A cold start applies a pending update **natively, before any JS runs** — the gate never
+participates. So the HARD block only protects *warm* sessions. That is correct (an app
+that isn't running has no in-memory state to lose), but it has a testing consequence:
+"survives a remount" cannot be demonstrated by restarting the app, and signing out
+dissolves the block. The property was verified by instrument instead — watching the
+persisted clock keep climbing across background/foreground cycles rather than resetting.
+
 ### Remaining steps
 
 Config-layer steps 1–7 are in `ota-updates-expo-updates.md`. These extend it.
