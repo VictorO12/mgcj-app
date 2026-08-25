@@ -1,5 +1,5 @@
 export default {
-  name: "M&G C&J",
+  name: "Vellon Dispatch",
   slug: "mgcj-app",
   scheme: "mgcjapp",
   version: "1.0.0",
