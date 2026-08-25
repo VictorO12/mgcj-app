@@ -6,9 +6,91 @@ import { AppState } from 'react-native'
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl
 const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey
 
+// expo-secure-store warns (JS-side, both platforms) above 2048 bytes and its
+// own message says a future SDK "may throw". It does NOT truncate today: on
+// Android the value goes through AESEncryptor into
+// SharedPreferences.putString, which has no per-string cap, and on iOS into
+// the Keychain. So an oversized session is a forward-compatibility risk, not a
+// live corruption risk — but if that write ever starts throwing, supabase-js
+// gets a rejected setItem, the session never persists, and the app becomes a
+// login loop. Measure it rather than assume: log the byte length (never the
+// value — it is a live access + refresh token) on every persist in dev.
+//
+// Counted by hand rather than with TextEncoder: this probe runs *before* the
+// write, so anything it throws stops the session persisting — it would cause
+// the very login loop it exists to rule out. TextEncoder's presence is a
+// Hermes-runtime question that a typecheck does not answer, so don't depend on
+// it, and keep the whole call in a try/catch for the same reason.
+const utf8Bytes = (value: string) => {
+  let bytes = 0
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i)
+    if (c >= 0xd800 && c < 0xdc00 && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next < 0xe000) {
+        bytes += 4
+        i++
+        continue
+      }
+    }
+    bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3
+  }
+  return bytes
+}
+
+// Byte budget only — never log a value. The persisted session is a live
+// access/refresh token pair; the whole point is to size it, not to expose it.
+// The limit is expo-secure-store's VALUE_BYTES_LIMIT (2048), tripped on
+// `bytes > 2048`. It only console.warns today, but the warning says a future
+// SDK may throw, and that WOULD be the login loop this exists to rule out.
+const measure = (key: string, value: string) => {
+  if (!__DEV__) return
+  const bytes = utf8Bytes(value)
+  const slack = 2048 - bytes
+  console.log(
+    `[SecureStore] ${key}: ${bytes} bytes` +
+      (bytes > 2048
+        ? ' — OVER the 2048-byte limit'
+        : ` — ${slack} bytes of headroom`)
+  )
+
+  // Where the budget goes, so we know what would push it over.
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object') return
+    const parts: string[] = []
+    for (const [k, v] of Object.entries(parsed)) {
+      if (k === 'user') continue
+      parts.push(`${k}=${utf8Bytes(typeof v === 'string' ? v : JSON.stringify(v))}`)
+    }
+    const user = (parsed as Record<string, unknown>).user
+    if (user && typeof user === 'object') {
+      const u = user as Record<string, unknown>
+      parts.push(`user=${utf8Bytes(JSON.stringify(u))}`)
+      for (const k of ['email', 'phone', 'identities', 'user_metadata', 'app_metadata']) {
+        if (u[k] === undefined) continue
+        const size = utf8Bytes(
+          typeof u[k] === 'string' ? (u[k] as string) : JSON.stringify(u[k])
+        )
+        parts.push(`  user.${k}=${size}`)
+      }
+    }
+    console.log(`[SecureStore] breakdown: ${parts.join(' ')}`)
+  } catch {
+    // A non-JSON value is fine — the total above is the number that matters.
+  }
+}
+
 const ExpoSecureStoreAdapter = {
   getItem: (key: string) => SecureStore.getItemAsync(key),
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
+  setItem: (key: string, value: string) => {
+    try {
+      measure(key, value)
+    } catch {
+      // Instrumentation must never be able to block a session write.
+    }
+    return SecureStore.setItemAsync(key, value)
+  },
   removeItem: (key: string) => SecureStore.deleteItemAsync(key),
 }
 
