@@ -10,8 +10,6 @@ import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
 import { getDeviceToken, clearDeviceToken } from "../lib/deviceSession";
 import * as Updates from "expo-updates";
-import * as bootTrace from "../lib/bootTrace";
-import { resetAttemptCounters } from "../lib/timeoutFetch";
 
 interface AuthContextType {
   session: Session | null;
@@ -24,7 +22,16 @@ interface AuthContextType {
    * with no exit. See the watchdog below.
    */
   stalled: boolean;
+  /**
+   * The launch is blocked on a request that failed for lack of connectivity,
+   * rather than on anything the app can finish by waiting. Distinct from
+   * `stalled`, which means "slow for an unknown reason" — the two want
+   * different words on screen and different recovery.
+   */
+  offline: boolean;
   retryInit: () => void;
+  /** Manual "try again"; the same thing the auto-retry does on its own. */
+  retryConnection: () => void;
   signOut: () => Promise<void>;
   refetch: () => Promise<void>;
   // Driver registration uses these to prevent the home screen from flashing
@@ -67,11 +74,39 @@ const PROFILE_COLUMNS =
   // which degrades every field to GenericStringError.
   "id, name, role, company_id, avatar_url, created_at, is_active, deactivation_pending, deleted_at, notification_prefs, push_token, is_guest, student_verified, student_institution_id, student_verified_at";
 
+/**
+ * Is this failure "there is no network" rather than "the server said no"?
+ *
+ * Deliberately message-based rather than using a connectivity library:
+ * @react-native-community/netinfo and expo-network are both NATIVE modules, and
+ * neither is installed. Adding one changes the fingerprint, which orphans every
+ * installed build from OTA until a new binary ships — a heavy price for a
+ * string on a spinner. What we actually need to know is not "does the device
+ * have an interface up" but "did this request fail because it could not leave
+ * the phone", and the thrown error already answers that.
+ *
+ * React Native's fetch throws `TypeError: Network request failed` with no
+ * connectivity. The abort from timeoutFetch counts too: a request that never
+ * answered inside the ceiling is, from the user's point of view, the same
+ * condition and the same fix.
+ */
+function isNetworkError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string } | null;
+  const msg = String(e?.message ?? err ?? "").toLowerCase();
+  return (
+    e?.name === "AbortError" ||
+    msg.includes("network request failed") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("aborted")
+  );
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [stalled, setStalled] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [initAttempt, setInitAttempt] = useState(0);
   const sessionRef = useRef<Session | null>(null);
   const fetchingForRef = useRef<string | null>(null);
@@ -130,14 +165,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   function retryInit() {
     Updates.reloadAsync().catch((err) => {
       console.warn("[Auth] reload unavailable, re-running init:", err);
-      resetAttemptCounters();
-      bootTrace.mark("retry (in-place re-init)");
       fetchingForRef.current = null;
       setStalled(false);
       setLoading(true);
       setInitAttempt((n) => n + 1);
     });
   }
+
+  /**
+   * Re-attempt whatever the launch is blocked on. Safe to call repeatedly.
+   *
+   * Deliberately NOT a reload: unlike the init deadlock (which needed a fresh JS
+   * context because `initializePromise` is memoised and never reset), a failed
+   * network read leaves init RESOLVED. Calling `getSession()` again genuinely
+   * re-runs the read, so recovery costs nothing and destroys no state.
+   */
+  function retryConnection() {
+    supabase.auth
+      .getSession()
+      .then(({ data: { session }, error }) => {
+        if (session) {
+          setOffline(false);
+          setStalled(false);
+          setSession(session);
+          sessionRef.current = session;
+          if (fetchingForRef.current !== session.user.id) {
+            fetchingForRef.current = session.user.id;
+            fetchProfile(session.user.id);
+          }
+        } else if (!error) {
+          // Genuinely signed out — stop calling this offline.
+          setOffline(false);
+          setLoading(false);
+        }
+      })
+      .catch((err) => console.warn("[Auth] retry failed:", err));
+  }
+
+  /**
+   * Auto-recovery. The user asked not to have to press anything, and this is
+   * the case where that is actually achievable: nothing is wedged, the phone
+   * simply has no signal yet, so re-asking on a timer will start working the
+   * moment it does.
+   *
+   * 4s is a compromise, not a measurement. Note one wrinkle: auth-js caches a
+   * failed refresh for REFRESH_FAILURE_COOLDOWN_MS (60s) keyed by refresh
+   * token, so if the block is a failed REFRESH some of these ticks are answered
+   * from that cache rather than the network, and recovery can lag the network
+   * coming back by up to a minute. When the block is the profile query — the
+   * common case, and the one seen in airplane mode — there is no cache and
+   * recovery is immediate.
+   */
+  useEffect(() => {
+    // `loading` is in the condition as a backstop: retrying is only ever useful
+    // while the gate is up, so even if some future path leaves `offline` set
+    // after launch, the timer cannot outlive the screen it exists for.
+    if (!offline || !loading) return;
+    const id = setInterval(retryConnection, 4000);
+    return () => clearInterval(id);
+  }, [offline, loading]);
 
   useEffect(() => {
     // The .catch is load-bearing, not defensive dressing: getSession() awaits
@@ -147,36 +233,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // spinner as the fetchProfile latch below, one call earlier. Treat a
     // failure to READ the session as no session: the Welcome screen is a
     // recoverable state, a spinner is not.
-    // The single most important number in the trace. getSession() awaits
-    // initializePromise, so this span covers the storage read AND the proactive
-    // refresh — and the storage/net spans nested inside it say which half.
-    bootTrace.spanStart("auth.getSession");
     supabase.auth
       .getSession()
-      .then(({ data: { session } }) => {
-        bootTrace.spanEnd(
-          "auth.getSession",
-          session
-            ? `session, expired=${
-                session.expires_at
-                  ? session.expires_at * 1000 < Date.now()
-                  : "unknown"
-              }`
-            : "no session",
-        );
+      .then(({ data: { session }, error }) => {
         setSession(session);
         sessionRef.current = session;
         // Same claim check as the subscriber below — whichever path gets here
         // first owns the fetch. Without this the two race and both run.
         if (session) {
+          setOffline(false);
           if (fetchingForRef.current !== session.user.id) {
             fetchingForRef.current = session.user.id;
             fetchProfile(session.user.id);
           }
-        } else setLoading(false);
+        } else if (error) {
+          // A null session WITH an error is a failed read, not a sign-out.
+          // `__loadSession` returns `{ session: null, error }` when a refresh
+          // fails and the access token has already expired — which is exactly
+          // what an offline launch looks like after the app has sat overnight.
+          //
+          // The session is still on disk: `_callRefreshToken` only calls
+          // `_removeSession()` when the error is NOT retryable, and a network
+          // failure is retryable. So dropping to Welcome here would be a lie —
+          // and a costly one, because re-login needs an SMS OTP, i.e. the
+          // network the user does not have. Hold, say why, and retry.
+          console.warn("[Auth] session read failed:", error.message);
+          setOffline(true);
+        } else {
+          // Genuinely signed out: no session, no error.
+          setLoading(false);
+        }
       })
       .catch((err) => {
-        bootTrace.spanEnd("auth.getSession", `THREW: ${String(err).slice(0, 80)}`);
         console.warn("[Auth] getSession failed:", err);
         setLoading(false);
       });
@@ -226,8 +314,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      */
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      bootTrace.mark(`auth event: ${event}`, session ? "session" : "none");
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       sessionRef.current = session;
       if (session) {
@@ -349,12 +436,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function fetchProfile(userId: string, retries = 10) {
     fetchingForRef.current = userId;
     let threw = false;
-    // Only the FIRST attempt is timed. The recursive no-row retries would
-    // otherwise overwrite the span and report 600ms of deliberate waiting as
-    // the query's latency — and this span exists specifically to be compared
-    // against the refresh above, which is the first-vs-all discriminator.
-    const timed = retries === 10;
-    if (timed) bootTrace.spanStart("profile.fetch");
+    let netErr = false;
 
     try {
       // Bounded retry around the QUERY, distinct from the no-row retry below.
@@ -413,13 +495,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const merged = data ? { ...data, ...(await fetchPrivateFields()) } : null;
       profileRef.current = merged;
       setProfile(merged);
+      // Clear here, not only in `retryConnection`. Recovery can arrive by
+      // several routes — the auth subscriber, a foreground token refresh, the
+      // manual button — and if `offline` only cleared on the one route that
+      // happens to be `retryConnection`, the 4s timer below would keep running
+      // for the life of the process behind a perfectly working app.
+      setOffline(false);
     } catch (err) {
       // Deliberately does NOT clear `profile`: a transient failure on a later
       // refetch must not blank a profile that is already correct.
       console.warn("[Auth] profile fetch threw:", err);
       threw = true;
+      // The common offline shape: the session read succeeded from disk, so we
+      // are signed in, and only this query could not leave the phone. The gate
+      // is held below (a driver must not land in the passenger app), so without
+      // this it would sit on a spinner with no explanation.
+      netErr = isNetworkError(err);
+      if (netErr) setOffline(true);
     } finally {
-      if (timed) bootTrace.spanEnd("profile.fetch", threw ? "THREW" : "ok");
       fetchingForRef.current = null;
 
       // Releasing the gate with a session but NO profile is not a safe
@@ -438,15 +531,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         threw && !!sessionRef.current && !profileRef.current;
 
       if (!loadingHeldRef.current && !stuckWithoutProfile) {
-        // Written HERE — at the moment the gate actually releases — so the
-        // persisted total is the real perceived launch time, not the time the
-        // last await happened to finish.
-        bootTrace.mark("gate released");
-        bootTrace.persistTrace();
         setLoading(false);
-      } else if (stuckWithoutProfile) {
+      } else if (stuckWithoutProfile && !netErr) {
         // Show the way out IMMEDIATELY rather than making the user sit through
-        // the 30s watchdog for a failure we already know about. The gate is
+        // the 30s watchdog for a failure we already know about.
+        //
+        // Skipped when the cause is connectivity: `offline` already renders a
+        // truthful message and retries on its own, and "this is taking longer
+        // than usual" alongside it would be both redundant and vaguer. The gate is
         // still held on purpose (see above — a driver must not be dropped into
         // the passenger app), but "held" must never mean "held silently".
         setStalled(true);
@@ -517,7 +609,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, profile, loading, stalled, retryInit, signOut, refetch, holdLoading, releaseLoading }}
+      value={{ session, profile, loading, stalled, offline, retryInit, retryConnection, signOut, refetch, holdLoading, releaseLoading }}
     >
       {children}
     </AuthContext.Provider>

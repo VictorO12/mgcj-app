@@ -3,13 +3,6 @@ import * as SecureStore from 'expo-secure-store'
 import Constants from 'expo-constants'
 import { AppState } from 'react-native'
 import { timeoutFetch } from './timeoutFetch'
-import * as bootTrace from './bootTrace'
-
-// Marks when this module finished evaluating. A large gap between "react
-// mounted" and this one means the delay is JS bundle startup / import chain,
-// not the auth client — the one cause the network and storage spans cannot
-// distinguish, because neither has been reached yet.
-bootTrace.mark('supabase.ts loaded')
 
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl
 const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey
@@ -90,26 +83,7 @@ const measure = (key: string, value: string) => {
 }
 
 const ExpoSecureStoreAdapter = {
-  // Timed because this is the ONE await on the launch path that is not a
-  // network call, and it is awaited BEFORE any request is issued
-  // (`_recoverAndRefresh` reads storage first). If the trace shows this span
-  // taking tens of seconds while the fetch that follows is fast, the whole
-  // network theory is wrong and the cause is the iOS Keychain — which would
-  // also explain why it is reported as worse on iOS, and why a fetch ceiling
-  // did nothing.
-  getItem: (key: string) => {
-    bootTrace.spanStart(`storage.get ${key}`)
-    return SecureStore.getItemAsync(key)
-      .then((v) => {
-        // Length, never the value — this is a live access + refresh token pair.
-        bootTrace.spanEnd(`storage.get ${key}`, v ? `${v.length} chars` : 'null')
-        return v
-      })
-      .catch((err) => {
-        bootTrace.spanEnd(`storage.get ${key}`, `THREW: ${String(err).slice(0, 80)}`)
-        throw err
-      })
-  },
+  getItem: (key: string) => SecureStore.getItemAsync(key),
   setItem: (key: string, value: string) => {
     try {
       measure(key, value)
