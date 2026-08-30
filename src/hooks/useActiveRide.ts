@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { useOnReconnect } from '../lib/connectivity'
 
 export interface Driver {
   id: string
@@ -66,6 +67,17 @@ export function useActiveRide(passengerId: string | undefined) {
     if (!passengerId) return
     fetchActiveRide(passengerId)
   }, [passengerId])
+
+  // ── Re-read after a connection comes back ───────────────────
+  // The status channel below is the only thing that moves this ride through its
+  // lifecycle, and `postgres_changes` does not replay events missed while the
+  // socket was down. So a ride that was cancelled or completed during a tunnel
+  // leaves the passenger watching a tracking sheet for a ride that no longer
+  // exists, until they kill the app. (The driver-location channel further down
+  // already self-heals via its 10s poll; this one has no such fallback.)
+  useOnReconnect(() => {
+    if (passengerId) fetchActiveRide(passengerId)
+  })
 
   // ── Realtime: ride status changes ───────────────────────────
   useEffect(() => {

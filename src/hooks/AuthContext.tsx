@@ -10,6 +10,10 @@ import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
 import { getDeviceToken, clearDeviceToken } from "../lib/deviceSession";
 import * as Updates from "expo-updates";
+// Single classifier, shared with the in-app connectivity banner. It used to be
+// defined here; two copies would drift silently, each wrong about a different
+// subset of failures.
+import { isNetworkError } from "../lib/connectivity";
 
 interface AuthContextType {
   session: Session | null;
@@ -73,33 +77,6 @@ const PROFILE_COLUMNS =
   // type of this string, and any concatenation or .join() widens it to `string`,
   // which degrades every field to GenericStringError.
   "id, name, role, company_id, avatar_url, created_at, is_active, deactivation_pending, deleted_at, notification_prefs, push_token, is_guest, student_verified, student_institution_id, student_verified_at";
-
-/**
- * Is this failure "there is no network" rather than "the server said no"?
- *
- * Deliberately message-based rather than using a connectivity library:
- * @react-native-community/netinfo and expo-network are both NATIVE modules, and
- * neither is installed. Adding one changes the fingerprint, which orphans every
- * installed build from OTA until a new binary ships — a heavy price for a
- * string on a spinner. What we actually need to know is not "does the device
- * have an interface up" but "did this request fail because it could not leave
- * the phone", and the thrown error already answers that.
- *
- * React Native's fetch throws `TypeError: Network request failed` with no
- * connectivity. The abort from timeoutFetch counts too: a request that never
- * answered inside the ceiling is, from the user's point of view, the same
- * condition and the same fix.
- */
-function isNetworkError(err: unknown): boolean {
-  const e = err as { name?: string; message?: string } | null;
-  const msg = String(e?.message ?? err ?? "").toLowerCase();
-  return (
-    e?.name === "AbortError" ||
-    msg.includes("network request failed") ||
-    msg.includes("failed to fetch") ||
-    msg.includes("aborted")
-  );
-}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);

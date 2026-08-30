@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import CarMarker from "../../components/CarMarker";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { useOnReconnect } from "../../lib/connectivity";
 import { useAuth } from "../../hooks/AuthContext";
 import {
   useNotifications,
@@ -299,17 +300,42 @@ export default function DriverHomeScreen({
     // `location` is set exactly once on this screen, so this subscribes once.
   }, [location]);
 
-  useEffect(() => {
+  const syncOnlineState = useCallback(async () => {
     if (!profile) return;
-    supabase
+    const { data } = await supabase
       .from("drivers")
       .select("is_active")
       .eq("id", profile.id)
-      .single()
-      .then(({ data }) => {
-        if (data) setIsOnline(data.is_active);
-      });
-  }, [profile]);
+      .maybeSingle();
+    if (data) setIsOnline(data.is_active);
+  }, [profile?.id]);
+
+  useEffect(() => {
+    syncOnlineState();
+  }, [syncOnlineState]);
+
+  /**
+   * Re-read `is_active` after a connection comes back. THIS IS THE ONE THAT
+   * COSTS A DRIVER A SHIFT.
+   *
+   * The realtime subscription below is the normal channel for a server-side
+   * flip, but `postgres_changes` does not replay what it missed while the
+   * socket was down — and the flip we care about happens precisely then:
+   * `reap_stale_drivers()` sets `is_active = false` after 5 minutes of a stale
+   * heartbeat, which is what a dead zone looks like. The UPDATE fires while the
+   * phone cannot hear it, and the event is simply gone by the time it can.
+   *
+   * Without this, a driver drives back into coverage with the toggle still
+   * showing "Online — accepting rides" while dispatch has them offline: no ride
+   * offers, no notification, nothing on either screen that looks wrong. It is
+   * the phantom-driver problem inverted, and it is silent on both sides.
+   *
+   * The re-read is deliberately not a re-assert. Flipping `is_active` back to
+   * true from here would fight the reaper on behalf of a device that may still
+   * be barely connected, and would resurrect a driver who has since gone off
+   * shift on another device. Show them the truth and let the toggle be theirs.
+   */
+  useOnReconnect(syncOnlineState);
 
   // Keep the toggle honest when the server takes us offline.
   //

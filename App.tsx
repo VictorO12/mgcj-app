@@ -23,6 +23,7 @@ import DriverSignUpScreen from "./src/screens/auth/DriverSignUpScreen";
 import OTPVerifyScreen from "./src/screens/auth/OTPVerifyScreen";
 import PassengerHomeScreen from "./src/screens/passenger/PassengerHomeScreen";
 import DriverApp from "./src/screens/driver/DriverApp";
+import OfflineBanner from "./src/components/OfflineBanner";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const STRIPE_KEY = Constants.expoConfig?.extra?.stripePublishableKey ?? "";
@@ -181,6 +182,14 @@ export default function App() {
           <StripeProvider publishableKey={STRIPE_KEY}>
             <AuthProvider>
               <RootNavigator />
+              {/*
+                Outside RootNavigator, not inside it: the navigator returns
+                early for the loading gate and the deactivated-driver screen,
+                so a banner rendered within it would disappear on exactly the
+                screens where losing connectivity is most confusing. It sits
+                after the navigator so it paints on top.
+              */}
+              <OfflineBanner />
             </AuthProvider>
           </StripeProvider>
         </ThemeProvider>

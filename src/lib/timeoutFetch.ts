@@ -1,3 +1,5 @@
+import { isNetworkError, markOffline, markOnline } from './connectivity'
+
 /**
  * A `fetch` that is guaranteed to settle.
  *
@@ -63,6 +65,33 @@ const shouldTimeout = (url: string) =>
  */
 const REQUEST_TIMEOUT_MS = 20000
 
+/**
+ * Feeds every backend request into the app-wide connectivity signal.
+ *
+ * Any settled response marks online, whatever its status: a 500 still proves
+ * the request arrived. Only a network-class REJECTION marks offline.
+ *
+ * `wasTimeout` exists because an abort is ambiguous. Our own 20s ceiling firing
+ * means a socket that never answered, which is a connectivity fault. A
+ * caller-supplied signal firing means the app cancelled its own request on
+ * purpose, and reporting that to the user as "no internet connection" would be
+ * a lie triggered by normal behaviour. Without this the two are the same
+ * `AbortError`.
+ */
+function observe(p: Promise<Response>, wasTimeout?: () => boolean): Promise<Response> {
+  return p.then(
+    (res) => {
+      markOnline()
+      return res
+    },
+    (err) => {
+      const aborted = (err as { name?: string } | null)?.name === 'AbortError'
+      if (aborted ? wasTimeout?.() : isNetworkError(err)) markOffline()
+      throw err
+    },
+  )
+}
+
 export const timeoutFetch: typeof fetch = (input, init) => {
   const url =
     typeof input === 'string'
@@ -71,10 +100,18 @@ export const timeoutFetch: typeof fetch = (input, init) => {
         ? input.toString()
         : (input as Request).url
 
-  if (!shouldTimeout(url)) return fetch(input, init)
+  // Observation is WIDER than the timeout on purpose. Only auth and PostgREST
+  // get a ceiling (see above), but every supabase request — Edge Functions and
+  // Storage included — is evidence about whether the backend is reachable, and
+  // throwing that evidence away would leave the banner blind on a screen whose
+  // only traffic is `functions.invoke`.
+  if (!shouldTimeout(url)) return observe(fetch(input, init))
 
   const controller = new AbortController()
+  // Distinguishes OUR ceiling from a caller's cancellation — see `observe`.
+  let timedOut = false
   const timer = setTimeout(() => {
+    timedOut = true
     // Aborting produces a rejection, which every caller above already handles.
     // The point is to convert "hangs forever" into "fails", because the codebase
     // has handling for failure and none at all for silence.
@@ -89,7 +126,10 @@ export const timeoutFetch: typeof fetch = (input, init) => {
     else upstream.addEventListener('abort', () => controller.abort())
   }
 
-  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+  return observe(
+    fetch(input, { ...init, signal: controller.signal }),
+    () => timedOut,
+  ).finally(() => {
     clearTimeout(timer)
   })
 }
