@@ -185,7 +185,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .getSession()
       .then(({ data: { session }, error }) => {
         if (session) {
-          setOffline(false);
+          // Deliberately does NOT clear `offline` here. A readable session
+          // proves nothing about the network — in the common airplane-mode
+          // shape it comes straight off disk — so clearing now would flick the
+          // message off and the bare spinner back on every 4s until the profile
+          // query failed again. `fetchProfile` clears it on real success.
           setStalled(false);
           setSession(session);
           sessionRef.current = session;
@@ -461,13 +465,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const res = await runQuery();
+          if (res.error) {
+            // A FAILED FETCH ARRIVES HERE, NOT IN THE CATCH. postgrest-js wraps
+            // its fetch in `.catch(fetchError => ({ error, data: null, status: 0 }))`
+            // (PostgrestBuilder.ts ~line 391), so airplane mode returns a
+            // resolved result carrying an error rather than rejecting. The old
+            // code logged it and broke WITHOUT recording `queryErr`, so
+            // `if (queryErr) throw` never fired, `data` was null with no error
+            // in hand, and the no-row ladder below burned ten retries before
+            // releasing the gate with `profile === null` — a signed-in driver
+            // dropped into the passenger app with no history and no
+            // explanation. That is the reported airplane-mode bug.
+            queryErr = res.error;
+            // `status === 0` is the structural tell: postgrest only ever emits
+            // it on the fetch-rejection path, and every real HTTP response
+            // carries a nonzero status. The message check is the fallback for
+            // shapes that don't carry a status.
+            const isNet = (res as { status?: number }).status === 0 || isNetworkError(res.error);
+            console.log(
+              `[Auth] profile query error (${attempt + 1}/3):`,
+              res.error.message,
+            );
+            // Say it on the FIRST failure, not after the ladder. postgrest runs
+            // its own internal retry ladder for GETs on top of ours, so waiting
+            // for all three attempts means many seconds of bare spinner before
+            // the user is told anything. The remaining attempts run underneath
+            // the message.
+            if (isNet) setOffline(true);
+            if (isNet && attempt < 2) {
+              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+              continue;
+            }
+            break;
+          }
           data = res.data;
           queryErr = null;
-          if (res.error) console.log("[Auth] profile query error:", res.error.message);
           break;
         } catch (e) {
           queryErr = e;
           console.warn(`[Auth] profile query threw (${attempt + 1}/3):`, e);
+          if (isNetworkError(e)) setOffline(true);
           if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
         }
       }
@@ -495,12 +532,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const merged = data ? { ...data, ...(await fetchPrivateFields()) } : null;
       profileRef.current = merged;
       setProfile(merged);
-      // Clear here, not only in `retryConnection`. Recovery can arrive by
+      // Cleared here, not only in `retryConnection`. Recovery can arrive by
       // several routes — the auth subscriber, a foreground token refresh, the
       // manual button — and if `offline` only cleared on the one route that
       // happens to be `retryConnection`, the 4s timer below would keep running
       // for the life of the process behind a perfectly working app.
-      setOffline(false);
+      //
+      // Gated on the row ACTUALLY ARRIVING: it used to fire unconditionally,
+      // so the failed-query path erased its own offline message on the way out
+      // and left the launch silent again.
+      if (data) setOffline(false);
     } catch (err) {
       // Deliberately does NOT clear `profile`: a transient failure on a later
       // refetch must not blank a profile that is already correct.
