@@ -9,11 +9,22 @@ import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import type { Session } from "@supabase/supabase-js";
 import { getDeviceToken, clearDeviceToken } from "../lib/deviceSession";
+import * as Updates from "expo-updates";
+import * as bootTrace from "../lib/bootTrace";
+import { resetAttemptCounters } from "../lib/timeoutFetch";
 
 interface AuthContextType {
   session: Session | null;
   profile: Profile | null;
   loading: boolean;
+  /**
+   * True when the loading gate has been up long enough that something is
+   * wrong rather than slow. Exists so the launch spinner can never again be a
+   * dead end: the app renders a visible "retry" state instead of a spinner
+   * with no exit. See the watchdog below.
+   */
+  stalled: boolean;
+  retryInit: () => void;
   signOut: () => Promise<void>;
   refetch: () => Promise<void>;
   // Driver registration uses these to prevent the home screen from flashing
@@ -60,9 +71,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stalled, setStalled] = useState(false);
+  const [initAttempt, setInitAttempt] = useState(0);
   const sessionRef = useRef<Session | null>(null);
   const fetchingForRef = useRef<string | null>(null);
+  // Mirrors `profile` for the finally-block check below, which runs inside an
+  // async closure and would otherwise read a stale captured value.
+  const profileRef = useRef<Profile | null>(null);
   const loadingHeldRef = useRef(false);
+
+  /**
+   * Last-resort net under the launch gate.
+   *
+   * `timeoutFetch` (see src/lib/timeoutFetch.ts) fixes the known cause — a
+   * stalled /auth/v1/token refresh that leaves auth-js's `initializePromise`
+   * unsettled, hanging `getSession()` and the INITIAL_SESSION emit at once —
+   * so this should essentially never fire. It is here because the class of bug
+   * is "an await that never settles", and the two rounds of fixes before this
+   * one both failed by assuming a specific await was the only one. A ceiling
+   * on the gate itself is the only thing that holds no matter which await it
+   * is: SecureStore, the profile query, or something not yet written.
+   *
+   * It deliberately does NOT force `loading` false. Dropping a signed-in
+   * driver mid-shift onto the Welcome screen is worse than the spinner — they
+   * would try to re-auth and hit OTP for a session they already have. It
+   * surfaces a retry affordance instead and leaves the decision to the user.
+   *
+   * Above the 20s fetch ceiling on purpose, so a request that is merely slow
+   * resolves normally rather than racing this.
+   */
+  useEffect(() => {
+    if (!loading) {
+      setStalled(false);
+      return;
+    }
+    const timer = setTimeout(() => setStalled(true), 30000);
+    return () => clearTimeout(timer);
+  }, [loading, initAttempt]);
+
+  /**
+   * Retry has to RELOAD, not just re-run — verified against auth-js 2.109.0.
+   *
+   * `initialize()` memoizes: `if (this.initializePromise) return await
+   * this.initializePromise`, and that field is assigned exactly once and never
+   * reset to null anywhere in the library. So if the hang is INSIDE
+   * `_initialize` (a wedged SecureStore read, or a refresh fetch that outlives
+   * even the 20s ceiling), calling `getSession()` again just awaits the same
+   * unsettled promise and nothing happens. Only a fresh JS context clears it —
+   * which is exactly why force-quitting is the workaround that has been
+   * working all along, and why a plain re-run would have shipped a Retry
+   * button that does nothing for the one case it exists to cover.
+   *
+   * The in-place re-run is kept as the fallback: it is the correct fix for a
+   * hang AFTER init (the profile query, where `initializePromise` has already
+   * resolved), and it is what runs if `reloadAsync` is unavailable — it throws
+   * in Expo Go and in dev where there is no updates-enabled build.
+   */
+  function retryInit() {
+    Updates.reloadAsync().catch((err) => {
+      console.warn("[Auth] reload unavailable, re-running init:", err);
+      resetAttemptCounters();
+      bootTrace.mark("retry (in-place re-init)");
+      fetchingForRef.current = null;
+      setStalled(false);
+      setLoading(true);
+      setInitAttempt((n) => n + 1);
+    });
+  }
 
   useEffect(() => {
     // The .catch is load-bearing, not defensive dressing: getSession() awaits
@@ -72,36 +147,116 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // spinner as the fetchProfile latch below, one call earlier. Treat a
     // failure to READ the session as no session: the Welcome screen is a
     // recoverable state, a spinner is not.
+    // The single most important number in the trace. getSession() awaits
+    // initializePromise, so this span covers the storage read AND the proactive
+    // refresh — and the storage/net spans nested inside it say which half.
+    bootTrace.spanStart("auth.getSession");
     supabase.auth
       .getSession()
       .then(({ data: { session } }) => {
+        bootTrace.spanEnd(
+          "auth.getSession",
+          session
+            ? `session, expired=${
+                session.expires_at
+                  ? session.expires_at * 1000 < Date.now()
+                  : "unknown"
+              }`
+            : "no session",
+        );
         setSession(session);
         sessionRef.current = session;
-        if (session) fetchProfile(session.user.id);
-        else setLoading(false);
+        // Same claim check as the subscriber below — whichever path gets here
+        // first owns the fetch. Without this the two race and both run.
+        if (session) {
+          if (fetchingForRef.current !== session.user.id) {
+            fetchingForRef.current = session.user.id;
+            fetchProfile(session.user.id);
+          }
+        } else setLoading(false);
       })
       .catch((err) => {
+        bootTrace.spanEnd("auth.getSession", `THREW: ${String(err).slice(0, 80)}`);
         console.warn("[Auth] getSession failed:", err);
         setLoading(false);
       });
 
+    /**
+     * NOT async, and it must never await a supabase call. This is the launch
+     * hang — measured 2026-08-29, after three rounds of fixing things that were
+     * not it.
+     *
+     * `_notifyAllSubscribers` does `await x.callback(event, session)` and then
+     * `await Promise.all(...)` (GoTrueClient.js), so auth-js BLOCKS ON THIS
+     * FUNCTION. The full cycle:
+     *
+     *   _initialize()                      <- this IS initializePromise
+     *     await _recoverAndRefresh()
+     *       await _callRefreshToken()      <- only when the token is near expiry
+     *         await _saveSession()
+     *         await _notifyAllSubscribers('TOKEN_REFRESHED')
+     *           await <this callback>
+     *             await fetchProfile()
+     *               supabase.from('profiles')  -> _getAccessToken()
+     *                 await auth.getSession()
+     *                   await initializePromise   <- never resolves. deadlock.
+     *
+     * Nothing is slow. The measured launch had the refresh return HTTP 200 in
+     * 871ms and every Keychain read under 10ms; the app then sat forever with
+     * `profile.fetch` open and NO request ever issued, which is the signature —
+     * the query never reached the network because it was waiting on the very
+     * init that was waiting on it.
+     *
+     * Why it only bites after the app has been closed a while: the emit races
+     * our subscription. With a fresh token `_recoverAndRefresh` emits SIGNED_IN
+     * at ~10ms — before React has mounted and before this line runs — so there
+     * are no subscribers and nothing to await. With a stale token the emit
+     * happens AFTER the refresh round trip (~880ms), by which point this
+     * callback is registered and becomes the thing init waits on. So the
+     * network being healthy is what makes it hang: a refresh slow enough to
+     * outlast mount is a refresh that deadlocks.
+     *
+     * And why force-quitting always "fixed" it: `_saveSession` runs BEFORE the
+     * notify, so the refreshed token is already on disk. The next launch is the
+     * fresh-token path, which emits before we subscribe.
+     *
+     * The deferral is the documented Supabase guidance — do not call other
+     * supabase functions inside this callback; hand the work to a later task so
+     * the callback returns immediately and init can finish.
+     */
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      bootTrace.mark(`auth event: ${event}`, session ? "session" : "none");
       setSession(session);
       sessionRef.current = session;
       if (session) {
-        // Avoid double-fetching if already fetching for this user
-        if (fetchingForRef.current === session.user.id) return;
-        await fetchProfile(session.user.id);
+        // CLAIM the user id here, synchronously, then defer the work.
+        //
+        // Deferring made the double-fetch race non-deterministic. Previously
+        // this callback awaited inline, so it and the getSession() path above
+        // were strictly ordered. Now both can be in flight, and whichever runs
+        // first is down to scheduling — which is exactly the concurrent
+        // duplicate fetch `fetchingForRef` exists to prevent (and which the
+        // root CLAUDE.md documents as a known hazard on this path).
+        //
+        // Claiming at SCHEDULE time rather than checking at RUN time makes it
+        // deterministic again: the first of the two paths to reach its guard
+        // owns the fetch and the other no-ops.
+        if (fetchingForRef.current !== session.user.id) {
+          fetchingForRef.current = session.user.id;
+          setTimeout(() => fetchProfile(session.user.id), 0);
+        }
       } else {
+        profileRef.current = null;
         setProfile(null);
         setLoading(false);
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+    // `initAttempt` re-subscribes and re-reads the session on a manual retry.
+  }, [initAttempt]);
 
   // Realtime: push profile changes (deactivation, deletion) to state immediately
   useEffect(() => {
@@ -151,14 +306,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * app. Returns an empty object so the merge below is a no-op.
    */
   async function fetchPrivateFields(): Promise<Partial<Profile>> {
-    const { data, error } = await supabase
-      .rpc("my_private_profile")
-      .maybeSingle();
-    if (error) {
-      console.log("[Auth] private profile fields unavailable:", error.message);
+    // try/catch as well as the `error` check: a REJECTION and a returned
+    // `{ error }` are different failure modes, and this function's contract is
+    // that neither can fail the login. Without the catch a thrown RPC
+    // propagates into fetchProfile's catch, which sets `threw` and — since the
+    // profile is not committed until after this call — trips the
+    // hold-the-gate branch below. Losing a phone number would take the whole
+    // app down with it.
+    try {
+      const { data, error } = await supabase
+        .rpc("my_private_profile")
+        .maybeSingle();
+      if (error) {
+        console.log("[Auth] private profile fields unavailable:", error.message);
+        return {};
+      }
+      return (data ?? {}) as Partial<Profile>;
+    } catch (err) {
+      console.warn("[Auth] private profile fields threw:", err);
       return {};
     }
-    return (data ?? {}) as Partial<Profile>;
   }
 
   /**
@@ -181,15 +348,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   async function fetchProfile(userId: string, retries = 10) {
     fetchingForRef.current = userId;
+    let threw = false;
+    // Only the FIRST attempt is timed. The recursive no-row retries would
+    // otherwise overwrite the span and report 600ms of deliberate waiting as
+    // the query's latency — and this span exists specifically to be compared
+    // against the refresh above, which is the first-vs-all discriminator.
+    const timed = retries === 10;
+    if (timed) bootTrace.spanStart("profile.fetch");
 
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(PROFILE_COLUMNS)
-        .eq("id", userId)
-        .maybeSingle();
+      // Bounded retry around the QUERY, distinct from the no-row retry below.
+      // The two are different failures: no row is "the trigger has not fired
+      // yet" (wait and re-ask), a throw is "the request did not complete"
+      // (which the 20s /rest/v1/ ceiling in timeoutFetch made reachable where
+      // before it just hung). A throw used to fall straight through to the
+      // hold-the-gate branch in `finally` — a permanent spinner off a single
+      // failed request, i.e. the same dead end as the original bug arriving
+      // through a different door. Three attempts, then hold WITH the retry
+      // affordance already showing rather than silently.
+      let data: Awaited<ReturnType<typeof runQuery>>["data"] = null;
+      let queryErr: unknown = null;
 
-      if (error) console.log("[Auth] profile query error:", error.message);
+      const runQuery = () =>
+        supabase
+          .from("profiles")
+          .select(PROFILE_COLUMNS)
+          .eq("id", userId)
+          .maybeSingle();
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await runQuery();
+          data = res.data;
+          queryErr = null;
+          if (res.error) console.log("[Auth] profile query error:", res.error.message);
+          break;
+        } catch (e) {
+          queryErr = e;
+          console.warn(`[Auth] profile query threw (${attempt + 1}/3):`, e);
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
+      }
+
+      if (queryErr) throw queryErr;
 
       // No row yet — retry (trigger hasn't fired or upsert pending)
       if (!data && retries > 0) {
@@ -209,16 +410,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // shape on purpose: a bundle merged in anywhere else is dropped the next
       // time either one runs -- the same replace-clobbers-merge bug as the
       // realtime handler above, one door over.
-      setProfile(data ? { ...data, ...(await fetchPrivateFields()) } : null);
+      const merged = data ? { ...data, ...(await fetchPrivateFields()) } : null;
+      profileRef.current = merged;
+      setProfile(merged);
     } catch (err) {
       // Deliberately does NOT clear `profile`: a transient failure on a later
-      // refetch must not blank a profile that is already correct. Releasing
-      // the gate is the part that matters.
+      // refetch must not blank a profile that is already correct.
       console.warn("[Auth] profile fetch threw:", err);
+      threw = true;
     } finally {
+      if (timed) bootTrace.spanEnd("profile.fetch", threw ? "THREW" : "ok");
       fetchingForRef.current = null;
-      if (!loadingHeldRef.current) {
+
+      // Releasing the gate with a session but NO profile is not a safe
+      // fallthrough, and this became reachable the moment the profile query
+      // got a timeout: `RootNavigator` branches on `profile?.role === 'driver'`,
+      // so a driver whose profile fetch failed lands in the PASSENGER app —
+      // signed in, wrong role, wrong screen, and no indication anything went
+      // wrong. Hold the gate instead and let the 30s watchdog offer Retry: a
+      // bounded spinner with a way out beats silently handing someone the
+      // wrong app.
+      //
+      // Only the THROW path holds. A clean query that legitimately returns no
+      // row (a brand-new user whose profile row does not exist yet) still
+      // releases, because that is a real state the app knows how to render.
+      const stuckWithoutProfile =
+        threw && !!sessionRef.current && !profileRef.current;
+
+      if (!loadingHeldRef.current && !stuckWithoutProfile) {
+        // Written HERE — at the moment the gate actually releases — so the
+        // persisted total is the real perceived launch time, not the time the
+        // last await happened to finish.
+        bootTrace.mark("gate released");
+        bootTrace.persistTrace();
         setLoading(false);
+      } else if (stuckWithoutProfile) {
+        // Show the way out IMMEDIATELY rather than making the user sit through
+        // the 30s watchdog for a failure we already know about. The gate is
+        // still held on purpose (see above — a driver must not be dropped into
+        // the passenger app), but "held" must never mean "held silently".
+        setStalled(true);
       }
     }
   }
@@ -232,7 +463,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq("id", userId)
       .maybeSingle();
     if (data) {
-      setProfile({ ...data, ...(await fetchPrivateFields()) });
+      const merged = { ...data, ...(await fetchPrivateFields()) };
+      profileRef.current = merged;
+      setProfile(merged);
       setLoading(false);
     }
   }
@@ -267,6 +500,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // functions that call getUser(): capture-payment and create-payment-intent.
     // Signing out means signing out THIS device.
     await supabase.auth.signOut({ scope: "local" });
+    profileRef.current = null;
     setProfile(null);
     sessionRef.current = null;
     fetchingForRef.current = null;
@@ -283,7 +517,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, profile, loading, signOut, refetch, holdLoading, releaseLoading }}
+      value={{ session, profile, loading, stalled, retryInit, signOut, refetch, holdLoading, releaseLoading }}
     >
       {children}
     </AuthContext.Provider>
