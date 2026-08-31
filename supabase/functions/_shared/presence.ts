@@ -26,6 +26,14 @@ export function livenessCutoffISO(now: Date = new Date()): string {
 
 // PostgREST `.or(...)` argument for server-side filtering. AND-combines with the
 // rest of the query. Usage: query.or(livenessOrFilter())
+//
+// NO LONGER USED BY ANY DISPATCH POOL as of 20260766: assign-ride and
+// scheduled-release both stopped filtering on liveness and now rank with
+// preferLive() instead, because a hard filter failed toward `no_drivers` when
+// every driver in a small company had simply pocketed their phone. Kept because
+// it is the right shape for a read that genuinely wants only fresh rows (a
+// live-map query, say) — but think twice before reintroducing it on anything
+// that decides who gets offered a ride.
 export function livenessOrFilter(now: Date = new Date()): string {
   return `last_seen_at.is.null,last_seen_at.gte.${livenessCutoffISO(now)}`;
 }
@@ -65,4 +73,43 @@ export function isDriverDispatchable(
 ): boolean {
   if (!isDriverLive(d, now)) return false;
   return d.push_token != null && d.push_token !== '';
+}
+
+// ── Dispatch tiering: prefer live, but never exclude to the point of nobody ──
+//
+// The 60s window above answers "who have we heard from recently", and that is a
+// good way to CHOOSE between drivers: a driver with the app open answers faster
+// and their position is fresh, so the ETA is right. It is a bad way to decide
+// who is unreachable, for one blunt reason: A RIDE OFFER IS A PUSH
+// NOTIFICATION. Push reaches a locked phone, a backgrounded app, and an app the
+// driver force-quit an hour ago. The heartbeat stops in all three cases (it is
+// a foreground-only setInterval — there are no background modes in the app), so
+// the old hard filter excluded drivers from the one channel that still reaches
+// them.
+//
+// Worse, it failed toward nobody: when every driver in a small company had gone
+// quiet, assign-ride returned `no_drivers` and the passenger was told nobody was
+// available while three drivers sat parked nearby with phones in their pockets.
+//
+// So: rank, don't exclude. Live drivers first; fall back to the quiet ones only
+// when there are no live ones. Offering to a driver who really has gone home
+// costs one 30s offer timeout and then reassign-stale-rides cycles — machinery
+// that already exists and already runs — and that is a far better trade than
+// dropping the ride.
+//
+// NOTE this deliberately does NOT try to distinguish "backgrounded" from
+// "killed". An earlier draft added a `backgrounded_at` stamp for that; it was
+// dropped because the stamp would be written at the same instant as the final
+// heartbeat, so a minute later it carries nothing `last_seen_at` does not
+// already carry — and because push reaches a killed app anyway, no decision
+// here depends on the difference. It also would have misclassified the case
+// that matters most: a driver in a dead zone with the app OPEN writes no stamp,
+// and must stay in the fallback tier rather than being called gone.
+export function preferLive<T extends { is_active?: boolean | null; last_seen_at?: string | null }>(
+  pool: T[],
+  now: Date = new Date(),
+): { candidates: T[]; tier: 'live' | 'fallback' } {
+  const live = pool.filter((d) => isDriverLive(d, now));
+  if (live.length > 0) return { candidates: live, tier: 'live' };
+  return { candidates: pool, tier: 'fallback' };
 }

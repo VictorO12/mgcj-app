@@ -4,7 +4,7 @@ import {
   COMMITMENT_LOOKAHEAD_MINS,
   type Commitment,
 } from '../_shared/commitment.ts'
-import { livenessOrFilter } from '../_shared/presence.ts'
+import { preferLive } from '../_shared/presence.ts'
 import { sendPushMany } from '../_shared/push.ts'
 
 const supabase = createClient(
@@ -302,13 +302,19 @@ async function assignRide(
   // ── §5.1: Fetch online drivers scoped to THIS company ───────
   let driversQuery = supabase
     .from('drivers')
-    .select('id, push_token, current_lat, current_lng')
+    // is_active and last_seen_at are SELECTED, not filtered on, because the
+    // liveness decision moved out of the query and into preferLive() below.
+    // They must be in the payload: isDriverLive() reads both, and a missing
+    // is_active makes every driver read as not-live, which would send every
+    // ride down the fallback tier.
+    .select('id, push_token, current_lat, current_lng, is_active, last_seen_at')
     .eq('company_id', ride.company_id)
     .eq('is_active', true)
     .not('current_lat', 'is', null)
     .not('current_lng', 'is', null)
+    // Still a hard filter, and the only one that stays hard: an offer IS a
+    // push, so a driver with no token cannot be told a ride exists at all.
     .not('push_token', 'is', null)
-    .or(livenessOrFilter()) // exclude phantoms: online flag set but heartbeat stale
 
   if (ride.vehicle_class_id) {
     driversQuery = driversQuery.eq('vehicle_class_id', ride.vehicle_class_id)
@@ -337,12 +343,32 @@ async function assignRide(
   const availableDrivers = allDrivers.filter(d => !busySet.has(d.id))
 
   // ── Two-pass driver selection ────────────────────────────────
-  const freshDrivers = availableDrivers.filter(
+  let freshDrivers = availableDrivers.filter(
     d => !declinedBy.includes(d.id) && !timedOutBy.includes(d.id)
   )
-  const timedOutDrivers = availableDrivers.filter(
+  let timedOutDrivers = availableDrivers.filter(
     d => timedOutBy.includes(d.id) && !declinedBy.includes(d.id)
   )
+
+  // ── Liveness is a RANKING, not an exclusion (see _shared/presence.ts) ─────
+  // The 60s window used to be a hard `.or()` on the query above, so a company
+  // whose drivers had all pocketed their phones got `no_drivers` and the
+  // passenger was told nobody was available. Now each pass prefers drivers we
+  // have heard from recently and falls back to the quiet ones only if there
+  // are none — every one of whom still has a push token, which is what an
+  // offer actually travels on. A driver who really has gone home costs one 30s
+  // timeout before reassign-stale-rides cycles past them.
+  //
+  // Applied per pass rather than once over availableDrivers: the two passes are
+  // separate populations (never-offered vs already-timed-out) and mixing their
+  // tiering would let a stale fresh driver outrank a live timed-out one.
+  const freshTier   = preferLive(freshDrivers)
+  const timedTier   = preferLive(timedOutDrivers)
+  freshDrivers      = freshTier.candidates
+  timedOutDrivers   = timedTier.candidates
+  if (freshTier.tier === 'fallback' && freshDrivers.length > 0) {
+    console.log(`[liveness] no live drivers — falling back to ${freshDrivers.length} stale-but-pushable`)
+  }
 
   if (freshDrivers.length === 0 && timedOutDrivers.length === 0) {
     console.log('All drivers exhausted')

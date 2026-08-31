@@ -6,7 +6,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { computeAuthoritativeFare } from '../_shared/fare.ts'
-import { livenessOrFilter, isDriverDispatchable } from '../_shared/presence.ts'
+import { preferLive, isDriverDispatchable } from '../_shared/presence.ts'
 import { sendPush } from '../_shared/push.ts'
 
 const supabase = createClient(
@@ -175,7 +175,9 @@ async function releaseRide(ride: any, now: Date) {
   // Build available driver pool (same eligibility criteria as assign-ride)
   let driversQuery = supabase
     .from('drivers')
-    .select('id, current_lat, current_lng')
+    // is_active/last_seen_at are selected for preferLive() below, not filtered
+    // on — see the assign-ride pool query for why they must be in the payload.
+    .select('id, current_lat, current_lng, is_active, last_seen_at')
     .eq('company_id', ride.company_id)
     .eq('is_active', true)
     .not('current_lat', 'is', null)
@@ -184,7 +186,11 @@ async function releaseRide(ride: any, now: Date) {
     // assign-ride applies, so the pool this releases into matches the pool
     // that will actually be dispatched from.
     .not('push_token', 'is', null)
-    .or(livenessOrFilter()) // exclude phantoms: online flag set but heartbeat stale
+    // The liveness `.or()` that used to sit here is gone: liveness is now a
+    // ranking applied below, not a filter. Note this query no longer emits two
+    // separate `or=` params, so the AND-combining behaviour that
+    // .claude/notes/liveness-or-test.sh was written to verify no longer has
+    // anything to combine — only the vehicle-class `.or()` remains.
 
   if (ride.vehicle_class_id) {
     driversQuery = driversQuery.or(`vehicle_class_id.eq.${ride.vehicle_class_id},vehicle_class_id.is.null`)
@@ -200,8 +206,20 @@ async function releaseRide(ride: any, now: Date) {
       .not('driver_id', 'is', null),
   ])
 
-  const busySet          = new Set((busyRides ?? []).map((r: any) => r.driver_id))
-  const availableDrivers = (allDrivers ?? []).filter((d: any) => !busySet.has(d.id))
+  const busySet   = new Set((busyRides ?? []).map((r: any) => r.driver_id))
+  const freeInPool = (allDrivers ?? []).filter((d: any) => !busySet.has(d.id))
+
+  // Liveness ranks, it does not exclude — same rule as assign-ride, and it has
+  // to be the same or the two disagree about who exists. This pool decides both
+  // WHEN to release (drive time to the 3rd-nearest driver) and whether to hold
+  // at all, so excluding every quiet driver used to make a fleet of pocketed
+  // phones look like an empty company: the ride held until the 10-minute floor
+  // and then force-released for a dispatcher to sort out by hand.
+  const poolTier         = preferLive(freeInPool)
+  const availableDrivers = poolTier.candidates
+  if (poolTier.tier === 'fallback' && availableDrivers.length > 0) {
+    console.log(`[ride ${ride.id}] no live drivers — timing off ${availableDrivers.length} stale-but-pushable`)
+  }
 
   // §3.3: empty pool fallback — bias early
   if (availableDrivers.length === 0) {

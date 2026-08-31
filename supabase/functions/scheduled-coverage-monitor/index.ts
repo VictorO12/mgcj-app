@@ -13,6 +13,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { DISPATCHABLE_COLUMNS, isDriverDispatchable } from '../_shared/presence.ts'
 import { requireServiceRole } from '../_shared/internalAuth.ts'
 import { pollPushReceipts } from '../_shared/pushReceipts.ts'
+import { sendPushMany } from '../_shared/push.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -36,17 +37,51 @@ Deno.serve(async (req) => {
     const now = new Date()
     console.log(`[coverage-monitor] now=${now.toISOString()}`)
 
-    // Layer 2: reap drivers who left the app online but stopped heartbeating
-    // (>5 min), flipping them offline + clearing location — skipping any driver
-    // on an active ride. Runs before the coverage recompute below so the
-    // recomputed coverage_status reflects the reap in the same pass. Piggybacks
-    // on this 10-min cron instead of a dedicated one to avoid growing the
-    // pg_cron/pg_net audit tables. Layer 1 (the 60s liveness filter on every
-    // dispatch read) already keeps phantoms out of assignment in real time;
-    // this is about roster/state honesty.
-    const { data: reaped, error: reapErr } = await supabase.rpc('reap_stale_drivers')
-    if (reapErr) console.error('[coverage-monitor] reap error:', JSON.stringify(reapErr))
-    else if (reaped) console.log(`[coverage-monitor] reaped ${reaped} stale driver(s)`)
+    // Layer 2: reap drivers who left the app online and stopped heartbeating for
+    // FOUR HOURS (20260766 — it was 5 minutes, which reaped anyone whose phone
+    // was simply locked, since the heartbeat is foreground-only). It no longer
+    // clears their location either; last_seen_at already says how old a position
+    // is. Still skips any driver on an active ride. Runs before the coverage
+    // recompute below so coverage_status reflects the reap in the same pass, and
+    // piggybacks this 10-min cron rather than adding one, to avoid growing the
+    // pg_cron/pg_net audit tables.
+    //
+    // At four hours this is garbage collection for a forgotten end-of-shift, not
+    // a dispatch safety layer — dispatch now RANKS on liveness instead of
+    // excluding (see _shared/presence.ts), and the dashboard derives its own
+    // online/away/offline within 60s without needing the flag flipped.
+    const { data: reapedRows, error: reapErr } = await supabase.rpc('reap_stale_drivers')
+    if (reapErr) {
+      console.error('[coverage-monitor] reap error:', JSON.stringify(reapErr))
+    } else {
+      // The RPC returns rows now, not a count, so `if (reapedRows)` would be
+      // true for an empty array — check length.
+      const reaped: Array<{ driver_id: string; push_token: string | null }> = reapedRows ?? []
+      if (reaped.length > 0) {
+        console.log(`[coverage-monitor] reaped ${reaped.length} stale driver(s)`)
+        // Tell them. Being switched off silently is how a driver loses a shift
+        // to something they cannot see — they keep believing they are online
+        // because nothing on their phone said otherwise. The push queues at
+        // APNs/FCM and lands whenever they next have signal, which is also when
+        // useOnReconnect re-reads is_active and corrects their toggle.
+        //
+        // Best-effort: a failed notification must never break the coverage pass
+        // that follows it, and the reap itself has already been committed.
+        try {
+          const messages = reaped
+            .filter((r) => !!r.push_token)
+            .map((r) => ({
+              to: r.push_token!,
+              title: "You've been set offline",
+              body: 'We lost contact with your phone for a few hours. Open the app and go online to start receiving rides again.',
+              data: { type: 'driver_reaped' },
+            }))
+          if (messages.length > 0) await sendPushMany(messages)
+        } catch (pushErr) {
+          console.error('[coverage-monitor] reap notification failed:', pushErr)
+        }
+      }
+    }
 
     // Expo push receipts, piggybacked here for the same reason as the reaper
     // above: a dedicated cron would add rows to cron.job_run_details, which has
