@@ -584,6 +584,12 @@ Deno.serve(async (req) => {
     const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
 
     if (!jwt && !isInternalCall) {
+      // Logged because the two 401 exits below are indistinguishable in the
+      // HTTP log — both are a bare 401 with no body detail, so a 401 in
+      // net._http_response / the request table cannot be attributed without
+      // this. This one means the caller sent NO bearer at all and no matching
+      // webhook secret.
+      console.warn('[auth] 401: no bearer token and no matching x-webhook-secret')
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
     }
 
@@ -617,6 +623,21 @@ Deno.serve(async (req) => {
         )
         const { data: { user }, error: userError } = await callerClient.auth.getUser()
         if (userError || !user) {
+          // The other 401. Reaching here means the bearer was NOT recognised as
+          // service-role and did not resolve to a user either. Two ways that
+          // happens and they need different fixes:
+          //   - a driver's access token expired (their app stops auto-refresh
+          //     while backgrounded, so a push that wakes it can carry a stale
+          //     token), or
+          //   - an internal caller's bearer is the new-style secret key rather
+          //     than a legacy service_role JWT, so isServiceRoleJwt() cannot
+          //     parse it — the 2026-08-15 incident, one door over.
+          // The distinguishing detail is whether x-webhook-secret was present,
+          // so log that rather than the token.
+          console.warn(
+            `[auth] 401: bearer resolved to no user | internal=${isInternalCall} ` +
+            `hadWebhookHeader=${!!incomingSecret} err=${userError?.message ?? 'no user'}`
+          )
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
         }
 
