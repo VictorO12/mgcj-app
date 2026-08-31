@@ -130,7 +130,16 @@ Deno.serve(async (req) => {
     console.log(`[expire-pending-rides] retrying assignment for ${staleRides.length} stale rides`);
 
     for (const ride of staleRides) {
-      await supabase.from("rides").update({ declined_by: [] }).eq("id", ride.id);
+      // Both lists, not just declined_by. assign-ride stopped clearing
+      // timed_out_by on its pass-2 cycle (it was half of an infinite re-offer
+      // loop — see the note there), so this retry is now the ONE place a ride's
+      // dispatch history is wiped. Clearing only half would leave a driver who
+      // timed out twice stuck in the second-chance pass forever while everyone
+      // else got a genuinely fresh start.
+      await supabase
+        .from("rides")
+        .update({ declined_by: [], timed_out_by: [] })
+        .eq("id", ride.id);
       await fetch(ASSIGN_RIDE_URL, {
         method: "POST",
         headers: {

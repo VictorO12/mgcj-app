@@ -239,12 +239,30 @@ async function assignRide(
         .single()
 
       const currentTimedOut: string[] = current?.timed_out_by ?? []
-      const updatedTimedOut = [...new Set([...currentTimedOut, driverId])]
 
-      await supabase
-        .from('rides')
-        .update({ timed_out_by: updatedTimedOut })
-        .eq('id', rideId)
+      if (currentTimedOut.includes(driverId)) {
+        // SECOND timeout by the same driver on the same ride. The two-pass
+        // design gives a timeout one more chance than a hard decline — one, not
+        // unlimited — so the second silence is treated as a decline and they
+        // are out for this ride.
+        //
+        // Without this the ride re-offered itself to the same unresponsive
+        // phone every 60s forever (observed 2026-08-30): reassign-stale-rides
+        // times them out, pass 1 has nobody fresh, pass 2 picks the same lone
+        // driver, and round and round. A push every minute to someone who is
+        // not looking, and a passenger watching "finding a driver" indefinitely.
+        console.log(`Driver ${driverId.slice(0, 8)} timed out twice — treating as declined`)
+        const { error: rpcError } = await supabase.rpc('append_declined_by', {
+          p_ride_id: rideId,
+          p_driver_id: driverId,
+        })
+        if (rpcError) console.error('append_declined_by error:', rpcError)
+      } else {
+        await supabase
+          .from('rides')
+          .update({ timed_out_by: [...currentTimedOut, driverId] })
+          .eq('id', rideId)
+      }
     } else {
       const { error: rpcError } = await supabase.rpc('append_declined_by', {
         p_ride_id: rideId,
@@ -460,8 +478,16 @@ async function assignRide(
   for (const [n, candidatePool] of [[1, freshDrivers], [2, timedOutDrivers]] as const) {
     if (candidatePool.length === 0) continue
     if (n === 2) {
+      // NOTE: `timed_out_by` used to be cleared here, and that was the other
+      // half of the infinite re-offer loop. Clearing it erased the only record
+      // that a driver had already been given their second chance, so the
+      // promote-to-declined check above could never fire and every cycle
+      // started from a blank slate. The list now persists for the life of the
+      // ride; `expire-pending-rides` is the thing that deliberately reopens the
+      // field (it clears `declined_by` for rides pending 2-5 minutes), and it
+      // cancels the ride outright at 5 minutes. Bounded, and bounded in one
+      // place rather than two that disagree.
       console.log('No eligible fresh driver — cycling back to timed-out drivers')
-      await supabase.from('rides').update({ timed_out_by: [] }).eq('id', rideId)
     }
     console.log(`Pass ${n}: ${candidatePool.length} candidate(s)`)
     const result = await pickWinner(
