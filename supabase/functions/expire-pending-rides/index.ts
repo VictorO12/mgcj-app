@@ -113,14 +113,21 @@ Deno.serve(async (req) => {
   }
 
   // ── 2. Retry assignment for rides pending > 2 minutes ────────
-  // These are rides that have been declined by all available drivers
-  // or where assign-ride couldn't find anyone. Clear declined_by and
-  // call assign-ride again to give all drivers another chance.
+  // A ride that nobody took gets ONE more round with the whole roster: clear
+  // its declined/timed-out history and ask assign-ride again.
+  //
+  // `dispatch_retried_at is null` is load-bearing (20260767). This cron runs
+  // every minute and the window below is three minutes wide, so without it the
+  // retry fired three times per ride and wiped the dispatch history on each
+  // pass — which erases the record every "we already asked them" rule depends
+  // on. It is what kept a ride re-offering itself to the same unresponsive
+  // driver once a minute despite assign-ride's two-strike rule.
   const { data: staleRides, error: staleError } = await supabase
     .from("rides")
     .select("id, declined_by")
     .in("status", ["pending", "offered"])
     .is("scheduled_at", null)
+    .is("dispatch_retried_at", null)
     .lt("created_at", rebroadcastCutoff)
     .gte("created_at", timeoutCutoff); // not already in the expired bucket
 
@@ -130,24 +137,41 @@ Deno.serve(async (req) => {
     console.log(`[expire-pending-rides] retrying assignment for ${staleRides.length} stale rides`);
 
     for (const ride of staleRides) {
-      // Both lists, not just declined_by. assign-ride stopped clearing
-      // timed_out_by on its pass-2 cycle (it was half of an infinite re-offer
-      // loop — see the note there), so this retry is now the ONE place a ride's
-      // dispatch history is wiped. Clearing only half would leave a driver who
-      // timed out twice stuck in the second-chance pass forever while everyone
-      // else got a genuinely fresh start.
+      // Both lists, and the stamp, in ONE write. assign-ride no longer clears
+      // timed_out_by on its pass-2 cycle (that was half of an infinite re-offer
+      // loop), so this is the single place a ride's dispatch history is wiped —
+      // and the stamp is what makes it happen once rather than once a minute.
+      // Written before the call, so a failed call still consumes the retry
+      // rather than leaving the ride to be re-opened on the next tick.
       await supabase
         .from("rides")
-        .update({ declined_by: [], timed_out_by: [] })
+        .update({
+          declined_by: [],
+          timed_out_by: [],
+          dispatch_retried_at: new Date().toISOString(),
+        })
         .eq("id", ride.id);
-      await fetch(ASSIGN_RIDE_URL, {
+      const retryRes = await fetch(ASSIGN_RIDE_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+          // Required, and its absence is why this retry has never once worked.
+          // assign-ride treats a caller as internal via x-webhook-secret OR a
+          // service_role JWT — and this project's SUPABASE_SERVICE_ROLE_KEY is
+          // a new-style secret key, not a JWT, so the bearer alone fell through
+          // to the driver-identity path and 401'd every time ("token contains
+          // an invalid number of segments", observed 2026-08-30).
+          // reassign-stale-rides has always sent both headers; this one didn't.
+          "x-webhook-secret": Deno.env.get("WEBHOOK_SECRET") ?? "",
         },
         body: JSON.stringify({ ride_id: ride.id }),
       });
+      if (!retryRes.ok) {
+        console.error(
+          `[expire-pending-rides] retry assign-ride failed for ${ride.id}: ${retryRes.status}`,
+        );
+      }
     }
   }
 
