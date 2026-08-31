@@ -125,7 +125,16 @@ Deno.serve(async (req) => {
   const { data: staleRides, error: staleError } = await supabase
     .from("rides")
     .select("id, declined_by")
-    .in("status", ["pending", "offered"])
+    // 'pending' only. An 'offered' ride is already sitting with a driver whose
+    // 30s countdown is running, so assign-ride returns "is offered — skipping"
+    // and the retry achieves nothing — except that the wipe above it has
+    // already happened, spending the one-shot AND handing that same driver an
+    // extra ask once their offer lapses (observed on ride 59e70e31: three
+    // offers where two were intended). Non-response on an offered ride is
+    // reassign-stale-rides' job at 60s; this retry exists for the other case,
+    // a ride left sitting in 'pending' because everyone declined or nobody was
+    // reachable — and that state persists, so the cron will find it.
+    .eq("status", "pending")
     .is("scheduled_at", null)
     .is("dispatch_retried_at", null)
     .lt("created_at", rebroadcastCutoff)
