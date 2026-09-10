@@ -1,5 +1,7 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
+import { flushBreadcrumbs, recordFixes } from "./breadcrumbs";
 import { getDeviceToken } from "./deviceSession";
 import { supabase } from "./supabase";
 
@@ -32,6 +34,30 @@ export const DRIVER_LOCATION_TASK = "driver-location-updates";
  * the ride tier sets both.
  */
 type Cadence = "idle" | "ride";
+
+// Which ride the current fixes belong to, so a breadcrumb can be attributed to
+// a fare. Persisted rather than held in a module variable: the OS can relaunch
+// this JS context headlessly to deliver a batch, and a fresh context would
+// stamp a mid-ride trail as idle — losing exactly the rows a "the driver took
+// the long way" dispute is answered from.
+const ACTIVE_RIDE_KEY = "driver.location.activeRide";
+
+async function setActiveRideId(rideId: string | null): Promise<void> {
+  try {
+    if (rideId) await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
+    else await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+  } catch {
+    // Worst case a fix is filed as idle; never worth failing a start over.
+  }
+}
+
+async function getActiveRideId(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
+  } catch {
+    return null;
+  }
+}
 
 const CADENCE: Record<Cadence, Location.LocationTaskOptions> = {
   idle: {
@@ -153,6 +179,24 @@ TaskManager.defineTask(DRIVER_LOCATION_TASK, async ({ data, error }) => {
   const driverId = await resolveDriverId();
   if (!driverId) return;
 
+  // History gets EVERY fix in the batch; the live position column only gets the
+  // newest. A batch that arrived late is several minutes of trail, and throwing
+  // away all but the last point would draw the straight teleport line the
+  // recorded_at column exists to avoid.
+  const rideId = await getActiveRideId();
+  await recordFixes(
+    driverId,
+    (locations ?? []).map((fix) => ({
+      recorded_at: new Date(fix.timestamp).toISOString(),
+      lat: fix.coords.latitude,
+      lng: fix.coords.longitude,
+      heading: courseOrNull(fix.coords),
+      speed: fix.coords.speed ?? null,
+      accuracy: fix.coords.accuracy ?? null,
+      ride_id: rideId,
+    })),
+  );
+
   const result = await writeDriverPosition(driverId, latest.coords);
   if (result === "displaced") {
     // Another device owns this account now. A device that lost the lock must
@@ -185,7 +229,10 @@ async function resolveDriverId(): Promise<string | null> {
 
 export async function startDriverLocationUpdates(
   cadence: Cadence,
+  activeRideId: string | null = null,
 ): Promise<boolean> {
+  await setActiveRideId(activeRideId);
+
   // Only foreground permission is requested, on purpose — see the header.
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== "granted") return false;
@@ -215,7 +262,11 @@ export async function startDriverLocationUpdates(
   }
 }
 
-export async function stopDriverLocationUpdates(): Promise<void> {
+export async function stopDriverLocationUpdates(driverId?: string): Promise<void> {
+  await setActiveRideId(null);
+  // A shift ending is the one moment buffered fixes would otherwise sit unsent
+  // until the next shift — flush before the task stops feeding it.
+  if (driverId) await flushBreadcrumbs(driverId);
   try {
     const started = await Location.hasStartedLocationUpdatesAsync(
       DRIVER_LOCATION_TASK,

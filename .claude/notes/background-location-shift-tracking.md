@@ -1,6 +1,7 @@
 # Background location — whole-shift tracking + breadcrumb history
 
-Status: STEP 1 BUILT 2026-09-10 (not yet on a device — needs the store build).
+Status: STEPS 1-2 BUILT 2026-09-10 (migration NOT yet applied; nothing on a
+device — needs the store build). Status: STEP 1 BUILT 2026-09-10 (not yet on a device — needs the store build).
 Steps 2-5 still design. Decided 2026-09-10. Supersedes the "active rides
 only" section of `liveness-rework-design.md`, which is now wrong on one axis.
 
@@ -279,11 +280,6 @@ weeks).
   the battery profile the tiered cadence exists to avoid. If this matters after
   real shift data, the cheaper fix is teaching `presence.ts` that "same
   coordinates, not moving" ≠ "stale", not fighting the platform.
-- **`active_ride_eta_seconds` is still foreground-only.** `DriverActiveRideScreen`
-  computes and broadcasts it from its own `watchPositionAsync`, which the task
-  does not replace. So during a backgrounded fare the passenger's car now moves
-  but the countdown still freezes. Half the original bug. Fix belongs with the
-  breadcrumb work in step 2, where the task is already the position authority.
 - **Session expiry inside the task.** `supabase.ts` stops the auto-refresh loop
   on background, so a batch arriving after hours has an expired access token and
   the `drivers` UPDATE policy is `id = auth.uid()`. `resolveDriverId()` refreshes
@@ -301,3 +297,51 @@ weeks).
 - **Not yet observed on a device.** `expo-task-manager` is native, so this does
   nothing in Expo Go. It is verified by introspection and typecheck only until
   the store build.
+
+
+## Open item — `active_ride_eta_seconds` is still foreground-only
+
+Deliberately NOT folded into step 2 (it is not a breadcrumb problem and would
+have doubled the change). `DriverActiveRideScreen` computes the ETA from its own
+`watchPositionAsync` and route progress, so during a BACKGROUNDED fare the
+passenger's car now moves but the countdown still freezes — half of the original
+bug remains. Whoever picks this up: the background task is already the position
+authority during a ride, so the ETA either moves into it (needs the route
+geometry, which lives in the screen) or the passenger client derives ETA from
+the moving dot. Decide which before writing anything.
+
+## Step 2 — built 2026-09-10
+
+Migration `20260768_driver_locations.sql` + `src/lib/breadcrumbs.ts` + the task
+recording every fix in a delivered batch.
+
+**Apply the migration and run
+`.claude/notes/driver-locations-postapply-checks.sql` BEFORE any build writes to
+it.** A client hitting a missing table gets a permanent PostgREST error, and per
+the uploader's error branching that batch is dropped — silent history loss with
+a working live dot, which is the failure mode hardest to notice.
+
+Design points that are load-bearing:
+
+- **`recorded_at` (device fix time) AND `received_at` (insert time).** One extra
+  column makes a wrong device clock distinguishable from a genuine upload delay,
+  which matters when the history is evidence.
+- **No UPDATE or DELETE grant to anyone.** A breadcrumb is an immutable
+  observation; a driver able to edit their own trail removes the reason a
+  company trusts it.
+- **Passengers get nothing.** Live position during their own ride is the entire
+  legitimate need; history would let anyone who ever booked reconstruct a
+  driver's movements.
+- **Fixes are buffered (10 fixes or 60s, whichever first), capped at 450 with
+  the OLDEST dropped**, persisted in AsyncStorage so a killed JS context does
+  not lose them, and serialised through a promise chain because the task can
+  fire again mid-flush and the buffer is a read-modify-write.
+- **The flush distinguishes transient from permanent failures.** Retrying
+  everything forever is a silent stall: `status === 0` (PostgREST resolves,
+  never throws, on a network failure) or 5xx keeps the rows; a 4xx drops the
+  batch loudly. The concrete permanent case is `ride_id` — it is persisted to
+  survive a headless relaunch, so it also survives a crash mid-ride, and a
+  deleted ride fails the FK (23503) on every retry forever.
+- **The company-id cache is keyed by driver id.** A shared phone would otherwise
+  inherit the previous driver's company, fail the INSERT policy's company check
+  on every row, and retry the same rejected batch forever.

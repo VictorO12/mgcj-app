@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import * as Location from "expo-location";
+import { recordFix } from "../lib/breadcrumbs";
 import {
+  courseOrNull,
   isDriverLocationRunning,
   startDriverLocationUpdates,
   stopDriverLocationUpdates,
@@ -44,6 +46,10 @@ export function useDriverLocationBroadcast(
   // just because the callback identity changed on a re-render.
   const onDisplacedRef = useRef(onDisplaced);
   onDisplacedRef.current = onDisplaced;
+  // The unmount cleanup below runs with an empty dep list so it can't close over
+  // a live driverId; a ref gives it the current one without re-running.
+  const driverIdRef = useRef(driverId);
+  driverIdRef.current = driverId;
 
   useEffect(() => {
     if (!driverId) return;
@@ -79,10 +85,10 @@ export function useDriverLocationBroadcast(
   useEffect(() => {
     if (!driverId) return;
     if (!isOnline) {
-      void stopDriverLocationUpdates();
+      void stopDriverLocationUpdates(driverId);
       return;
     }
-    void startDriverLocationUpdates(tier);
+    void startDriverLocationUpdates(tier, activeRideId ?? null);
     // No cleanup-stop here: this effect re-runs on every cadence change, and
     // tearing the service down between tiers would drop fixes mid-fare. Going
     // offline is the only thing that stops it, handled by the branch above.
@@ -91,7 +97,7 @@ export function useDriverLocationBroadcast(
   // Stop tracking if the driver signs out or this hook unmounts for good — the
   // service outliving the session would keep writing for a driver who is gone.
   useEffect(() => {
-    return () => { void stopDriverLocationUpdates(); };
+    return () => { void stopDriverLocationUpdates(driverIdRef.current); };
   }, []);
 
   useEffect(() => {
@@ -114,6 +120,20 @@ export function useDriverLocationBroadcast(
           // No fix available this tick; still send the beat.
         }
       }
+      if (coords) {
+        // Fallback path only: the task normally owns history. Without this a
+        // device that could not start the background service would show a live
+        // dot and an empty trail.
+        await recordFix(driverId, {
+          recorded_at: new Date().toISOString(),
+          lat: coords.latitude,
+          lng: coords.longitude,
+          heading: courseOrNull(coords),
+          speed: coords.speed ?? null,
+          accuracy: coords.accuracy ?? null,
+          ride_id: activeRideId ?? null,
+        });
+      }
       const result = await writeDriverPosition(driverId, coords);
       if (result === "displaced") {
         console.warn("[Session] heartbeat rejected — device_token no longer ours");
@@ -123,5 +143,5 @@ export function useDriverLocationBroadcast(
     return () => {
       if (heartbeat.current) clearInterval(heartbeat.current);
     };
-  }, [isOnline, driverId]);
+  }, [isOnline, driverId, activeRideId]);
 }
