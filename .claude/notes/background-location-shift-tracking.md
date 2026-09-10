@@ -385,3 +385,29 @@ which stops the device's location task through the existing realtime
 
 Checks: `.claude/notes/shift-auto-end-postapply-checks.sql`. Check 5 is a dry
 run inside a transaction you roll back.
+
+
+## Step 3 follow-ups — what the dry run caught (20260771)
+
+Running check 5 BEFORE deploying is the only reason these were not found in
+production, and both were invisible in code review.
+
+- **Six drivers due to be prompted, all with `push_token = NULL`.** The prompt
+  had nowhere to go, so they would have sat out the grace window in silence and
+  been "ended for not answering" a question that could not be delivered. Fixed
+  by ending them directly, with no prompt and no grace window (a grace period
+  only means something to someone who was asked), reported as
+  `ended_unreachable` so no log line claims otherwise. Sparing them was the
+  wrong answer: `assign-ride` filters on `push_token` because a ride offer IS a
+  push, so unreachable + not moving is not a working shift, and leaving them
+  alone means background location running indefinitely for someone who revoked
+  notifications — the exact exposure step 3 closes.
+- **They were the seeded demo drivers**, which would have gone offline within
+  the hour and vanished from the dispatch map, possibly mid-pitch. They had been
+  surviving on an ACCIDENT: `presence.ts` treating `last_seen_at IS NULL` as
+  live, a tolerance that exists for an unrelated reason (builds predating the
+  heartbeat during a non-atomic rollout). `drivers.is_demo` now says what is
+  meant; both `run_shift_auto_end` and `reap_stale_drivers` skip it, so it
+  survives the day that NULL tolerance is tightened. **The UPDATE that sets the
+  flag is deliberately not in the migration** — flagging a real driver opts them
+  out of every automatic offline sweep, silently and permanently.
