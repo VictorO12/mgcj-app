@@ -16,6 +16,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import AnimatedMarker from "../../components/AnimatedMarker";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
+import { useKeepAwake } from "expo-keep-awake";
 import { setAudioModeAsync } from "expo-audio";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -204,6 +205,15 @@ export default function DriverActiveRideScreen({
   openChatSignal,
   openChatRideId,
 }: Props) {
+  // Hold the screen on for the whole fare. Turn-by-turn is useless if the
+  // display sleeps mid-route, and a screen timeout is also the most common way
+  // the app ends up backgrounded — which used to freeze the passenger's car and
+  // ETA outright. Background location now covers that case, so this is quality
+  // rather than correctness: a foregrounded screen tracks at navigation
+  // accuracy and recomputes the ETA every GPS tick. Scoped to this screen only,
+  // so it is never on while a driver is merely online and idle.
+  useKeepAwake();
+
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
