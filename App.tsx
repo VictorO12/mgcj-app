@@ -24,6 +24,12 @@ import OTPVerifyScreen from "./src/screens/auth/OTPVerifyScreen";
 import PassengerHomeScreen from "./src/screens/passenger/PassengerHomeScreen";
 import DriverApp from "./src/screens/driver/DriverApp";
 import OfflineBanner from "./src/components/OfflineBanner";
+// Side-effect import: defines the background location task at module scope.
+// The OS can relaunch the app headlessly to deliver a location batch, and if
+// the task name is not registered by the time that happens the batch is
+// dropped with only a warning nobody sees on a device. Must not move into a
+// hook or a component.
+import "./src/lib/driverLocation";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const STRIPE_KEY = Constants.expoConfig?.extra?.stripePublishableKey ?? "";

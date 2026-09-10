@@ -99,8 +99,8 @@ function generateUUID(): string {
 
 export default function DriverApp() {
   const { profile, signOut } = useAuth();
-  useDriverLocationBroadcast(profile?.id, handleHeartbeatRejected);
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
+  useDriverLocationBroadcast(profile?.id, handleHeartbeatRejected, activeRide?.id);
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
   const [driverRecord, setDriverRecord] = useState<DriverRecord | null>(null);
