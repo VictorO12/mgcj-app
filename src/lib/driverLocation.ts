@@ -3,6 +3,7 @@ import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import { flushBreadcrumbs, recordFixes } from "./breadcrumbs";
 import { getDeviceToken } from "./deviceSession";
+import { etaSecondsFromRoute, type LatLng } from "./routeProgress";
 import { supabase } from "./supabase";
 
 // Background driver location. Runs as an Android foreground service / iOS
@@ -48,6 +49,39 @@ async function setActiveRideId(rideId: string | null): Promise<void> {
     else await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
   } catch {
     // Worst case a fix is filed as idle; never worth failing a start over.
+  }
+}
+
+// The route the driver is currently following, stashed by
+// DriverActiveRideScreen on every Directions fetch so the background task can
+// keep the passenger's ETA counting down while the app is backgrounded. Storing
+// the polyline (rather than calling Directions from the task) is what keeps
+// this free: the arithmetic is local, and a Maps call per fix is exactly the
+// bill the local-interpolation design removed.
+const ACTIVE_ROUTE_KEY = "driver.location.activeRoute";
+
+export type StoredRoute = {
+  rideId: string;
+  coords: LatLng[];
+  avgSpeed: number | null;
+  capturedAt: number;
+};
+
+export async function setActiveRoute(route: StoredRoute | null): Promise<void> {
+  try {
+    if (route) await AsyncStorage.setItem(ACTIVE_ROUTE_KEY, JSON.stringify(route));
+    else await AsyncStorage.removeItem(ACTIVE_ROUTE_KEY);
+  } catch {
+    // Worst case the backgrounded ETA goes null — the old behaviour, not worse.
+  }
+}
+
+async function getActiveRoute(): Promise<StoredRoute | null> {
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_ROUTE_KEY);
+    return raw ? (JSON.parse(raw) as StoredRoute) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -109,6 +143,12 @@ function taskOptions(cadence: Cadence): Location.LocationTaskOptions {
 export async function writeDriverPosition(
   driverId: string,
   coords: { latitude: number; longitude: number; heading?: number | null; speed?: number | null } | null,
+  /**
+   * Passenger-facing ETA. `undefined` leaves the column alone (the screen owns
+   * it while it is mounted); `null` clears it, which is the honest answer when
+   * the driver is off the stored route and we have no way to recompute one.
+   */
+  etaSeconds?: number | null,
 ): Promise<"ok" | "displaced" | "skipped"> {
   const deviceToken = await getDeviceToken();
   if (!deviceToken) return "skipped"; // never claimed the lock; nothing to compare against
@@ -124,6 +164,9 @@ export async function writeDriverPosition(
     update.current_lat = coords.latitude;
     update.current_lng = coords.longitude;
     update.heading = courseOrNull(coords);
+  }
+  if (etaSeconds !== undefined) {
+    update.active_ride_eta_seconds = etaSeconds;
   }
 
   const { data, error } = await supabase
@@ -197,7 +240,22 @@ TaskManager.defineTask(DRIVER_LOCATION_TASK, async ({ data, error }) => {
     })),
   );
 
-  const result = await writeDriverPosition(driverId, latest.coords);
+  // Keep the passenger's countdown moving while the app is backgrounded. The
+  // screen normally owns this column and computes the same number every GPS
+  // tick — but it only runs while it is on screen, so a driver taking a call or
+  // locking their phone used to freeze the ETA at whatever it last said. The
+  // task recomputes it from the stored route, and writes NULL rather than a
+  // stale number when the driver has left that route: no ETA is honest, a
+  // confidently wrong one is the same bug in a costume.
+  const eta =
+    rideId != null
+      ? await etaForFix(rideId, {
+          latitude: latest.coords.latitude,
+          longitude: latest.coords.longitude,
+        })
+      : undefined;
+
+  const result = await writeDriverPosition(driverId, latest.coords, eta);
   if (result === "displaced") {
     // Another device owns this account now. A device that lost the lock must
     // not keep writing position — dispatch would see two cars for one driver.
@@ -205,6 +263,16 @@ TaskManager.defineTask(DRIVER_LOCATION_TASK, async ({ data, error }) => {
     await stopDriverLocationUpdates();
   }
 });
+
+async function etaForFix(
+  rideId: string,
+  loc: LatLng,
+): Promise<number | null | undefined> {
+  const route = await getActiveRoute();
+  // A route belonging to a different ride tells us nothing about this one.
+  if (!route || route.rideId !== rideId) return null;
+  return etaSecondsFromRoute(loc, route);
+}
 
 async function resolveDriverId(): Promise<string | null> {
   const { data, error } = await supabase.auth.getSession();
@@ -264,6 +332,7 @@ export async function startDriverLocationUpdates(
 
 export async function stopDriverLocationUpdates(driverId?: string): Promise<void> {
   await setActiveRideId(null);
+  await setActiveRoute(null);
   // A shift ending is the one moment buffered fixes would otherwise sit unsent
   // until the next shift — flush before the task stops feeding it.
   if (driverId) await flushBreadcrumbs(driverId);

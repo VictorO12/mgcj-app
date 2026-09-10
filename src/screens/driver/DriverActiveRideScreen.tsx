@@ -19,6 +19,12 @@ import * as Speech from "expo-speech";
 import { setAudioModeAsync } from "expo-audio";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+// Shared with the background location task, which computes the SAME ETA from
+// the SAME polyline while this screen is not mounted. Two copies of this
+// arithmetic would drift, and the symptom would be the passenger's countdown
+// jumping every time the driver locks their phone.
+import { getDistance, remainingRouteDistance } from "../../lib/routeProgress";
+import { setActiveRoute } from "../../lib/driverLocation";
 import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
 import { useRideThread } from "../../hooks/useRideThread";
@@ -109,41 +115,6 @@ function decodePolyline(encoded: string): LatLng[] {
     points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
   }
   return points;
-}
-
-// ── Haversine distance in metres ──────────────────────────────────────────
-function getDistance(a: LatLng, b: LatLng): number {
-  const R = 6371000;
-  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
-  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((a.latitude * Math.PI) / 180) *
-      Math.cos((b.latitude * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
-}
-
-// ── Remaining distance (m) from `loc` to the end of the route polyline ─────
-// Snaps to the nearest polyline vertex, then sums the leg lengths from there
-// to the destination. Cheap (a few hundred points) and runs each GPS tick to
-// keep the local ETA live between the throttled route refetches.
-function remainingRouteDistance(loc: LatLng, coords: LatLng[]): number | null {
-  if (coords.length < 2) return null;
-  let nearestIdx = 0;
-  let minD = Infinity;
-  for (let i = 0; i < coords.length; i++) {
-    const d = getDistance(loc, coords[i]);
-    if (d < minD) {
-      minD = d;
-      nearestIdx = i;
-    }
-  }
-  let rem = getDistance(loc, coords[nearestIdx]);
-  for (let i = nearestIdx; i < coords.length - 1; i++) {
-    rem += getDistance(coords[i], coords[i + 1]);
-  }
-  return rem;
 }
 
 // ── Compass bearing from one point to another (0–360) ────────────────────
@@ -538,7 +509,11 @@ export default function DriverActiveRideScreen({
       if (offRouteTimer.current) clearTimeout(offRouteTimer.current);
       if (recenterTimer.current) clearTimeout(recenterTimer.current);
       // Clear the broadcast ETA so the next passenger this driver picks up never
-      // reads a stale value before the new route's first tick lands.
+      // reads a stale value before the new route's first tick lands. The stored
+      // route goes with it: it is keyed by ride id, so a leftover one would be
+      // ignored rather than misapplied, but leaving a polyline in storage for a
+      // finished ride is just litter.
+      void setActiveRoute(null);
       if (profile) {
         supabase
           .from("drivers")
@@ -871,6 +846,16 @@ export default function DriverActiveRideScreen({
       if (decoded.length > 1) {
         setRouteCoords(decoded);
         routeCoordsRef.current = decoded;
+        // Hand the route to the background task so the passenger's ETA keeps
+        // counting down when this screen is backgrounded. Written on every
+        // fetch, so the task always holds the same geometry this screen is
+        // interpolating against.
+        void setActiveRoute({
+          rideId: ride.id,
+          coords: decoded,
+          avgSpeed: routeAvgSpeedRef.current,
+          capturedAt: Date.now(),
+        });
       }
       setSteps(legSteps);
       // Route is always recomputed from the driver's current position, so the
