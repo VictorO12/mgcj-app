@@ -4,7 +4,7 @@
 -- gets a permanent PostgREST error, and the uploader drops that batch.
 -- A migration file in the repo is NOT proof the SQL ran.
 
--- 1. Table + columns. Expect 10 rows; recorded_at and received_at both present.
+-- 1. Table + columns. Expect 11 rows; recorded_at and received_at both present.
 SELECT column_name, data_type, is_nullable
   FROM information_schema.columns
  WHERE table_name = 'driver_locations'
@@ -18,9 +18,15 @@ SELECT policyname, cmd, qual, with_check
 -- 3. RLS actually enabled (a table with policies and RLS off is wide open).
 SELECT relname, relrowsecurity FROM pg_class WHERE relname = 'driver_locations';
 
--- 4. Grants. Expect SELECT + INSERT for authenticated, and NO update/delete.
---    Anything for anon here is a bug — an anonymous guest-booking session must
---    never reach this table.
+-- 4. Grants. Expect SELECT + INSERT for authenticated and NOTHING for anon.
+--
+--    THIS FAILED ON FIRST RUN (2026-09-10) and 20260769 exists to fix it: both
+--    roles held DELETE/INSERT/REFERENCES/SELECT/TRIGGER/TRUNCATE/UPDATE,
+--    because Supabase's ALTER DEFAULT PRIVILEGES grants ALL on every new table
+--    and privileges are ADDITIVE — a narrower GRANT narrows nothing. Re-run
+--    this check after applying 20260769. If a future table shows the same
+--    thing, the fix is always revoke-then-regrant-a-list, never a tighter
+--    GRANT.
 SELECT grantee, privilege_type
   FROM information_schema.role_table_grants
  WHERE table_name = 'driver_locations'
