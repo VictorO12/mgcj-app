@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as Location from "expo-location";
 import { recordFix } from "../lib/breadcrumbs";
+import { getDistance } from "../lib/routeProgress";
 import {
   courseOrNull,
   isDriverLocationRunning,
@@ -50,6 +51,13 @@ export function useDriverLocationBroadcast(
   // a live driverId; a ref gives it the current one without re-running.
   const driverIdRef = useRef(driverId);
   driverIdRef.current = driverId;
+  // Last position filed as a breadcrumb on the FALLBACK path. That path fixes
+  // position every 10s whether or not the car has moved, so without this a
+  // parked driver files ~8,600 identical rows a day — noise in the history, and
+  // it muddies driver_has_moved(), which asks whether a shift is still being
+  // worked. The background task needs no equivalent: its idle tier is distance
+  // triggered, so a stationary car emits nothing by construction.
+  const lastCrumb = useRef<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
     if (!driverId) return;
@@ -120,7 +128,18 @@ export function useDriverLocationBroadcast(
           // No fix available this tick; still send the beat.
         }
       }
-      if (coords) {
+      const movedEnough =
+        coords != null &&
+        (lastCrumb.current == null ||
+          getDistance(lastCrumb.current, {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          }) >= 50);
+      if (coords && movedEnough) {
+        lastCrumb.current = {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        };
         // Fallback path only: the task normally owns history. Without this a
         // device that could not start the background service would show a live
         // dot and an empty trail.

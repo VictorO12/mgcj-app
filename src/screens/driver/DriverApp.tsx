@@ -521,6 +521,31 @@ export default function DriverApp() {
         const action = response.actionIdentifier;
         const data = response.notification.request.content.data ?? {};
 
+        // "Still on shift?" — acknowledging is what keeps a working driver
+        // online. Both buttons and a plain tap land here; only GO_OFFLINE ends
+        // the shift, everything else is taken as "yes, I'm here".
+        if (data.type === "shift_check") {
+          if (!profile?.id) return;
+          if (action === "GO_OFFLINE") {
+            await supabase
+              .from("drivers")
+              .update({ is_active: false, shift_prompt_at: null })
+              .eq("id", profile.id);
+          } else {
+            // Stamping activity, not just clearing the prompt: clearing alone
+            // would leave them still 45+ minutes idle, so the very next cron
+            // tick would ask again.
+            await supabase
+              .from("drivers")
+              .update({
+                shift_prompt_at: null,
+                shift_activity_at: new Date().toISOString(),
+              })
+              .eq("id", profile.id);
+          }
+          return;
+        }
+
         if (data.type === "dispatch_message") {
           setOpenInboxSignal((s) => s + 1);
           return;

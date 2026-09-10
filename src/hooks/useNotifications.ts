@@ -78,6 +78,23 @@ export async function registerPushToken(
 
   // Drivers get Accept/Decline action buttons — passengers get standard notifications
   if (profile.role === 'driver') {
+    // "Still on shift?" — the 45-minute idle check that stops background
+    // location for a driver who forgot to go offline. Both buttons open the
+    // app: the ack has to be written by a mounted handler, and a background
+    // action fires in a context where DriverApp may not be running at all.
+    await Notifications.setNotificationCategoryAsync('SHIFT_CHECK', [
+      {
+        identifier: 'STAY_ONLINE',
+        buttonTitle: "Yes, I'm working",
+        options: { opensAppToForeground: true },
+      },
+      {
+        identifier: 'GO_OFFLINE',
+        buttonTitle: 'Go offline',
+        options: { opensAppToForeground: true, isDestructive: true },
+      },
+    ])
+
     await Notifications.setNotificationCategoryAsync('RIDE_REQUEST', [
       {
         identifier: 'ACCEPT',

@@ -83,6 +83,60 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Shift auto-end (20260770). The privacy stop for background location:
+    // 45 minutes with no sign of work -> ask "still on shift?", 15 more minutes
+    // of silence -> switch them offline, which also stops the location task on
+    // their device (the app watches is_active over Realtime). Piggybacked here
+    // for the same reason as the reaper, and 10-minute resolution on a 45/15
+    // rule just means "45" is really 45-55.
+    //
+    // Never let this break the coverage pass below: the DB half has already
+    // committed either way, and a failed push is recoverable — a driver who was
+    // switched off silently still gets corrected by useOnReconnect when they
+    // next open the app.
+    try {
+      const { data: shiftRows, error: shiftErr } = await supabase.rpc('run_shift_auto_end')
+      if (shiftErr) {
+        console.error('[coverage-monitor] shift auto-end error:', JSON.stringify(shiftErr))
+      } else {
+        const rows: Array<{ driver_id: string; push_token: string | null; action: string }> =
+          shiftRows ?? []
+        const prompts = rows.filter((r) => r.action === 'prompt')
+        const ended = rows.filter((r) => r.action === 'ended')
+        if (rows.length > 0) {
+          console.log(
+            `[coverage-monitor] shift auto-end: ${prompts.length} prompted, ${ended.length} ended`,
+          )
+        }
+        const messages = [
+          ...prompts
+            .filter((r) => !!r.push_token)
+            .map((r) => ({
+              to: r.push_token!,
+              title: 'Still on shift?',
+              body: "We haven't seen any activity for a while. Tap to stay online — otherwise we'll set you offline shortly and stop sharing your location.",
+              data: { type: 'shift_check', driver_id: r.driver_id },
+              // Two buttons, mirroring RIDE_REQUEST. "Still on shift" opens the
+              // app so the ack is written by a mounted handler; a background
+              // action would fire in a context where DriverApp may not exist.
+              categoryIdentifier: 'SHIFT_CHECK',
+              priority: 'high' as const,
+            })),
+          ...ended
+            .filter((r) => !!r.push_token)
+            .map((r) => ({
+              to: r.push_token!,
+              title: "You've been set offline",
+              body: "We didn't hear back, so we've set you offline and stopped sharing your location. Open the app and go online whenever you're ready.",
+              data: { type: 'shift_ended', driver_id: r.driver_id },
+            })),
+        ]
+        if (messages.length > 0) await sendPushMany(messages)
+      }
+    } catch (e) {
+      console.error('[coverage-monitor] shift auto-end threw:', e)
+    }
+
     // Expo push receipts, piggybacked here for the same reason as the reaper
     // above: a dedicated cron would add rows to cron.job_run_details, which has
     // filled the disk once already. This is the half that catches a token which
