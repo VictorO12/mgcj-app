@@ -315,9 +315,13 @@ the moving dot. Decide which before writing anything.
 Migration `20260768_driver_locations.sql` + `src/lib/breadcrumbs.ts` + the task
 recording every fix in a delivered batch.
 
-**Apply the migration and run
-`.claude/notes/driver-locations-postapply-checks.sql` BEFORE any build writes to
-it.** A client hitting a missing table gets a permanent PostgREST error, and per
+**APPLIED AND VERIFIED 2026-09-10** (20260768 + 20260769, all 8 checks green:
+3 policies, RLS on, `authenticated` = INSERT + SELECT only with anon holding
+nothing, prune function service-role only, cron active). Check 4 FAILED on the
+first pass — see 20260769 — which is the reason to run these at all: the
+migration read as correct and its comment asserted a guarantee that was not
+live. Re-run
+`.claude/notes/driver-locations-postapply-checks.sql` after any change here. A client hitting a missing table gets a permanent PostgREST error, and per
 the uploader's error branching that batch is dropped — silent history loss with
 a working live dot, which is the failure mode hardest to notice.
 
