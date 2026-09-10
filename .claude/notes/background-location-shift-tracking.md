@@ -1,6 +1,6 @@
 # Background location — whole-shift tracking + breadcrumb history
 
-Status: STEPS 1-2 BUILT 2026-09-10. Migration 20260768 NOT yet applied, and
+Status: STEPS 1-3 BUILT 2026-09-10 (the ETA gap below is closed too). Migration 20260768 NOT yet applied, and
 nothing is on a device — this is native code, so it needs the store build.
 Steps 3-5 still design. Decided 2026-09-10. Supersedes the "active rides
 only" section of `liveness-rework-design.md`, which is now wrong on one axis.
@@ -299,16 +299,20 @@ weeks).
   the store build.
 
 
-## Open item — `active_ride_eta_seconds` is still foreground-only
+## `active_ride_eta_seconds` — CLOSED 2026-09-10
 
-Deliberately NOT folded into step 2 (it is not a breadcrumb problem and would
-have doubled the change). `DriverActiveRideScreen` computes the ETA from its own
-`watchPositionAsync` and route progress, so during a BACKGROUNDED fare the
-passenger's car now moves but the countdown still freezes — half of the original
-bug remains. Whoever picks this up: the background task is already the position
-authority during a ride, so the ETA either moves into it (needs the route
-geometry, which lives in the screen) or the passenger client derives ETA from
-the moving dot. Decide which before writing anything.
+The car moved while backgrounded but the countdown beside it did not, which
+reads worse than a frozen car: the two visibly disagree. Fixed by moving the
+route maths to `src/lib/routeProgress.ts` and having `DriverActiveRideScreen`
+stash its decoded polyline + average speed for the task, which recomputes the
+same number from the same geometry on every fix. Storing the route rather than
+calling Directions from the task is what keeps it free — a Maps call per fix is
+the bill local interpolation exists to avoid.
+
+Off the stored route, the task writes **NULL, not the last number**. It cannot
+reroute, and a confidently wrong countdown is the same bug wearing a costume;
+the passenger UI renders no ETA instead. Guards on route age (45 min) and on the
+route belonging to this ride.
 
 ## Step 2 — built 2026-09-10
 
@@ -349,3 +353,35 @@ Design points that are load-bearing:
 - **The company-id cache is keyed by driver id.** A shared phone would otherwise
   inherit the previous driver's company, fail the INSERT policy's company check
   on every row, and retry the same rejected batch forever.
+
+
+## Step 3 — built 2026-09-10
+
+`20260770_shift_auto_end.sql` + a block in `scheduled-coverage-monitor` +
+`SHIFT_CHECK` notification actions. 45 min idle -> ask, 15 more -> offline,
+which stops the device's location task through the existing realtime
+`is_active` subscription.
+
+- **"Idle" is not "no ride events".** A driver two hours into a Halifax run has
+  no status transitions for the whole fare, and a driver on street hails has
+  none at all — a ride-event-only test switches both off mid-fare. Movement
+  comes from `driver_locations` via `driver_has_moved()`, as a **bounding box**
+  rather than "did rows arrive", because the fallback heartbeat files a fix
+  every 10s whether the car moved or not. (That fallback now also skips crumbs
+  under 50m.)
+- **Prompt and end are separate statements**, and the end branch requires an
+  outstanding prompt older than the grace window. One combined UPDATE races
+  itself: a driver 60 min idle with no prompt satisfies both branches on the
+  same tick and statement order decides. The split is what makes "nobody is
+  ended without being asked" true rather than usually-true.
+- **A RECOVER statement runs first**, clearing the prompt for anyone who turned
+  out to be working. Without it `shift_prompt_at` stays set forever and, since
+  PROMPT requires NULL, they could never be asked again.
+- **Both notification buttons open the app.** The ack must be written by a
+  mounted handler; a background action fires where `DriverApp` may not exist.
+- Both new functions are service-role only, revoked from `anon`/`authenticated`
+  **by name** — otherwise the app's anon key could switch every driver on the
+  platform offline.
+
+Checks: `.claude/notes/shift-auto-end-postapply-checks.sql`. Check 5 is a dry
+run inside a transaction you roll back.
