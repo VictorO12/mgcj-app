@@ -1,6 +1,6 @@
 # Background location — whole-shift tracking + breadcrumb history
 
-Status: STEPS 1-3 BUILT 2026-09-10 (the ETA gap below is closed too). Migration 20260768 NOT yet applied, and
+Status: STEPS 1-4 BUILT 2026-09-10 (the ETA gap below is closed too). Migration 20260768 NOT yet applied, and
 nothing is on a device — this is native code, so it needs the store build.
 Steps 3-5 still design. Decided 2026-09-10. Supersedes the "active rides
 only" section of `liveness-rework-design.md`, which is now wrong on one axis.
@@ -411,3 +411,42 @@ production, and both were invisible in code review.
   survives the day that NULL tolerance is tightened. **The UPDATE that sets the
   flag is deliberately not in the migration** — flagging a real driver opts them
   out of every automatic offline sweep, silently and permanently.
+
+
+## Step 4 — built 2026-09-10 (mgcj-dashboard `49bf18b`)
+
+Drivers tab -> driver -> "View this driver's trail". Reuses the always-mounted
+map (the detail panel steps aside); trail logic is pure, in
+`mgcj-dashboard/src/lib/trail.ts`.
+
+The rules are judgement calls, not drawing, which is why they live away from the
+map code:
+
+- **A gap over 6 min breaks the line.** A gap means parked, a tunnel, a dead
+  zone, or a closed app — in none of those do we know the car went straight.
+  Joining across it invents a route, which a record used as evidence must never
+  do.
+- **Movement under 15m is jitter.** A parked car wanders metres per reading;
+  over a shift that sums to kilometres never driven, on a number a driver would
+  dispute.
+- **Stops anchor on the first fix of a run, not a rolling centroid** — a rolling
+  anchor lets a slow crawl through traffic drift across town while every step
+  stays "near" the last, reporting a two-mile shuffle as one stop.
+- **Orange = on a fare, grey = between**, because "was the meter running while
+  you drove that way" is what a dispute turns on.
+- **The scrub marker goes hollow** when the nearest fix is far from the scrubbed
+  time: that is the last known position, not where the car was.
+- Live driver/ride markers are REMOVED while a trail is open and their renderers
+  no-op — `fetchRides` recreates them wholesale and the 15s poll would otherwise
+  put today's pins back over Tuesday's trail mid-session.
+- Scrubbing has its own effect and its own overlay; a range input fires
+  continuously while dragged, and rebuilding every polyline per pixel stutters.
+
+**Untestable by eye until step 5** — no device runs the background task yet, so
+every real driver has zero fixes and the view is empty for all of them. The
+empty state says so explicitly. `.claude/notes/driver-trail-seed-and-verify.sql`
+seeds a plausible shift for a DEMO driver (Kentville -> New Minas -> 25-min stop
+-> Wolfville, one leg on a fare) so the view can be exercised and — more
+importantly — so the staff RLS path is proven: with no company filter in the
+query, a policy that does not grant returns `data: []` and no error, which
+renders identically to "this driver was offline".
