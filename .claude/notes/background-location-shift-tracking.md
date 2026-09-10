@@ -1,8 +1,8 @@
 # Background location — whole-shift tracking + breadcrumb history
 
-Status: STEPS 1-2 BUILT 2026-09-10 (migration NOT yet applied; nothing on a
-device — needs the store build). Status: STEP 1 BUILT 2026-09-10 (not yet on a device — needs the store build).
-Steps 2-5 still design. Decided 2026-09-10. Supersedes the "active rides
+Status: STEPS 1-2 BUILT 2026-09-10. Migration 20260768 NOT yet applied, and
+nothing is on a device — this is native code, so it needs the store build.
+Steps 3-5 still design. Decided 2026-09-10. Supersedes the "active rides
 only" section of `liveness-rework-design.md`, which is now wrong on one axis.
 
 ## Why the earlier note was wrong
