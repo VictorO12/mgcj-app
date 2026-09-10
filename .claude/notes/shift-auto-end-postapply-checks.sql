@@ -47,8 +47,9 @@ ROLLBACK;
 --    bounding box of their last 45 minutes of fixes moved? Compare against
 --    where you know the cars actually are. `false` for a driver you know is
 --    driving means the breadcrumb pipeline is not writing.
+--    (profiles has `name`, not `full_name`.)
 SELECT d.id,
-       p.full_name,
+       p.name,
        d.is_active,
        d.shift_activity_at,
        d.shift_prompt_at,
@@ -60,3 +61,55 @@ SELECT d.id,
   JOIN profiles p ON p.id = d.id
  WHERE d.is_active
  ORDER BY p.full_name;
+
+
+-- ═══ 20260771 follow-ups ════════════════════════════════════════════════════
+--
+-- The first dry run (check 5) returned six drivers due to be prompted, ALL with
+-- push_token = NULL. That exposed two things, both fixed in 20260771: a driver
+-- with no token was going to be "ended for not answering" a question that could
+-- never be delivered, and the six were the seeded demo drivers, which until now
+-- survived only because presence.ts treats a NULL last_seen_at as live.
+
+-- 7. IDENTIFY. Confirm which online drivers are the seeded demo fleet before
+--    flagging anything. A real driver looks different: rides > 0, crumbs
+--    accumulating, a token unless they revoked notifications.
+SELECT d.id, p.name, d.is_active, d.is_demo,
+       d.push_token IS NULL AS no_token,
+       d.last_seen_at, d.shift_activity_at,
+       (SELECT count(*) FROM driver_locations dl WHERE dl.driver_id = d.id) AS crumbs,
+       (SELECT count(*) FROM rides r WHERE r.driver_id = d.id)              AS rides
+  FROM drivers d JOIN profiles p ON p.id = d.id
+ WHERE d.is_active
+ ORDER BY p.name;
+
+-- 8. FLAG them, once identified. Paste the confirmed ids — do NOT flag by
+--    "push_token IS NULL", which would also catch a real driver who revoked
+--    notifications and opt them out of every automatic offline sweep forever.
+-- UPDATE drivers SET is_demo = true WHERE id IN (
+--   '00e60bc0-775a-46c4-af97-2a592d138a9e',
+--   '0dd989b4-1f31-48a6-878b-a32d686afcab',
+--   '25b40ac8-a6a6-47c9-9557-27ddc6ba9cb4',
+--   'd884feee-456a-4231-9404-c528528fd108',
+--   'bafdcad5-e3ed-489d-8691-697d071f63c0',
+--   'f869c10f-ada0-4430-819e-63fa3cdbdd09'
+-- );
+
+-- 9. RE-RUN the dry run. After flagging, expect ZERO rows: the demo fleet is
+--    exempt and no real driver is idle. Any row left is a real finding.
+BEGIN;
+SELECT * FROM public.run_shift_auto_end();
+ROLLBACK;
+
+-- 10. Both functions still service-role only after 20260771's CREATE OR REPLACE
+--     (a replace re-evaluates privileges — this is the step that gets skipped).
+--     Expect f, f, t on both rows.
+SELECT 'run_shift_auto_end' AS fn,
+       has_function_privilege('anon',          'public.run_shift_auto_end(int,int)', 'EXECUTE') AS anon,
+       has_function_privilege('authenticated', 'public.run_shift_auto_end(int,int)', 'EXECUTE') AS authed,
+       has_function_privilege('service_role',  'public.run_shift_auto_end(int,int)', 'EXECUTE') AS service
+UNION ALL
+SELECT 'reap_stale_drivers',
+       has_function_privilege('anon',          'public.reap_stale_drivers(int)', 'EXECUTE'),
+       has_function_privilege('authenticated', 'public.reap_stale_drivers(int)', 'EXECUTE'),
+       has_function_privilege('service_role',  'public.reap_stale_drivers(int)', 'EXECUTE');

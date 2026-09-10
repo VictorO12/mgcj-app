@@ -103,9 +103,15 @@ Deno.serve(async (req) => {
           shiftRows ?? []
         const prompts = rows.filter((r) => r.action === 'prompt')
         const ended = rows.filter((r) => r.action === 'ended')
+        // Ended without ever being asked, because they hold no push token and
+        // so could not be. Counted separately so a log line never claims we
+        // asked someone we had no way of reaching. They get no message here for
+        // the same reason — there is nowhere to send it.
+        const unreachable = rows.filter((r) => r.action === 'ended_unreachable')
         if (rows.length > 0) {
           console.log(
-            `[coverage-monitor] shift auto-end: ${prompts.length} prompted, ${ended.length} ended`,
+            `[coverage-monitor] shift auto-end: ${prompts.length} prompted, ` +
+              `${ended.length} ended, ${unreachable.length} ended unreachable`,
           )
         }
         const messages = [
