@@ -259,6 +259,16 @@ displacement detector. The task additionally **stops itself** on a displaced
 write: a device that lost the session lock must not keep writing position, or
 dispatch sees two cars for one driver.
 
+### SEQUENCING GATE — do not cut a store build on step 1 alone
+
+Step 1 turns on whole-shift background tracking whose ONLY stop is the 4h
+reaper. That is exactly the drive-home exposure this design named as its sharp
+constraint. **No store build until the 45-min shift auto-end (step 3) ships** —
+otherwise the privacy behaviour reaching a customer's drivers is not the one
+described above, and it is the kind of thing that gets swept in on "cut the
+build, everything else is ready" (the heartbeat build has been pending for
+weeks).
+
 ### Known gaps, accepted for step 1
 
 - **iOS backgrounded AND stationary stops beating** (JS timers are suspended;
@@ -279,6 +289,15 @@ dispatch sees two cars for one driver.
   the `drivers` UPDATE policy is `id = auth.uid()`. `resolveDriverId()` refreshes
   when under 60s of life remains and bails loudly rather than writing on a dead
   token — a silent 401 in a context with no UI would be invisible.
+- **Idle `timeInterval` is 30s, not 60s.** `presence.ts` in both repos calls a
+  driver stale at exactly `PRESENCE_STALE_MS = 60_000`, and the dashboard
+  renders its online/away pill straight off it — a 60s beat would sit on the
+  boundary and flicker for a parked driver, on the very surface being sold as
+  "know where your drivers are".
+- **`killServiceOnDestroy: false` — verified, not assumed.**
+  `LocationTaskService.kt:54` only calls `stop()` from `onTaskRemoved` when the
+  flag is true, so the service survives the app being swiped out of recents. It
+  does NOT survive a force-stop from Settings, or a reboot.
 - **Not yet observed on a device.** `expo-task-manager` is native, so this does
   nothing in Expo Go. It is verified by introspection and typecheck only until
   the store build.

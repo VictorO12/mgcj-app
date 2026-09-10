@@ -71,17 +71,22 @@ export function useDriverLocationBroadcast(
   // Background location: on while online, off the moment they go offline. The
   // cadence tier is part of the dependency list so starting a ride restarts the
   // service with the tighter settings.
+  // Derived, and depended on instead of activeRideId: back-to-back fares
+  // (ride A ends, ride B starts) change the id but not the tier, and
+  // restarting the service between them would drop fixes for no gain.
+  const tier = activeRideId ? "ride" : "idle";
+
   useEffect(() => {
     if (!driverId) return;
     if (!isOnline) {
       void stopDriverLocationUpdates();
       return;
     }
-    void startDriverLocationUpdates(driverId, activeRideId ? "ride" : "idle");
+    void startDriverLocationUpdates(tier);
     // No cleanup-stop here: this effect re-runs on every cadence change, and
     // tearing the service down between tiers would drop fixes mid-fare. Going
     // offline is the only thing that stops it, handled by the branch above.
-  }, [driverId, isOnline, activeRideId]);
+  }, [driverId, isOnline, tier]);
 
   // Stop tracking if the driver signs out or this hook unmounts for good — the
   // service outliving the session would keep writing for a driver who is gone.

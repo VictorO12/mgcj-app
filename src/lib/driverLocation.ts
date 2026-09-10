@@ -37,7 +37,12 @@ const CADENCE: Record<Cadence, Location.LocationTaskOptions> = {
   idle: {
     accuracy: Location.Accuracy.Balanced,
     distanceInterval: 150,
-    timeInterval: 60_000,
+    // NOT 60s, even though that is the natural idle number: presence.ts (both
+    // repos) calls a driver stale at exactly PRESENCE_STALE_MS = 60_000, so a
+    // 60s beat lands on both sides of the line every tick and the dashboard's
+    // online/away pill flickers for a driver who is simply parked. Half the
+    // threshold keeps a backgrounded Android driver unambiguously "online".
+    timeInterval: 30_000,
   },
   ride: {
     accuracy: Location.Accuracy.High,
@@ -60,9 +65,11 @@ function taskOptions(cadence: Cadence): Location.LocationTaskOptions {
       notificationTitle: "On shift",
       notificationBody: "Sharing your location with dispatch",
       notificationColor: "#1D9E75",
-      // Keeps the service alive across the app being swiped away, which is the
-      // difference between "the driver locked their phone" and "dispatch lost
-      // them". It cannot survive a force-stop or a reboot — see the note.
+      // Keeps the service alive when the app is swiped out of recents, which
+      // is the difference between "the driver tidied their app switcher" and
+      // "dispatch lost them". Verified in LocationTaskService.kt: onTaskRemoved
+      // only calls stop() when this is true. It does NOT survive a force-stop
+      // from Settings or a reboot — nothing short of BOOT_COMPLETED would.
       killServiceOnDestroy: false,
     },
   };
@@ -125,12 +132,6 @@ export function courseOrNull(coords: {
   return heading;
 }
 
-// The driver id the task should write for. The task body runs in a JS context
-// the OS may have relaunched headlessly, with no React tree and no props, so
-// the id cannot come from a hook — it is stashed here when the task starts and
-// re-read from the session if this module was freshly loaded.
-let taskDriverId: string | null = null;
-
 // Defined at module scope, imported for its side effect from App.tsx. If a
 // headless relaunch delivers a batch before the task name is registered, the
 // batch is dropped and the only trace is a warning nobody sees on a device.
@@ -167,27 +168,24 @@ async function resolveDriverId(): Promise<string | null> {
     console.warn("[Location] no session in task context — skipping fix");
     return null;
   }
-  const expiresAt = data.session.expires_at ?? 0;
-  if (expiresAt * 1000 - Date.now() < 60_000) {
-    const { data: refreshed, error: refreshError } =
-      await supabase.auth.refreshSession();
-    if (refreshError || !refreshed.session) {
-      console.warn("[Location] could not refresh session in task — skipping fix");
-      return null;
-    }
-    taskDriverId = refreshed.session.user.id;
-    return taskDriverId;
+  // Bail rather than refresh, deliberately. Refresh tokens rotate, and a queued
+  // location batch can fire at the same moment startAutoRefresh() does on
+  // foreground resume — both call refresh, one gets a revoked token, and the
+  // driver is signed out mid-shift. That reproduces roughly never in testing
+  // (see the onAuthStateChange deadlock and the global signOut scope bug for
+  // how these land). A dropped fix costs nothing: the next one, or the
+  // foreground interval, covers it. A lost session costs a shift.
+  const expiresAt = (data.session.expires_at ?? 0) * 1000;
+  if (expiresAt - Date.now() < 60_000) {
+    console.warn("[Location] session expiring — skipping fix, not refreshing");
+    return null;
   }
-  taskDriverId = data.session.user.id;
-  return taskDriverId;
+  return data.session.user.id;
 }
 
 export async function startDriverLocationUpdates(
-  driverId: string,
   cadence: Cadence,
 ): Promise<boolean> {
-  taskDriverId = driverId;
-
   // Only foreground permission is requested, on purpose — see the header.
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== "granted") return false;
