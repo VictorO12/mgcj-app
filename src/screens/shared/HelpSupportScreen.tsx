@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import type { Colors } from "../../theme/colors";
 import ReportProblemModal from "../../components/ReportProblemModal";
 import * as Updates from "expo-updates";
 import { getBuildInfo, formatBuildInfo } from "../../lib/updates";
+// TEMPORARY — locked-phone blackout diagnostic, remove with taskDiary.ts.
+import { readTaskDiary, clearTaskDiary, type DiaryEntry } from "../../lib/taskDiary";
 
 interface Props {
   onClose: () => void;
@@ -60,6 +62,15 @@ export default function HelpSupportScreen({ onClose }: Props) {
   const buildLine = formatBuildInfo(getBuildInfo(currentlyRunning));
 
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  // TEMPORARY diagnostic surface. The background location task cannot log
+  // anywhere a developer can reach — no console, possibly no session, possibly
+  // no network — so it keeps a diary in AsyncStorage and this reads it back.
+  const [diary, setDiary] = useState<DiaryEntry[] | null>(null);
+  const [diaryOpen, setDiaryOpen] = useState(false);
+  useEffect(() => {
+    if (diaryOpen) void readTaskDiary().then(setDiary);
+  }, [diaryOpen]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [reportVisible, setReportVisible] = useState(false);
 
@@ -169,6 +180,56 @@ export default function HelpSupportScreen({ onClose }: Props) {
           <Text style={styles.reportText}>Report a problem</Text>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
+
+        {/* TEMPORARY: location task diary — remove once the blackout is settled */}
+        <TouchableOpacity
+          style={styles.reportRow}
+          onPress={() => setDiaryOpen((v) => !v)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="bug-outline" size={18} color={colors.textSecondary} />
+          <Text style={[styles.reportText, { color: colors.textSecondary }]}>
+            Location diagnostics
+          </Text>
+          <Ionicons
+            name={diaryOpen ? "chevron-down" : "chevron-forward"}
+            size={16}
+            color={colors.textSecondary}
+          />
+        </TouchableOpacity>
+        {diaryOpen && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 11, marginBottom: 8 }}>
+              {diary == null
+                ? "Reading…"
+                : diary.length === 0
+                  ? "No entries. If this stays empty across a locked walk, the task is not running at all."
+                  : `${diary.length} entries, newest last`}
+            </Text>
+            {(diary ?? []).map((e, i) => (
+              <Text
+                key={i}
+                selectable
+                style={{ color: colors.textPrimary, fontSize: 10, fontFamily: "monospace" }}
+              >
+                {new Date(e.at).toLocaleTimeString()} {e.step}
+                {e.detail ? ` — ${e.detail}` : ""}
+              </Text>
+            ))}
+            {diary != null && diary.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  void clearTaskDiary().then(() => setDiary([]));
+                }}
+                style={{ marginTop: 12 }}
+              >
+                <Text style={{ color: colors.accentRed, fontSize: 12 }}>
+                  Clear diary
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* Version */}
         <Text style={styles.versionText}>M&G C&J Driver App · {buildLine}</Text>
