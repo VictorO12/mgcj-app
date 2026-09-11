@@ -1,5 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+// TEMPORARY — see taskDiary.ts.
+import { noteTaskEvent } from "./taskDiary";
 
 // Breadcrumb history: the trail of where a driver has been, as opposed to
 // drivers.current_lat/lng which is only where they are now. This is the half a
@@ -131,6 +133,14 @@ export async function recordFix(
 export async function recordFixes(
   driverId: string,
   crumbs: Breadcrumb[],
+  /**
+   * Pass false when the caller knows the session cannot authenticate right now
+   * (the background task with an unusable token). The fixes are still buffered
+   * — that is the whole point, history must survive a locked phone — but no
+   * round trip is attempted, so we neither waste a radio wake nor risk the
+   * flush being misread as a permanent rejection.
+   */
+  allowFlush = true,
 ): Promise<void> {
   if (crumbs.length === 0) return;
   return serialise(async () => {
@@ -142,10 +152,31 @@ export async function recordFixes(
     const dueByAge =
       oldest != null && Date.now() - new Date(oldest.recorded_at).getTime() >= FLUSH_AGE_MS;
 
-    if (rows.length < FLUSH_COUNT && !dueByAge) {
+    if (!allowFlush || (rows.length < FLUSH_COUNT && !dueByAge)) {
       await writeBuffer(rows);
       return;
     }
+    await flushRows(driverId, rows);
+  });
+}
+
+/**
+ * Flush the buffer IF it has hit the count or age threshold — without adding
+ * anything to it.
+ *
+ * Exists because the task now buffers before it knows whether it can
+ * authenticate, so by the time it can, the fixes are already in. Calling
+ * `recordFixes` again to trigger the flush re-appends the same batch and
+ * every point lands twice.
+ */
+export async function flushIfDue(driverId: string): Promise<void> {
+  return serialise(async () => {
+    const rows = await readBuffer();
+    if (rows.length === 0) return;
+    const oldest = rows[0];
+    const dueByAge =
+      Date.now() - new Date(oldest.recorded_at).getTime() >= FLUSH_AGE_MS;
+    if (rows.length < FLUSH_COUNT && !dueByAge) return;
     await flushRows(driverId, rows);
   });
 }
@@ -194,13 +225,20 @@ async function flushRows(driverId: string, rows: Breadcrumb[]): Promise<void> {
     //
     // status 0 is the offline case specifically: PostgREST does NOT throw on a
     // network failure, it RESOLVES with an error and status 0.
-    if (status === 0 || status >= 500) {
+    // 401/403 are NOT permanent, despite being 4xx. An expired access token is
+    // the single most likely reason a background flush is rejected, and it is
+    // repaired by the next foreground refresh — so dropping the batch here
+    // would discard precisely the history that buffering exists to protect.
+    // This was live: the 4xx branch treated an expired-token rejection as
+    // poison and cleared the buffer.
+    if (status === 0 || status === 401 || status === 403 || status >= 500) {
+      await noteTaskEvent("crumbs retained", `${rows.length} fixes, status ${status}`);
       await writeBuffer(rows);
       return;
     }
-    console.warn(
-      `[Breadcrumbs] dropping ${rows.length} fixes — permanent error ` +
-        `${status} ${error.code ?? ""}: ${error.message}`,
+    await noteTaskEvent(
+      "crumbs dropped",
+      `${rows.length} fixes, ${status} ${error.code ?? ""}: ${error.message}`,
     );
     await writeBuffer([]);
     return;

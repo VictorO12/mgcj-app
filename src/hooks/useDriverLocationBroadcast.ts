@@ -33,7 +33,22 @@ import { supabase } from "../lib/supabase";
 // (Android keeps beating on the foreground service's timeInterval). Dispatch
 // RANKS on liveness rather than filtering, so the cost is offer priority, not
 // a missed ride — and the reaper sits at 4h. Revisit with real shift data.
-const HEARTBEAT_MS = 10_000;
+// 20s, not 10s (raised 2026-09-10). Every beat is a PATCH on `drivers`, which
+// the dispatch dashboard subscribes to with `event: "*"` — so one beat is a
+// row write, a WAL record, a realtime decode, and a broadcast to every open
+// dispatch tab. At 10s that is 6 writes/minute per driver before anyone has
+// moved, and it was a measurable share of the load that exhausted the
+// free-tier CPU credits.
+//
+// 20s is still THREE beats inside PRESENCE_STALE_MS (60s), so a driver has to
+// miss three in a row before dispatch reads them as away — the same tolerance
+// for a network blip the 10s value had at six.
+//
+// This only reduces the symptom. The real fix is that a 10-second liveness
+// beat does not belong in a replicated table at all: the cost is
+// O(drivers x dashboards), so it gets worse with fleet size AND with the
+// number of dispatchers watching. See the DB-load note.
+const HEARTBEAT_MS = 20_000;
 
 export function useDriverLocationBroadcast(
   driverId: string | undefined,
@@ -96,7 +111,7 @@ export function useDriverLocationBroadcast(
       void stopDriverLocationUpdates(driverId);
       return;
     }
-    void startDriverLocationUpdates(tier, activeRideId ?? null);
+    void startDriverLocationUpdates(tier, activeRideId ?? null, driverId);
     // No cleanup-stop here: this effect re-runs on every cadence change, and
     // tearing the service down between tiers would drop fixes mid-fare. Going
     // offline is the only thing that stops it, handled by the branch above.

@@ -1,7 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
-import { flushBreadcrumbs, recordFixes } from "./breadcrumbs";
+import { flushBreadcrumbs, flushIfDue, recordFixes } from "./breadcrumbs";
+import { noteTaskEvent } from "./taskDiary";
+import { probeAuthKeyRead } from "./secureStoreAccess";
+import Constants from "expo-constants";
+
+const SUPABASE_URL: string = Constants.expoConfig?.extra?.supabaseUrl ?? "";
 import { getDeviceToken } from "./deviceSession";
 import { etaSecondsFromRoute, type LatLng } from "./routeProgress";
 import { supabase } from "./supabase";
@@ -42,6 +47,45 @@ type Cadence = "idle" | "ride";
 // stamp a mid-ride trail as idle — losing exactly the rows a "the driver took
 // the long way" dispute is answered from.
 const ACTIVE_RIDE_KEY = "driver.location.activeRide";
+
+// The driver this device is tracking, in AsyncStorage — deliberately NOT read
+// back out of the session. The session lives in SecureStore, which is
+// unreadable while the device is locked, and that read is exactly what stalls
+// the task. History has to survive that, so the id it is filed under must come
+// from a store with no keychain protection.
+const DRIVER_ID_KEY = "driver.location.driverId";
+
+async function setPersistedDriverId(driverId: string | null): Promise<void> {
+  try {
+    if (driverId) await AsyncStorage.setItem(DRIVER_ID_KEY, driverId);
+    else await AsyncStorage.removeItem(DRIVER_ID_KEY);
+  } catch {
+    // Best effort; the task falls back to the session id.
+  }
+}
+
+async function getPersistedDriverId(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(DRIVER_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A stalled keychain read is indistinguishable from a slow one, and the task
+ * must not hang either way: 60 invocations hung on this in one 17-minute walk,
+ * each leaving a pending promise behind. Resolving to a sentinel lets the task
+ * finish and report, which is how the stall became visible at all.
+ */
+const SESSION_LOAD_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(work: Promise<T>, fallback: T): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), SESSION_LOAD_TIMEOUT_MS)),
+  ]);
+}
 
 async function setActiveRideId(rideId: string | null): Promise<void> {
   try {
@@ -206,39 +250,64 @@ export function courseOrNull(coords: {
 // batch is dropped and the only trace is a warning nobody sees on a device.
 TaskManager.defineTask(DRIVER_LOCATION_TASK, async ({ data, error }) => {
   if (error) {
-    console.warn("[Location] task error:", error.message);
+    await noteTaskEvent("task error", error.message);
     return;
   }
   const locations = (data as { locations?: Location.LocationObject[] } | null)?.locations;
+  await noteTaskEvent("task entered", `${locations?.length ?? 0} fixes`);
   const latest = locations?.[locations.length - 1];
   if (!latest) return;
 
-  // A batch can arrive after hours of background, and supabase.ts stops the
-  // auto-refresh loop while backgrounded — so the persisted access token is
-  // very likely expired by now. getSession() awaits restore-from-storage but
-  // does NOT necessarily refresh, and the drivers UPDATE policy is
-  // `id = auth.uid()`, so writing on a dead token is a silent 401 in a context
-  // with no UI to surface it.
-  const driverId = await resolveDriverId();
-  if (!driverId) return;
-
+  // EVERYTHING TOUCHING SecureStore COMES AFTER THIS BLOCK.
+  //
+  // The first cut of this fix buffered before the session's *usability* check
+  // but after loadTaskSession() itself — which is where the stall actually is,
+  // so it bought nothing and a 17-minute walk still lost every fix. AsyncStorage
+  // reads fine while locked; the keychain does not. So the trail is written
+  // first, from a persisted driver id, before anything can block.
+  //
   // History gets EVERY fix in the batch; the live position column only gets the
   // newest. A batch that arrived late is several minutes of trail, and throwing
   // away all but the last point would draw the straight teleport line the
   // recorded_at column exists to avoid.
   const rideId = await getActiveRideId();
-  await recordFixes(
-    driverId,
-    (locations ?? []).map((fix) => ({
-      recorded_at: new Date(fix.timestamp).toISOString(),
-      lat: fix.coords.latitude,
-      lng: fix.coords.longitude,
-      heading: courseOrNull(fix.coords),
-      speed: fix.coords.speed ?? null,
-      accuracy: fix.coords.accuracy ?? null,
-      ride_id: rideId,
-    })),
+  const persistedDriverId = await getPersistedDriverId();
+  if (persistedDriverId) {
+    await recordFixes(
+      persistedDriverId,
+      (locations ?? []).map((fix) => ({
+        recorded_at: new Date(fix.timestamp).toISOString(),
+        lat: fix.coords.latitude,
+        lng: fix.coords.longitude,
+        heading: courseOrNull(fix.coords),
+        speed: fix.coords.speed ?? null,
+        accuracy: fix.coords.accuracy ?? null,
+        ride_id: rideId,
+      })),
+      false, // never flush here: the flush needs auth, which is what may stall
+    );
+    await noteTaskEvent("crumbs buffered", `${locations?.length ?? 0}`);
+  }
+
+  const session = await withTimeout(loadTaskSession(), {
+    driverId: null,
+    usable: false,
+    note: "timed out — keychain likely locked",
+  } as TaskSession);
+  await noteTaskEvent(
+    session.usable ? "session ok" : "session unusable",
+    session.note,
   );
+  // No readable session means no authenticated write. The crumbs above are
+  // already safe, so this costs live position only.
+  if (!session.driverId) return;
+  const driverId = session.driverId;
+
+  // The fixes are ALREADY buffered, above, before the keychain was touched.
+  // Calling recordFixes again here re-appends the same batch and lands every
+  // point twice — which it did, for two walks. Flush, never re-record.
+  if (!session.usable) return;
+  await flushIfDue(driverId);
 
   // Keep the passenger's countdown moving while the app is backgrounded. The
   // screen normally owns this column and computes the same number every GPS
@@ -256,6 +325,7 @@ TaskManager.defineTask(DRIVER_LOCATION_TASK, async ({ data, error }) => {
       : undefined;
 
   const result = await writeDriverPosition(driverId, latest.coords, eta);
+  await noteTaskEvent("position write", result);
   if (result === "displaced") {
     // Another device owns this account now. A device that lost the lock must
     // not keep writing position — dispatch would see two cars for one driver.
@@ -274,32 +344,75 @@ async function etaForFix(
   return etaSecondsFromRoute(loc, route);
 }
 
-async function resolveDriverId(): Promise<string | null> {
+type TaskSession = {
+  /** Who the stored session belongs to. Survives the token being unusable. */
+  driverId: string | null;
+  /** Can we authenticate a write right now? */
+  usable: boolean;
+  /** Diary detail — why. */
+  note: string;
+};
+
+/**
+ * Resolve the session for a background task invocation.
+ *
+ * Replaces the old `resolveDriverId()`, which bailed rather than refreshing on
+ * the theory that a rotation race could sign the driver out mid-shift. Two
+ * things were wrong with that. First, the bail was very likely UNREACHABLE:
+ * `getSession()` itself refreshes when the token is within EXPIRY_MARGIN_MS
+ * (90s) of expiry, and the bail triggered under 60s — so anything old enough to
+ * trip it had already been refreshed a line earlier. Reaching the bail at all
+ * means the refresh FAILED, which is worth one explicit retry and, far more
+ * importantly, worth recording.
+ *
+ * Second, the bail's premise — "a dropped fix costs nothing, the next one
+ * covers it" — does not hold while backgrounded. Nothing refreshes the token
+ * there, so the condition is absorbing rather than transient: every subsequent
+ * fix fails the same way until the driver unlocks their phone.
+ *
+ * The driver id is returned even when the token is unusable, because the caller
+ * still wants to BUFFER history under it. `getSession()` reads from storage, so
+ * this identity is available with a dead token and needs no network.
+ */
+async function loadTaskSession(): Promise<TaskSession> {
+  // TEMPORARY probe — splits "the keychain is locked" from "auth-js is stuck".
+  // If the diary shows `ss probe` and then no `session` line, the keychain is
+  // fine and getSession is hanging on something else (most likely a network
+  // call inside _initialize, whose own 20s timeout also cannot fire while the
+  // runloop is suspended). If `ss probe` itself never appears, it is the
+  // keychain. Remove with taskDiary.
+  await noteTaskEvent("ss probe", await probeAuthKeyRead(SUPABASE_URL));
+
   const { data, error } = await supabase.auth.getSession();
   if (error || !data.session) {
-    console.warn("[Location] no session in task context — skipping fix");
-    return null;
+    return { driverId: null, usable: false, note: error?.message ?? "no session" };
   }
-  // Bail rather than refresh, deliberately. Refresh tokens rotate, and a queued
-  // location batch can fire at the same moment startAutoRefresh() does on
-  // foreground resume — both call refresh, one gets a revoked token, and the
-  // driver is signed out mid-shift. That reproduces roughly never in testing
-  // (see the onAuthStateChange deadlock and the global signOut scope bug for
-  // how these land). A dropped fix costs nothing: the next one, or the
-  // foreground interval, covers it. A lost session costs a shift.
-  const expiresAt = (data.session.expires_at ?? 0) * 1000;
-  if (expiresAt - Date.now() < 60_000) {
-    console.warn("[Location] session expiring — skipping fix, not refreshing");
-    return null;
+  const session = data.session;
+  const lifeMs = (session.expires_at ?? 0) * 1000 - Date.now();
+  if (lifeMs >= 60_000) {
+    return { driverId: session.user.id, usable: true, note: `${Math.round(lifeMs / 1000)}s left` };
   }
-  return data.session.user.id;
+
+  // Only reachable when getSession's own refresh failed. Retry once, explicitly,
+  // and surface the reason — a silent failure here is the whole bug.
+  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+  if (refreshError || !refreshed.session) {
+    return {
+      driverId: session.user.id,
+      usable: false,
+      note: `refresh failed: ${refreshError?.message ?? "no session returned"}`,
+    };
+  }
+  return { driverId: refreshed.session.user.id, usable: true, note: "refreshed in task" };
 }
 
 export async function startDriverLocationUpdates(
   cadence: Cadence,
   activeRideId: string | null = null,
+  driverId: string | null = null,
 ): Promise<boolean> {
   await setActiveRideId(activeRideId);
+  await setPersistedDriverId(driverId);
 
   // Only foreground permission is requested, on purpose — see the header.
   const { status } = await Location.requestForegroundPermissionsAsync();

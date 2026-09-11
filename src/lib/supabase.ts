@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import * as SecureStore from 'expo-secure-store'
 import Constants from 'expo-constants'
 import { AppState } from 'react-native'
+import { readAndMigrate, secureStoreOptions } from './secureStoreAccess'
 import { timeoutFetch } from './timeoutFetch'
 
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl
@@ -82,15 +83,19 @@ const measure = (key: string, value: string) => {
   }
 }
 
+// Reads/writes go through secureStoreAccess so the session item is readable
+// while the device is LOCKED. Without that, getSession() stalls in the
+// background location task and every write it guards is lost — see that file
+// for the measurement.
 const ExpoSecureStoreAdapter = {
-  getItem: (key: string) => SecureStore.getItemAsync(key),
+  getItem: (key: string) => readAndMigrate(key),
   setItem: (key: string, value: string) => {
     try {
       measure(key, value)
     } catch {
       // Instrumentation must never be able to block a session write.
     }
-    return SecureStore.setItemAsync(key, value)
+    return SecureStore.setItemAsync(key, value, secureStoreOptions)
   },
   removeItem: (key: string) => SecureStore.deleteItemAsync(key),
 }

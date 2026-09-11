@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { readAndMigrate, secureStoreOptions } from "./secureStoreAccess";
 
 // SecureStore validates keys against /^[\w.-]+$/ and THROWS on anything else.
 // This key started life as an AsyncStorage key ("@driver_device_token") and kept
@@ -15,7 +16,7 @@ const DEVICE_TOKEN_KEY = "driver_device_token";
 // is exactly how the bug above stayed hidden for six weeks.
 export async function getDeviceToken(): Promise<string | null> {
   try {
-    return await SecureStore.getItemAsync(DEVICE_TOKEN_KEY);
+    return await readAndMigrate(DEVICE_TOKEN_KEY);
   } catch (e) {
     console.error("[Session] could not read device token:", e);
     return null;
@@ -24,7 +25,7 @@ export async function getDeviceToken(): Promise<string | null> {
 
 export async function setDeviceToken(token: string): Promise<boolean> {
   try {
-    await SecureStore.setItemAsync(DEVICE_TOKEN_KEY, token);
+    await SecureStore.setItemAsync(DEVICE_TOKEN_KEY, token, secureStoreOptions);
     return true;
   } catch (e) {
     console.error("[Session] could not store device token:", e);
