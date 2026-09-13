@@ -179,7 +179,32 @@ limit 20;
 -- SECTION 5 — the loaded window, and the WAL question
 -- ===========================================================================
 
--- 5a. RUN THIS FIRST. It can reframe everything else: MULTIPLE slots, or any
+-- 5a. RAN 2026-09-13. RESULT: two slots, BOTH active, no pinned WAL.
+--
+--   supabase_realtime_replication_slot...          wal2json   active   0 bytes
+--   supabase_realtime_messages_replication_slot... pgoutput   active  -1 bytes
+--
+-- Pinned-WAL hypothesis ruled out. But the zero lag says more than that: if
+-- each poll has essentially NO WAL to decode and still costs 6.7ms, then that
+-- 6.7ms is largely FIXED PER-CALL OVERHEAD (decoding setup, catalog access,
+-- snapshot) rather than payload volume. Reducing write volume -- pruning
+-- cron.job_run_details, trimming heartbeats, anything -- would not move it.
+-- The lever is not on our side of the wire, which is the second independent
+-- reason the Broadcast migration was the wrong target.
+--
+-- TWO SLOTS is itself worth knowing. wal2json is postgres_changes; the
+-- pgoutput one is Realtime's Broadcast path, already in use by G3 chat
+-- Phase 1. So "Broadcast from Database" would MOVE driver positions from the
+-- first slot to the second, relocating decode cost rather than removing it.
+-- Only CLIENT-SIDE broadcast (driver app -> websocket -> dashboard, Postgres
+-- never involved) actually eliminates the WAL. If this is ever built, that is
+-- the variant to build.
+--
+-- CONCLUSION: no database work is worth doing at current size. ~1.55% of one
+-- core total, of which ~1.26% is a floor we do not control. Thread closed.
+--
+-- (original instruction kept for the next time this is run)
+-- RUN THIS FIRST. It can reframe everything else: MULTIPLE slots, or any
 --     slot with active = false, means an inactive logical slot is pinning WAL
 --     -- which makes every later decode walk more of it, and is a different
 --     problem from an idle poll cost with a different fix.
