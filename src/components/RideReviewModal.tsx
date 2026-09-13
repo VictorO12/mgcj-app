@@ -211,7 +211,7 @@ const makeStyles = (colors: Colors, insets: EdgeInsets) => StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: colors.accentAmber,
-    height: 20,
+    minHeight: 20,
     marginBottom: 16,
   },
   commentInput: {

@@ -524,7 +524,10 @@ const makeStyles = (colors: Colors, insets: EdgeInsets) => StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: 80,
+    // minHeight, not height: this bar carries two lines of live ride status,
+    // and it is anchored bottom:0 with no top, so it grows upward off the
+    // screen edge rather than clipping. Nothing else assumes the 80.
+    minHeight: 80,
     backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,

@@ -65,12 +65,36 @@ function isTextType(type: unknown): boolean {
   return name === "Text" || name === "TextInput";
 }
 
+/**
+ * Ceiling on OS text scaling.
+ *
+ * RN leaves `allowFontScaling` on with NO upper bound, so a user at an
+ * accessibility text size gets 2-3x type poured into rows and pills that were
+ * drawn for 1x. We keep scaling on — taxi passengers skew older and large-text
+ * users are a real population here, not a hypothetical — but bound it.
+ *
+ * 1.4 is not arbitrary. iOS's largest *standard* Dynamic Type size (xxxLarge)
+ * is 1.35x, and Android's largest standard font scale is 1.30x. So every
+ * non-accessibility setting on both platforms passes through completely
+ * untouched, and only the accessibility tiers (iOS AX1-AX5, 1.65x-3.12x) clamp
+ * — to a size still larger than any standard setting can reach.
+ */
+export const MAX_FONT_SCALE = 1.4;
+
 function withFont(type: unknown, props: any): any {
   if (!props || !isTextType(type)) return props;
   const family = familyForStyle(props.style);
-  // fontFamily FIRST so the caller's own style still wins on any conflict
-  // (familyForStyle already preserves an explicit fontFamily anyway).
-  return { ...props, style: [{ fontFamily: family }, props.style] };
+  return {
+    // BEFORE the spread, so an element that passes its own
+    // maxFontSizeMultiplier (or allowFontScaling={false}) still wins. Put it
+    // after and every local exception silently does nothing — a bug that
+    // never announces itself.
+    maxFontSizeMultiplier: MAX_FONT_SCALE,
+    ...props,
+    // fontFamily FIRST so the caller's own style still wins on any conflict
+    // (familyForStyle already preserves an explicit fontFamily anyway).
+    style: [{ fontFamily: family }, props.style],
+  };
 }
 
 let patched = false;

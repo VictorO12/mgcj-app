@@ -282,7 +282,7 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.surfaceAlt,
       borderRadius: 12,
       paddingHorizontal: 12,
-      height: 48,
+      minHeight: 48,
       marginTop: 16,
     },
     input: { flex: 1, color: colors.textPrimary, fontSize: 15 },
@@ -307,7 +307,7 @@ function makeStyles(colors: Colors) {
     actions: { flexDirection: "row", gap: 12, marginTop: 20 },
     btn: {
       flex: 1,
-      height: 48,
+      minHeight: 48,
       borderRadius: 12,
       alignItems: "center",
       justifyContent: "center",

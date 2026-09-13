@@ -364,7 +364,7 @@ const makeStyles = (colors: Colors, layout: Layout, insets: EdgeInsets) => Style
   codeRow: { flexDirection: "row", gap: 10, marginBottom: 32 },
   digitBox: {
     flex: 1,
-    height: 56,
+    minHeight: 56,
     borderRadius: 12,
     backgroundColor: colors.surface,
     borderWidth: 0.5,
