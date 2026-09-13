@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import * as Location from "expo-location";
 import { recordFix } from "../lib/breadcrumbs";
 import { getDistance } from "../lib/routeProgress";
@@ -116,6 +117,50 @@ export function useDriverLocationBroadcast(
     // tearing the service down between tiers would drop fixes mid-fare. Going
     // offline is the only thing that stops it, handled by the branch above.
   }, [driverId, isOnline, tier]);
+
+  // Foregrounding the app is proof the driver is still working.
+  //
+  // run_shift_auto_end recognises only three signs of work — going online, a
+  // ride changing status, and movement. A driver parked at a stand on a quiet
+  // night, phone in hand, app on screen, triggers none of them, so after 45
+  // idle minutes they are asked whether they are still on shift. That is the
+  // shift where the question is least warranted and most irritating.
+  //
+  // THIS MUST STAY TIED TO THE FOREGROUND TRANSITION. It deliberately does NOT
+  // ride on the heartbeat: the heartbeat also runs from the background task
+  // while the phone is locked, so stamping activity there would mean a driver
+  // who pocketed their phone and drove home keeps proving they are working
+  // forever — destroying the 45-minute privacy stop this whole mechanism
+  // exists to provide. Only an explicit human act counts, and a screen lock
+  // takes AppState out of "active", so a forgotten phone cannot fake one.
+  //
+  // Nor is it stamped on mount. isOnline starts false and flips true when the
+  // fetch or the realtime UPDATE lands, and DriverApp remounts this hook when
+  // it switches driver screens — so "mounted" happens repeatedly with no human
+  // involved, which is exactly the property that makes foreground trustworthy.
+  //
+  // Not throttled, on purpose. Every write to `drivers` is a WAL record fanned
+  // out to every open dispatch tab, so the instinct is to rate-limit — but a
+  // per-mount ref would reset on those same remounts, and persisting a
+  // timestamp means an AsyncStorage read on every resume to save a write we
+  // rarely make. A human foregrounding the app is not a write-amplification
+  // source; the 20s heartbeat already dwarfs it.
+  //
+  // Stamping alone is enough: run_shift_auto_end runs its RECOVER pass (which
+  // clears shift_prompt_at for anyone with recent activity) BEFORE the END
+  // pass, and END requires a non-null prompt — so a driver who opens the app
+  // during the 15-minute grace is withdrawn rather than ended.
+  useEffect(() => {
+    if (!driverId || !isOnline) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      void supabase
+        .from("drivers")
+        .update({ shift_activity_at: new Date().toISOString() })
+        .eq("id", driverId);
+    });
+    return () => sub.remove();
+  }, [driverId, isOnline]);
 
   // Stop tracking if the driver signs out or this hook unmounts for good — the
   // service outliving the session would keep writing for a driver who is gone.

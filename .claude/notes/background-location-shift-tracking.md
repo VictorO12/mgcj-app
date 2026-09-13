@@ -829,3 +829,47 @@ count/age rule as `recordFixes` without appending. The rule is now explicit —
 Rows already written need a one-off dedupe (see below). `trail.ts` would have
 drawn them as zero-length segments, which its 15m jitter floor mostly hides —
 so this was heading for a silently doubled row count rather than a visible bug.
+
+## Foregrounding counts as work — added 2026-09-12 (client-only, ships by OTA)
+
+`run_shift_auto_end` recognised three signs of work: going online (trigger on
+`drivers`), a ride changing status (trigger on `rides`), and movement
+(`driver_has_moved` over `driver_locations`). Having the app open was invisible
+to all three.
+
+So a driver parked at a stand on a quiet night — phone in hand, app on screen,
+no fare, not moving — is asked "still on shift?" after 45 minutes. That is the
+shift where the question is least warranted, and `shouldShowAlert: true` means
+it banners over the foregrounded app rather than being suppressed.
+
+Fourth signal added in `useDriverLocationBroadcast`: an `AppState` listener that
+stamps `shift_activity_at` on the transition to `active`, gated on `isOnline`.
+
+Four decisions in it, each of which the obvious alternative gets wrong:
+
+- **It must NOT ride on the heartbeat.** The heartbeat also runs from the
+  background task while the phone is locked, so stamping there would let a
+  driver who pocketed their phone and drove home prove they are working
+  indefinitely — destroying the privacy stop step 3 exists to provide. Only an
+  explicit human act may count, and a screen lock takes `AppState` out of
+  `active`, so a forgotten phone cannot fake one.
+- **It is NOT stamped on mount.** `isOnline` starts false and flips true when
+  the fetch or realtime UPDATE lands, and `DriverApp` remounts this hook when it
+  switches driver screens — "mounted" happens repeatedly with no human involved,
+  which is precisely the property that makes foreground trustworthy.
+- **It is NOT throttled.** Every `drivers` write is a WAL record fanned out to
+  every open dispatch tab, so rate-limiting is the instinct — but a per-mount
+  ref resets on those same remounts (see `monotonic-signal-vs-remounting-consumer`),
+  and persisting a timestamp costs an AsyncStorage read on every resume to save
+  a write we rarely make. The 20s heartbeat already dwarfs it.
+- **It stamps activity only, and does not clear `shift_prompt_at`.** Safe
+  because `run_shift_auto_end`'s RECOVER pass (clears the prompt for anyone with
+  recent activity) runs BEFORE the END pass, and END requires a non-null prompt.
+  A driver who opens the app during the 15-minute grace is withdrawn, not ended.
+  Confirmed against `20260771`, which `CREATE OR REPLACE`s `20260770`'s function
+  at the same signature — worth one live `pg_get_functiondef` check before
+  relying on the ordering, per the migrations-are-not-applied-state rule.
+
+Untouched: `is_demo` drivers are excluded from prompts entirely, and the write
+goes through the existing `drivers: update own` policy — the same path the
+prompt acknowledgement in `DriverApp` already uses, so no new RLS surface.
