@@ -36,7 +36,26 @@ import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
 import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
-import { useLayout, gutterFor, type Layout } from "../../hooks/useLayout";
+import { useLayout, gutterFor, safeTop, safeBottom, type Layout } from "../../hooks/useLayout";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+
+// The top bar and the bottom sheet now size themselves off the real safe-area
+// insets, so anything absolutely positioned against them has to move by the SAME
+// amount or it overlaps — on exactly the devices the inset fix was for. Both are
+// expressed as a delta from the value the anchor was drawn at, so a device whose
+// padding did not change sees no change here either. Three sites used to encode
+// each of these constants independently; they now read one function.
+const SHEET_BOTTOM_PAD = (insets: EdgeInsets) => safeBottom(insets, 10, 24);
+
+/** Y of the floating banners, which sit just under the top bar. */
+const belowTopBar = (insets: EdgeInsets) =>
+  (Platform.OS === "ios" ? 160 : 146) +
+  (safeTop(insets) - (Platform.OS === "ios" ? 56 : 40));
+
+/** Y of the floating card stack and recenter button, which sit just above the sheet. */
+const aboveSheet = (insets: EdgeInsets) =>
+  (Platform.OS === "ios" ? 220 : 200) +
+  (SHEET_BOTTOM_PAD(insets) - (Platform.OS === "ios" ? 44 : 24));
 
 interface AssignedRide {
   id: string;
@@ -154,9 +173,10 @@ export default function DriverHomeScreen({
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
   const layout = useLayout();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(
-    () => makeStyles(colors, layout),
-    [colors, layout.width, layout.contentMaxWidth],
+    () => makeStyles(colors, layout, insets),
+    [colors, layout.width, layout.contentMaxWidth, insets],
   );
   const { average, count } = useDriverRating(profile?.id);
   useNotifications();
@@ -606,9 +626,7 @@ export default function DriverHomeScreen({
             // Shares the assigned banner's slot; drops below it when that one
             // is also on screen, so the two never overlap.
             {
-              top:
-                (Platform.OS === "ios" ? 160 : 146) +
-                (hasAssignedRide ? 68 : 0),
+              top: belowTopBar(insets) + (hasAssignedRide ? 68 : 0),
             },
           ]}
           onPress={onOpenAvailable}
@@ -704,8 +722,7 @@ export default function DriverHomeScreen({
             styles.recenterBtn,
             !isOnline && { bottom: styles.recenterBtn.bottom + 40 },
             showFloatingStack && {
-              bottom:
-                (Platform.OS === "ios" ? 220 : 200) + floatingStackHeight + 10,
+              bottom: aboveSheet(insets) + floatingStackHeight + 10,
             },
           ]}
           onPress={() =>
@@ -1021,7 +1038,7 @@ export default function DriverHomeScreen({
   );
 }
 
-const makeStyles = (colors: Colors, layout: Layout) => {
+const makeStyles = (colors: Colors, layout: Layout, insets: EdgeInsets) => {
   const { contentMaxWidth } = layout;
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
@@ -1034,7 +1051,7 @@ const makeStyles = (colors: Colors, layout: Layout) => {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingHorizontal: 20,
       paddingBottom: 12,
       backgroundColor: colors.backgroundOverlay,
@@ -1174,7 +1191,7 @@ const makeStyles = (colors: Colors, layout: Layout) => {
     },
     assignedBanner: {
       position: "absolute",
-      top: Platform.OS === "ios" ? 160 : 146,
+      top: belowTopBar(insets),
       left: 16,
       right: 16,
       flexDirection: "row",
@@ -1229,7 +1246,7 @@ const makeStyles = (colors: Colors, layout: Layout) => {
     recenterBtn: {
       position: "absolute",
       right: 16,
-      bottom: 220,
+      bottom: aboveSheet(insets),
       width: 42,
       height: 42,
       borderRadius: 21,
@@ -1251,7 +1268,7 @@ const makeStyles = (colors: Colors, layout: Layout) => {
       borderColor: colors.border,
       paddingHorizontal: gutterFor(layout, 20),
       paddingTop: 20,
-      paddingBottom: Platform.OS === "ios" ? 44 : 24,
+      paddingBottom: SHEET_BOTTOM_PAD(insets),
     },
     onlineSheet: { gap: 16 },
     waitingRow: {
@@ -1321,7 +1338,7 @@ const makeStyles = (colors: Colors, layout: Layout) => {
     floatingStack: {
       alignItems: "center",
       position: "absolute",
-      bottom: Platform.OS === "ios" ? 220 : 200,
+      bottom: aboveSheet(insets),
       left: 16,
       right: 16,
       gap: 10,

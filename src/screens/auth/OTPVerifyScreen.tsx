@@ -17,7 +17,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
-import { useLayout, gutterFor, type Layout } from "../../hooks/useLayout";
+import { useLayout, gutterFor, safeTop, safeBottom, type Layout } from "../../hooks/useLayout"
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, "OTPVerify">;
@@ -31,7 +32,8 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   const { refetch, holdLoading, releaseLoading } = useAuth();
   const { colors } = useTheme();
   const layout = useLayout();
-  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, layout, insets), [colors, layout.width, insets]);
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(30);
@@ -331,12 +333,12 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout, insets: EdgeInsets) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   inner: {
     flex: 1,
     paddingHorizontal: gutterFor(layout, 28),
-    paddingTop: Platform.OS === "ios" ? 60 : 40,
+    paddingTop: safeTop(insets, 14),
   },
   backBtn: { marginBottom: 28 },
   backText: { color: colors.textSecondary, fontSize: 15 },

@@ -21,6 +21,8 @@ import { useAuth } from "../../hooks/AuthContext";
 import Constants from "expo-constants";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
@@ -34,7 +36,8 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
   const { profile } = useAuth();
   const { createPaymentMethod } = useStripe();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
 
   const [cardDetails, setCardDetails] = useState<CardFieldInput.Details | null>(
     null,
@@ -215,12 +218,12 @@ export default function AddCardScreen({ onClose, onCardAdded }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
       backgroundColor: colors.background,
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
     },
     header: {
       flexDirection: "row",

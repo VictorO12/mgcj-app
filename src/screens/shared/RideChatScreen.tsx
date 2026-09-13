@@ -15,6 +15,8 @@ import * as Speech from "expo-speech";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 import {
   useRideThread,
   rideAcceptsMessages,
@@ -147,7 +149,8 @@ export default function RideChatScreen({
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const { messages, loading, send, markRead, otherLastReadAt } = thread;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -432,14 +435,14 @@ export default function RideChatScreen({
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingBottom: 14,
       paddingHorizontal: 12,
       borderBottomWidth: 1,
@@ -506,7 +509,7 @@ const makeStyles = (colors: Colors) =>
       alignItems: "flex-end",
       paddingHorizontal: 12,
       paddingTop: 8,
-      paddingBottom: Platform.OS === "ios" ? 28 : 12,
+      paddingBottom: safeBottom(insets, 0, 12),
       borderTopWidth: 1,
       borderTopColor: colors.border,
       gap: 8,
@@ -553,7 +556,7 @@ const makeStyles = (colors: Colors) =>
       gap: 8,
       paddingHorizontal: 18,
       paddingTop: 12,
-      paddingBottom: Platform.OS === "ios" ? 30 : 14,
+      paddingBottom: safeBottom(insets, 0, 14),
       borderTopWidth: 1,
       borderTopColor: colors.border,
     },

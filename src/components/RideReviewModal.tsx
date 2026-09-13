@@ -15,6 +15,8 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../hooks/useLayout";
 
 interface Props {
   visible: boolean;
@@ -34,7 +36,8 @@ export default function RideReviewModal({
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [rating, setRating] = useState(0);
   const [hoveredStar, setHoveredStar] = useState(0);
   const [comment, setComment] = useState("");
@@ -167,7 +170,7 @@ export default function RideReviewModal({
   );
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, insets: EdgeInsets) => StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: colors.modalOverlay,
@@ -177,7 +180,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingBottom: Platform.OS === "ios" ? 40 : 28,
+    paddingBottom: safeBottom(insets, 6, 28),
     borderTopWidth: 0.5,
     borderColor: colors.border,
   },

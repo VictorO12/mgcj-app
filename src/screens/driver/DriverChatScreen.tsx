@@ -16,6 +16,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 interface ChatMessage {
   id: string;
@@ -73,7 +75,8 @@ function linkifyBody(text: string, linkColor: string) {
 export default function DriverChatScreen({ onClose }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
@@ -306,14 +309,14 @@ export default function DriverChatScreen({ onClose }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingHorizontal: 20,
       paddingBottom: 16,
       backgroundColor: colors.backgroundOverlay,
@@ -364,7 +367,7 @@ const makeStyles = (colors: Colors) =>
       alignItems: "flex-end",
       gap: 10,
       padding: 14,
-      paddingBottom: Platform.OS === "ios" ? 28 : 14,
+      paddingBottom: safeBottom(insets, 0, 14),
       borderTopWidth: 0.5,
       borderTopColor: colors.border,
       backgroundColor: colors.backgroundOverlay,

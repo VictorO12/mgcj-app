@@ -7,7 +7,6 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -18,6 +17,8 @@ import RideReviewModal from "../../components/RideReviewModal";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 interface RideRecord {
   id: string;
@@ -127,7 +128,8 @@ interface Props {
 export default function RideHistoryScreen({ onClose }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const STATUS_COLORS = useMemo(() => getStatusColors(colors), [colors]);
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1014,14 +1016,14 @@ export default function RideHistoryScreen({ onClose }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingBottom: 16,
       paddingHorizontal: 16,
       backgroundColor: colors.background,

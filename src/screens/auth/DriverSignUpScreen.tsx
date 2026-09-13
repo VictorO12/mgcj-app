@@ -9,7 +9,8 @@ import { RootStackParamList } from '../../types'
 import { supabase } from '../../lib/supabase'
 import { useTheme } from '../../theme/ThemeContext'
 import type { Colors } from '../../theme/colors'
-import { useLayout, gutterFor, type Layout } from '../../hooks/useLayout'
+import { useLayout, gutterFor, safeTop, safeBottom, type Layout } from '../../hooks/useLayout'
+import { useSafeAreaInsets, type EdgeInsets } from 'react-native-safe-area-context'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverSignUp'>
@@ -32,7 +33,8 @@ function formatDisplay(raw: string): string {
 export default function DriverSignUpScreen({ navigation }: Props) {
   const { colors } = useTheme()
   const layout = useLayout()
-  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width])
+  const insets = useSafeAreaInsets()
+  const styles = useMemo(() => makeStyles(colors, layout, insets), [colors, layout.width, insets])
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [phone, setPhone] = useState('')
@@ -199,9 +201,9 @@ export default function DriverSignUpScreen({ navigation }: Props) {
   )
 }
 
-const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout, insets: EdgeInsets) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  inner: { flexGrow: 1, paddingHorizontal: gutterFor(layout, 24), paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 40 },
+  inner: { flexGrow: 1, paddingHorizontal: gutterFor(layout, 24), paddingTop: safeTop(insets, 14), paddingBottom: 40 },
   backBtn: { marginBottom: 28 },
   backText: { color: colors.textSecondary, fontSize: 15 },
   title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },

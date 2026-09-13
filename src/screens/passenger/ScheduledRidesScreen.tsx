@@ -7,7 +7,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Platform,
   RefreshControl,
   Modal,
 } from "react-native";
@@ -17,6 +16,8 @@ import { invokeFunction } from "../../lib/invokeFunction";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 import ScheduleDateTimePicker from "../../components/ScheduleDateTimePicker";
 import AddressPickerModal, {
   type PickedAddress,
@@ -59,7 +60,8 @@ const STATUS_LABELS: Record<string, string> = {
 export default function ScheduledRidesScreen({ onClose }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const STATUS_COLORS = useMemo(() => getStatusColors(colors), [colors]);
   const [rides, setRides] = useState<ScheduledRide[]>([]);
   const [loading, setLoading] = useState(true);
@@ -598,12 +600,12 @@ export default function ScheduledRidesScreen({ onClose }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
       backgroundColor: colors.background,
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
     },
     header: {
       flexDirection: "row",
@@ -835,7 +837,7 @@ const makeStyles = (colors: Colors) =>
       borderTopLeftRadius: 22,
       borderTopRightRadius: 22,
       padding: 16,
-      paddingBottom: Platform.OS === "ios" ? 34 : 20,
+      paddingBottom: safeBottom(insets, 0, 20),
       maxHeight: "85%",
     },
     editHeader: {

@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../theme/ThemeContext";
-import { useLayout } from "../hooks/useLayout";
+import { useLayout, safeBottom } from "../hooks/useLayout";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import type { Colors } from "../theme/colors";
 import type { InterstitialMessage } from "../hooks/useInterstitialQueue";
 
@@ -35,9 +36,10 @@ export default function InterstitialMessageCard({ message, onDismiss }: Props) {
   const accentColor = isOffer ? colors.accentOrange : colors.accentBlue;
   const cardTint = isOffer ? colors.surfaceOrangeTint : colors.surfaceAlt;
   const layout = useLayout();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(
-    () => makeStyles(colors, cardTint, layout.contentMaxWidth),
-    [colors, cardTint, layout.contentMaxWidth],
+    () => makeStyles(colors, cardTint, layout.contentMaxWidth, insets),
+    [colors, cardTint, layout.contentMaxWidth, insets],
   );
   // Start the card one screen below the fold. Read live: a module-scope capture
   // is the phone's launch height forever, which on a rotated or resized window
@@ -82,7 +84,7 @@ export default function InterstitialMessageCard({ message, onDismiss }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors, cardTint: string, maxWidth: number) =>
+const makeStyles = (colors: Colors, cardTint: string, maxWidth: number, insets: EdgeInsets) =>
   StyleSheet.create({
     wrap: {
       flex: 1,
@@ -134,7 +136,7 @@ const makeStyles = (colors: Colors, cardTint: string, maxWidth: number) =>
       flex: 1,
       paddingHorizontal: 22,
       paddingTop: 10,
-      paddingBottom: Platform.OS === "ios" ? 24 : 30,
+      paddingBottom: safeBottom(insets, 0, 30),
     },
     eyebrowRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 },
     eyebrow: { fontSize: 12, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" },

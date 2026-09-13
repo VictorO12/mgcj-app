@@ -13,6 +13,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 import ReportProblemModal from "../../components/ReportProblemModal";
 import * as Updates from "expo-updates";
 import { getBuildInfo, formatBuildInfo } from "../../lib/updates";
@@ -69,7 +71,8 @@ export default function HelpSupportScreen({ onClose }: Props) {
   const { currentlyRunning } = Updates.useUpdates();
   const buildLine = formatBuildInfo(getBuildInfo(currentlyRunning));
 
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [reportVisible, setReportVisible] = useState(false);
 
@@ -193,14 +196,14 @@ export default function HelpSupportScreen({ onClose }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingHorizontal: 20,
       paddingBottom: 16,
       backgroundColor: colors.backgroundOverlay,

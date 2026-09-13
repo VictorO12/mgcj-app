@@ -48,3 +48,35 @@ export function useLayout(): Layout {
 export function gutterFor(layout: Layout, pad: number): number {
   return Math.max(pad, (layout.width - layout.contentMaxWidth) / 2);
 }
+
+/**
+ * Safe-area padding, in place of a per-platform guess at the same number.
+ *
+ * These screens were written with `paddingTop: Platform.OS === "ios" ? 56 : 40`
+ * and similar. 56 is not a notch height — it is *some* notch height plus a
+ * visual gap, and it is wrong on every device whose notch differs: an iPhone SE
+ * (20pt inset) wastes ~26pt of dead space, a Dynamic Island phone (59pt) tucks
+ * the header ~3pt UNDER the island, and an Android device with a 48dp status bar
+ * clips outright. The OS will tell us the real number; ask it.
+ */
+import type { EdgeInsets } from "react-native-safe-area-context";
+
+/** Visual gap above a screen header, on top of whatever the status bar takes. */
+export const HEADER_GAP = 10;
+
+export function safeTop(insets: EdgeInsets, gap: number = HEADER_GAP): number {
+  return insets.top + gap;
+}
+
+/**
+ * Bottom padding clear of the home indicator / Android nav bar.
+ *
+ * `floor` is what to fall back to on a device with no bottom inset at all (an
+ * iPhone SE, or Android 3-button nav on an older target) — pass the value the
+ * screen used for Android, which is exactly the gap the design wanted when
+ * nothing was intruding. Edge-to-edge is mandatory on Expo SDK 54, so on Android
+ * the nav bar now overlays content and this is load-bearing, not cosmetic.
+ */
+export function safeBottom(insets: EdgeInsets, gap: number, floor: number): number {
+  return Math.max(insets.bottom + gap, floor);
+}

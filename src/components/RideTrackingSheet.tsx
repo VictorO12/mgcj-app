@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Animated,
   PanResponder,
-  Platform,
   Linking,
   Alert,
   Image,
@@ -23,6 +22,8 @@ import { invokeFunction } from "../lib/invokeFunction";
 import { useRideContact } from "../hooks/useRideContact";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../hooks/useLayout";
 
 interface Props {
   ride: ActiveRide;
@@ -44,7 +45,8 @@ export default function RideTrackingSheet({
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [expanded, setExpanded] = useState(false);
   const [driverProfileVisible, setDriverProfileVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
@@ -516,7 +518,7 @@ export default function RideTrackingSheet({
   );
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, insets: EdgeInsets) => StyleSheet.create({
   miniBar: {
     position: "absolute",
     bottom: 0,
@@ -564,7 +566,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     borderTopWidth: 0.5,
     borderColor: colors.border,
     paddingHorizontal: 20,
-    paddingBottom: Platform.OS === "ios" ? 36 : 24,
+    paddingBottom: safeBottom(insets, 2, 24),
   },
   dragHandle: { alignItems: "center", paddingTop: 10, paddingBottom: 6 },
   handleBar: {

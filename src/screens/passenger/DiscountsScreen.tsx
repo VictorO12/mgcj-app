@@ -18,6 +18,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 interface Props {
   onClose: () => void;
@@ -32,7 +34,8 @@ const EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 export default function DiscountsScreen({ onClose }: Props) {
   const { profile, refetch } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const realtimeRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const [studentEmail, setStudentEmail] = useState("");
@@ -310,14 +313,14 @@ function InputState({
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingHorizontal: 20,
       paddingBottom: 16,
       backgroundColor: colors.backgroundOverlay,

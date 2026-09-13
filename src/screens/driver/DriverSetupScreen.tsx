@@ -15,6 +15,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 interface VehicleClass {
   id: string;
@@ -88,7 +90,8 @@ const VEHICLE_MODELS: Record<string, string[]> = {
 export default function DriverSetupScreen({ onComplete }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [vehicleMake, setVehicleMake] = useState("");
   const [vehicleModel, setVehicleModel] = useState("");
   const [plateNumber, setPlateNumber] = useState("");
@@ -382,13 +385,13 @@ export default function DriverSetupScreen({ onComplete }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     inner: {
       flexGrow: 1,
       paddingHorizontal: 24,
-      paddingTop: Platform.OS === "ios" ? 60 : 40,
+      paddingTop: safeTop(insets, 14),
       paddingBottom: 40,
     },
     header: { alignItems: "center", marginBottom: 32 },

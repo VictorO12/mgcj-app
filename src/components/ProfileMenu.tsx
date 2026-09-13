@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
-  Platform,
   TouchableWithoutFeedback,
   Modal,
   Image,
@@ -356,7 +355,7 @@ export default function ProfileMenu({
           </TouchableOpacity>
 
           {/* Clear the home indicator / Android nav bar (edge-to-edge, SDK 54) */}
-          <View style={{ height: Math.max(insets.bottom, Platform.OS === "ios" ? 34 : 16) }} />
+          <View style={{ height: Math.max(insets.bottom, 16) }} />
         </Animated.View>
       </View>
     </Modal>

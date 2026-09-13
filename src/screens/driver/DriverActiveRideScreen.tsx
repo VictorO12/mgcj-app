@@ -34,6 +34,8 @@ import { useRideContact } from "../../hooks/useRideContact";
 import Constants from "expo-constants";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
@@ -216,7 +218,8 @@ export default function DriverActiveRideScreen({
 
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const mapRef = useRef<MapView>(null);
 
   const [chatVisible, setChatVisible] = useState(false);
@@ -1778,7 +1781,7 @@ export default function DriverActiveRideScreen({
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     map: { flex: 1 },
@@ -1792,7 +1795,7 @@ const makeStyles = (colors: Colors) =>
       justifyContent: "center",
       gap: 10,
       backgroundColor: colors.surface,
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingBottom: 16,
       paddingHorizontal: 16,
       borderBottomWidth: 0.5,
@@ -1811,7 +1814,7 @@ const makeStyles = (colors: Colors) =>
       flexDirection: "row",
       alignItems: "center",
       backgroundColor: colors.surface,
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingBottom: 16,
       paddingHorizontal: 16,
       gap: 14,
@@ -1854,7 +1857,7 @@ const makeStyles = (colors: Colors) =>
     navThenText: { flex: 1, fontSize: 13, color: colors.textSecondary },
     topBar: {
       position: "absolute",
-      top: Platform.OS === "ios" ? 56 : 40,
+      top: safeTop(insets),
       left: 16,
       right: 16,
       flexDirection: "row",
@@ -1960,7 +1963,7 @@ const makeStyles = (colors: Colors) =>
       borderColor: colors.border,
       paddingHorizontal: 16,
       paddingTop: 8,
-      paddingBottom: Platform.OS === "ios" ? 34 : 20,
+      paddingBottom: safeBottom(insets, 0, 20),
       gap: 10,
     },
     sheetHandle: {
@@ -2188,7 +2191,7 @@ const makeStyles = (colors: Colors) =>
       borderTopWidth: 0.5,
       borderColor: colors.border,
       padding: 24,
-      paddingBottom: Platform.OS === "ios" ? 44 : 28,
+      paddingBottom: safeBottom(insets, 10, 28),
       gap: 14,
     },
     modalHandle: {

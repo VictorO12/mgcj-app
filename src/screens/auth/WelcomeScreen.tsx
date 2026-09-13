@@ -6,7 +6,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
 import { useTheme } from '../../theme/ThemeContext'
 import type { Colors } from '../../theme/colors'
-import { useLayout, gutterFor, type Layout } from '../../hooks/useLayout'
+import { useLayout, gutterFor, safeTop, safeBottom, type Layout } from '../../hooks/useLayout'
+import { useSafeAreaInsets, type EdgeInsets } from 'react-native-safe-area-context'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Welcome'>
@@ -15,7 +16,8 @@ type Props = {
 export default function WelcomeScreen({ navigation }: Props) {
   const { colors } = useTheme()
   const layout = useLayout()
-  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width])
+  const insets = useSafeAreaInsets()
+  const styles = useMemo(() => makeStyles(colors, layout, insets), [colors, layout.width, insets])
   return (
     <View style={styles.container}>
 
@@ -78,11 +80,11 @@ export default function WelcomeScreen({ navigation }: Props) {
   )
 }
 
-const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout, insets: EdgeInsets) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   top: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingTop: safeTop(insets, 14),
   },
   wordmark: { fontSize: 46, fontWeight: '700', color: colors.accentOrange, letterSpacing: 1, marginBottom: 6 },
   tagline: { fontSize: 15, color: colors.textSecondary, marginBottom: 36 },
@@ -107,7 +109,7 @@ const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
     borderTopLeftRadius: 28, borderTopRightRadius: 28,
     borderTopWidth: 0.5, borderColor: colors.border,
     paddingHorizontal: gutterFor(layout, 28), paddingTop: 32,
-    paddingBottom: Platform.OS === 'ios' ? 48 : 32,
+    paddingBottom: safeBottom(insets, 14, 32),
   },
   headline: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, lineHeight: 36, marginBottom: 12 },
   subheadline: { fontSize: 14, color: colors.textSecondary, lineHeight: 22, marginBottom: 28 },

@@ -15,6 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../hooks/useLayout";
 
 interface Props {
   visible: boolean;
@@ -32,7 +34,8 @@ const CATEGORIES: { code: string; label: string }[] = [
 
 export default function ReportProblemModal({ visible, rideId, onDismiss }: Props) {
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -178,7 +181,7 @@ export default function ReportProblemModal({ visible, rideId, onDismiss }: Props
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     overlay: {
       flex: 1,
@@ -189,7 +192,7 @@ const makeStyles = (colors: Colors) =>
       backgroundColor: colors.background,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
-      paddingBottom: Platform.OS === "ios" ? 40 : 28,
+      paddingBottom: safeBottom(insets, 6, 28),
       borderTopWidth: 0.5,
       borderColor: colors.border,
       maxHeight: "85%",

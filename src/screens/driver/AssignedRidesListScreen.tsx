@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
@@ -17,6 +16,8 @@ import { useAuth } from "../../hooks/AuthContext";
 import { useRideContact } from "../../hooks/useRideContact";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
+import { safeTop, safeBottom } from "../../hooks/useLayout";
 
 interface AssignedRide {
   id: string;
@@ -58,7 +59,8 @@ export default function AssignedRidesListScreen({
 }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   const [rides, setRides] = useState<AssignedRide[]>([]);
   const [openRides, setOpenRides] = useState<AssignedRide[]>([]);
   // Soft-claimed: preferred_driver_id is me, but driver_id is still null and the
@@ -636,7 +638,8 @@ function RideCard({
   onDecline: () => void;
 }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(colors, insets), [colors, insets]);
   // G3 Phase 2 — masked. Resolved per card rather than passed down from the
   // list, because the number is per-ride and per-caller and there is no longer
   // a phone on the ride object worth threading through. Most cards here are
@@ -841,12 +844,12 @@ function RideCard({
   );
 }
 
-const makeStyles = (colors: Colors) =>
+const makeStyles = (colors: Colors, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
       backgroundColor: colors.background,
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
     },
     header: {
       flexDirection: "row",

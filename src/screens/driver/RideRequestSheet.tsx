@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TIMEOUT_SECONDS = 30;
 
@@ -37,6 +38,7 @@ interface Props {
 
 export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const slideY = useRef(new Animated.Value(600)).current;
   const timerProgress = useRef(new Animated.Value(1)).current;
@@ -304,7 +306,7 @@ export default function RideRequestSheet({ ride, onAccept, onDecline }: Props) {
         </TouchableOpacity>
       </View>
 
-      <View style={{ height: Platform.OS === "ios" ? 34 : 16 }} />
+      <View style={{ height: Math.max(insets.bottom, 16) }} />
     </Animated.View>
   );
 }

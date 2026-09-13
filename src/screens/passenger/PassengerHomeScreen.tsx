@@ -34,7 +34,8 @@ import ScheduledRidesScreen from "./ScheduledRidesScreen";
 import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import Constants from "expo-constants";
 import { useNotifications } from "../../hooks/useNotifications";
-import { useLayout, type Layout } from "../../hooks/useLayout";
+import { useLayout, safeTop, type Layout } from "../../hooks/useLayout";
+import type { EdgeInsets } from "react-native-safe-area-context";
 import RideReviewModal from "../../components/RideReviewModal";
 import ProfileScreen from "./ProfileScreen";
 import DiscountsScreen from "./DiscountsScreen";
@@ -171,8 +172,8 @@ export default function PassengerHomeScreen() {
   const insets = useSafeAreaInsets();
   const layout = useLayout();
   const styles = useMemo(
-    () => makeStyles(colors, resolvedTheme, insets.bottom, layout),
-    [colors, resolvedTheme, insets.bottom, layout.height, layout.contentMaxWidth],
+    () => makeStyles(colors, resolvedTheme, insets.bottom, layout, insets),
+    [colors, resolvedTheme, insets, layout.height, layout.contentMaxWidth],
   );
 
   const mapRef = useRef<MapView>(null);
@@ -2117,6 +2118,7 @@ const makeStyles = (
   resolvedTheme: "light" | "dark",
   bottomInset: number = 0,
   layout: Layout,
+  insets: EdgeInsets,
 ) => {
   const SCREEN_HEIGHT = layout.height;
   const isDark = resolvedTheme === "dark";
@@ -2149,7 +2151,7 @@ const makeStyles = (
     topBar: {
       flexDirection: "row",
       alignItems: "center",
-      paddingTop: Platform.OS === "ios" ? 56 : 40,
+      paddingTop: safeTop(insets),
       paddingHorizontal: 20,
       paddingBottom: 12,
       backgroundColor: colors.backgroundOverlay,
