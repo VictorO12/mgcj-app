@@ -866,9 +866,12 @@ Four decisions in it, each of which the obvious alternative gets wrong:
   because `run_shift_auto_end`'s RECOVER pass (clears the prompt for anyone with
   recent activity) runs BEFORE the END pass, and END requires a non-null prompt.
   A driver who opens the app during the 15-minute grace is withdrawn, not ended.
-  Confirmed against `20260771`, which `CREATE OR REPLACE`s `20260770`'s function
-  at the same signature — worth one live `pg_get_functiondef` check before
-  relying on the ordering, per the migrations-are-not-applied-state rule.
+  **Verified live 2026-09-12**, not just read off the migration: against
+  `pg_get_functiondef('public.run_shift_auto_end(int,int)'::regprocedure)`,
+  RECOVER sits at byte 271 and END at 1328. The same query confirmed the live
+  function is the `20260771` version (`ended_unreachable` present, so tokenless
+  drivers are ended directly rather than "for not answering") and that the
+  `is_demo` guard is in place.
 
 Untouched: `is_demo` drivers are excluded from prompts entirely, and the write
 goes through the existing `drivers: update own` policy — the same path the
