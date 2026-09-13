@@ -9,6 +9,7 @@ import { RootStackParamList } from '../../types'
 import { supabase } from '../../lib/supabase'
 import { useTheme } from '../../theme/ThemeContext'
 import type { Colors } from '../../theme/colors'
+import { useLayout, gutterFor, type Layout } from '../../hooks/useLayout'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'SignUp'>
@@ -30,7 +31,8 @@ function formatDisplay(raw: string): string {
 
 export default function SignUpScreen({ navigation }: Props) {
   const { colors } = useTheme()
-  const styles = useMemo(() => makeStyles(colors), [colors])
+  const layout = useLayout()
+  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width])
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [phone, setPhone] = useState('')
@@ -152,9 +154,9 @@ export default function SignUpScreen({ navigation }: Props) {
   )
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  inner: { flexGrow: 1, paddingHorizontal: 24, paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 40 },
+  inner: { flexGrow: 1, paddingHorizontal: gutterFor(layout, 24), paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 40 },
   backBtn: { marginBottom: 28 },
   backText: { color: colors.textSecondary, fontSize: 15 },
   title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },

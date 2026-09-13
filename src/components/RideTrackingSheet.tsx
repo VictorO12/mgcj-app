@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Animated,
   PanResponder,
-  Dimensions,
   Platform,
   Linking,
   Alert,
@@ -24,8 +23,6 @@ import { invokeFunction } from "../lib/invokeFunction";
 import { useRideContact } from "../hooks/useRideContact";
 import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
-
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 interface Props {
   ride: ActiveRide;

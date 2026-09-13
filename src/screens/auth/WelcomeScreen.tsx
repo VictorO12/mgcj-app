@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
 import { useTheme } from '../../theme/ThemeContext'
 import type { Colors } from '../../theme/colors'
+import { useLayout, gutterFor, type Layout } from '../../hooks/useLayout'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Welcome'>
@@ -13,7 +14,8 @@ type Props = {
 
 export default function WelcomeScreen({ navigation }: Props) {
   const { colors } = useTheme()
-  const styles = useMemo(() => makeStyles(colors), [colors])
+  const layout = useLayout()
+  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width])
   return (
     <View style={styles.container}>
 
@@ -76,7 +78,7 @@ export default function WelcomeScreen({ navigation }: Props) {
   )
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   top: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
@@ -104,7 +106,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopLeftRadius: 28, borderTopRightRadius: 28,
     borderTopWidth: 0.5, borderColor: colors.border,
-    paddingHorizontal: 28, paddingTop: 32,
+    paddingHorizontal: gutterFor(layout, 28), paddingTop: 32,
     paddingBottom: Platform.OS === 'ios' ? 48 : 32,
   },
   headline: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, lineHeight: 36, marginBottom: 12 },

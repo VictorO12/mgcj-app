@@ -11,7 +11,6 @@ import {
   Image,
   Alert,
   Keyboard,
-  Dimensions,
   Animated,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
@@ -35,6 +34,7 @@ import ScheduledRidesScreen from "./ScheduledRidesScreen";
 import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import Constants from "expo-constants";
 import { useNotifications } from "../../hooks/useNotifications";
+import { useLayout, type Layout } from "../../hooks/useLayout";
 import RideReviewModal from "../../components/RideReviewModal";
 import ProfileScreen from "./ProfileScreen";
 import DiscountsScreen from "./DiscountsScreen";
@@ -54,7 +54,6 @@ import type { Colors } from "../../theme/colors";
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
-const SCREEN_HEIGHT = Dimensions.get("window").height;
 
 const QUICK_DESTINATIONS = [
   {
@@ -170,9 +169,10 @@ export default function PassengerHomeScreen() {
   useNotifications();
   const { colors, resolvedTheme } = useTheme();
   const insets = useSafeAreaInsets();
+  const layout = useLayout();
   const styles = useMemo(
-    () => makeStyles(colors, resolvedTheme, insets.bottom),
-    [colors, resolvedTheme, insets.bottom],
+    () => makeStyles(colors, resolvedTheme, insets.bottom, layout),
+    [colors, resolvedTheme, insets.bottom, layout.height, layout.contentMaxWidth],
   );
 
   const mapRef = useRef<MapView>(null);
@@ -2112,7 +2112,13 @@ function decodePolyline(encoded: string): LatLng[] {
   return coords;
 }
 
-const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset: number = 0) => {
+const makeStyles = (
+  colors: Colors,
+  resolvedTheme: "light" | "dark",
+  bottomInset: number = 0,
+  layout: Layout,
+) => {
+  const SCREEN_HEIGHT = layout.height;
   const isDark = resolvedTheme === "dark";
   // Soft elevation presets. Dark surfaces swallow drop shadows, so there we
   // lean on a tighter, higher-opacity shadow purely to lift floating controls
@@ -2281,6 +2287,12 @@ const makeStyles = (colors: Colors, resolvedTheme: "light" | "dark", bottomInset
       maxHeight: SCREEN_HEIGHT * 0.78,
     },
     sheet: {
+      // On a tablet a full-bleed sheet is a metre of empty space with a button
+      // stranded at each end. Clamped + centred it reads as a card over the map;
+      // on a phone contentMaxWidth collapses to the screen width, so this is inert.
+      width: "100%",
+      maxWidth: layout.contentMaxWidth,
+      alignSelf: "center",
       backgroundColor: colors.background,
       borderTopLeftRadius: 28,
       borderTopRightRadius: 28,

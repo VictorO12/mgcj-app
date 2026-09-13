@@ -8,7 +8,6 @@ import {
   Alert,
   Animated,
   FlatList,
-  Dimensions,
   Image,
   Linking,
 } from "react-native";
@@ -37,6 +36,7 @@ import { useInterstitialQueue } from "../../hooks/useInterstitialQueue";
 import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useLayout, gutterFor, type Layout } from "../../hooks/useLayout";
 
 interface AssignedRide {
   id: string;
@@ -153,7 +153,11 @@ export default function DriverHomeScreen({
 }: Props) {
   const { profile, signOut } = useAuth();
   const { colors, resolvedTheme } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const layout = useLayout();
+  const styles = useMemo(
+    () => makeStyles(colors, layout),
+    [colors, layout.width, layout.contentMaxWidth],
+  );
   const { average, count } = useDriverRating(profile?.id);
   useNotifications();
   const mapRef = useRef<MapView>(null);
@@ -170,7 +174,14 @@ export default function DriverHomeScreen({
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
-  const CARD_WIDTH = Dimensions.get("window").width - 32;
+  // Read live, and clamped: a full-bleed card is ~990pt on an iPad, which turns
+  // one ride into a billboard. The FlatList viewport is pinned to the same value
+  // below, because `pagingEnabled` snaps by the list's VIEWPORT width, not the
+  // item's — if the two disagree the carousel drifts a little further off-centre
+  // with every swipe. The -1 is `scheduledPanel`'s 0.5pt border on each side,
+  // which the card sits inside; without it the item is a point wider than the
+  // box that holds it (true on phone before this too, just less visible).
+  const CARD_WIDTH = Math.min(layout.width - 32, layout.contentMaxWidth) - 1;
   const [activeCard, setActiveCard] = useState(0);
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
@@ -811,6 +822,7 @@ export default function DriverHomeScreen({
                 </View>
               </View>
               <FlatList
+                style={{ width: CARD_WIDTH, alignSelf: "center" }}
                 data={otherScheduledRides}
                 keyExtractor={(r) => r.id}
                 horizontal
@@ -1009,8 +1021,9 @@ export default function DriverHomeScreen({
   );
 }
 
-const makeStyles = (colors: Colors) =>
-  StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => {
+  const { contentMaxWidth } = layout;
+  return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     map: { flex: 1 },
     topBar: {
@@ -1236,7 +1249,7 @@ const makeStyles = (colors: Colors) =>
       borderTopRightRadius: 24,
       borderTopWidth: 0.5,
       borderColor: colors.border,
-      paddingHorizontal: 20,
+      paddingHorizontal: gutterFor(layout, 20),
       paddingTop: 20,
       paddingBottom: Platform.OS === "ios" ? 44 : 24,
     },
@@ -1306,6 +1319,7 @@ const makeStyles = (colors: Colors) =>
     },
     onlineBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
     floatingStack: {
+      alignItems: "center",
       position: "absolute",
       bottom: Platform.OS === "ios" ? 220 : 200,
       left: 16,
@@ -1313,6 +1327,8 @@ const makeStyles = (colors: Colors) =>
       gap: 10,
     },
     countdownCard: {
+      width: "100%",
+      maxWidth: contentMaxWidth,
       backgroundColor: colors.surface,
       borderRadius: 16,
       borderWidth: 1,
@@ -1364,6 +1380,8 @@ const makeStyles = (colors: Colors) =>
       fontWeight: "700",
     },
     scheduledPanel: {
+      width: "100%",
+      maxWidth: contentMaxWidth,
       backgroundColor: colors.surface,
       borderRadius: 14,
       borderWidth: 0.5,
@@ -1478,6 +1496,7 @@ const makeStyles = (colors: Colors) =>
       color: colors.accentGreen,
     },
   });
+};
 
 const darkMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2c3f" }] },

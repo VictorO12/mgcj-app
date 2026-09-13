@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RootStackParamList } from '../../types'
 import { useTheme } from '../../theme/ThemeContext'
 import type { Colors } from '../../theme/colors'
+import { useLayout, gutterFor, type Layout } from '../../hooks/useLayout'
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverWelcome'>
@@ -13,7 +14,8 @@ type Props = {
 
 export default function DriverWelcomeScreen({ navigation }: Props) {
   const { colors } = useTheme()
-  const styles = useMemo(() => makeStyles(colors), [colors])
+  const layout = useLayout()
+  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width])
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -74,11 +76,11 @@ export default function DriverWelcomeScreen({ navigation }: Props) {
   )
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, paddingTop: Platform.OS === 'ios' ? 56 : 40 },
   backBtn: { paddingHorizontal: 24, paddingBottom: 16 },
   backText: { color: colors.textSecondary, fontSize: 15 },
-  content: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
+  content: { flex: 1, paddingHorizontal: gutterFor(layout, 24), paddingTop: 16 },
   iconWrap: {
     width: 72, height: 72, borderRadius: 36,
     backgroundColor: 'rgba(29,158,117,0.1)',

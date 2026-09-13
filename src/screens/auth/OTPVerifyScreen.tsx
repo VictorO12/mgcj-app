@@ -17,6 +17,7 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/AuthContext";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useLayout, gutterFor, type Layout } from "../../hooks/useLayout";
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, "OTPVerify">;
@@ -29,7 +30,8 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   const { phone, name, isNewUser, isDriver, inviteCode } = route.params;
   const { refetch, holdLoading, releaseLoading } = useAuth();
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const layout = useLayout();
+  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width]);
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(30);
@@ -329,11 +331,11 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   inner: {
     flex: 1,
-    paddingHorizontal: 28,
+    paddingHorizontal: gutterFor(layout, 28),
     paddingTop: Platform.OS === "ios" ? 60 : 40,
   },
   backBtn: { marginBottom: 28 },

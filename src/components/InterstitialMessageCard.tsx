@@ -8,10 +8,10 @@ import {
   Modal,
   Platform,
   Animated,
-  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../theme/ThemeContext";
+import { useLayout } from "../hooks/useLayout";
 import type { Colors } from "../theme/colors";
 import type { InterstitialMessage } from "../hooks/useInterstitialQueue";
 
@@ -29,15 +29,20 @@ const CATEGORY_LABEL: Record<string, string> = {
   offer: "Limited-time offer",
 };
 
-const SCREEN_HEIGHT = Dimensions.get("window").height;
-
 export default function InterstitialMessageCard({ message, onDismiss }: Props) {
   const { colors } = useTheme();
   const isOffer = message.category === "offer";
   const accentColor = isOffer ? colors.accentOrange : colors.accentBlue;
   const cardTint = isOffer ? colors.surfaceOrangeTint : colors.surfaceAlt;
-  const styles = useMemo(() => makeStyles(colors, cardTint), [colors, cardTint]);
-  const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const layout = useLayout();
+  const styles = useMemo(
+    () => makeStyles(colors, cardTint, layout.contentMaxWidth),
+    [colors, cardTint, layout.contentMaxWidth],
+  );
+  // Start the card one screen below the fold. Read live: a module-scope capture
+  // is the phone's launch height forever, which on a rotated or resized window
+  // starts the card mid-screen and the spring visibly snaps.
+  const translateY = useRef(new Animated.Value(layout.height)).current;
 
   useEffect(() => {
     Animated.spring(translateY, {
@@ -77,14 +82,16 @@ export default function InterstitialMessageCard({ message, onDismiss }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors, cardTint: string) =>
+const makeStyles = (colors: Colors, cardTint: string, maxWidth: number) =>
   StyleSheet.create({
     wrap: {
       flex: 1,
       justifyContent: "flex-end",
+      alignItems: "center",
     },
     card: {
       width: "100%",
+      maxWidth,
       minHeight: 260,
       backgroundColor: cardTint,
       borderTopLeftRadius: 28,

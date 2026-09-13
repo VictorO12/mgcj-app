@@ -15,6 +15,7 @@ import { RootStackParamList } from "../../types";
 import { supabase } from "../../lib/supabase";
 import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
+import { useLayout, gutterFor, type Layout } from "../../hooks/useLayout";
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, "PhoneEntry">;
@@ -36,7 +37,8 @@ function formatDisplay(raw: string): string {
 
 export default function PhoneEntryScreen({ navigation }: Props) {
   const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const layout = useLayout();
+  const styles = useMemo(() => makeStyles(colors, layout), [colors, layout.width]);
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -145,11 +147,11 @@ export default function PhoneEntryScreen({ navigation }: Props) {
   );
 }
 
-const makeStyles = (colors: Colors) => StyleSheet.create({
+const makeStyles = (colors: Colors, layout: Layout) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   inner: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: gutterFor(layout, 24),
     paddingTop: Platform.OS === "ios" ? 60 : 40,
   },
   backBtn: { marginBottom: 28 },

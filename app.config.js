@@ -34,7 +34,14 @@ export default {
     backgroundColor: "#111827",
   },
   ios: {
-    supportsTablet: false,
+    // iPad. With this false, iPadOS runs the app in the iPhone compatibility
+    // window and scales the result up — that is the "pinched, wrong proportions"
+    // look, and no amount of layout work inside RN can fix it, because
+    // Dimensions/useWindowDimensions never see the iPad's real canvas while it
+    // is off. Deliberately NOT paired with `requireFullScreen`: that key is
+    // deprecated on modern iPadOS, and the layouts read live dimensions anyway,
+    // so a resized window is already handled.
+    supportsTablet: true,
     bundleIdentifier: "com.mgcj.app",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
