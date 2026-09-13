@@ -14,6 +14,7 @@ interface RideWebhookPayload {
   table: string;
   record: {
     id: string;
+    ride_ref: string;
     passenger_id: string;
     driver_id: string | null;
     company_id: string | null;
@@ -121,7 +122,30 @@ Deno.serve(async (req) => {
       companyName,
     });
 
-    const receiptNumber = `RCPT-${ride.id.slice(0, 8).toUpperCase()}`;
+    // The webhook trigger on `rides` predates this column, so the payload is
+    // typed by assertion rather than inference — nothing would catch a missing
+    // ride_ref at compile time. Fail loudly here, because the silent failure is
+    // genuinely worse than the bug this replaced: receiptNumber would become
+    // the literal "RCPT-undefined", the first receipt would insert fine, and
+    // every later one would hit 23505 and return {skipped:"already sent"} with
+    // a 200 — total receipt loss with no error anywhere.
+    if (!ride.ride_ref) {
+      console.error(
+        "[send-ride-receipt] payload has no ride_ref — the webhook predates " +
+        "the column, or 20260774 has not been applied. Not sending.",
+      );
+      return new Response(
+        JSON.stringify({ error: "no ride_ref in webhook payload" }),
+        { status: 500 },
+      );
+    }
+
+    // Derived from rides.ride_ref (20260774), which is unique-indexed and
+    // frozen — so this number is unique by construction. It used to be
+    // `RCPT-${ride.id.slice(0,8)}`: 8 hex chars, ~1% chance of colliding by
+    // ~9,300 receipts, and unfixable by retry because it was a deterministic
+    // function of the UUID.
+    const receiptNumber = `RCPT-${ride.ride_ref}`;
     const pdfBytes = await buildReceiptPdf({
       receiptNumber,
       date: shortDate,
@@ -138,6 +162,42 @@ Deno.serve(async (req) => {
     });
 
     const base64Pdf = btoa(pdfBytes.reduce((acc, byte) => acc + String.fromCharCode(byte), ""));
+
+    // Reserve the receipt row BEFORE emailing. The previous order was
+    // email-then-insert with the insert error swallowed into a console.error,
+    // which meant a failed insert left the passenger holding a PDF the database
+    // had no record of while the function still returned 200 {sent:true}.
+    //
+    // Inserting first also makes the unique constraint on receipt_number do
+    // real work: a Supabase webhook that double-fires for the same ride now
+    // hits 23505 here and returns without sending a second identical email.
+    const { error: receiptError } = await supabase.from("ride_receipts").insert({
+      receipt_number: receiptNumber,
+      ride_id: ride.id,
+      company_id: ride.company_id,
+      passenger_name: passenger.name ?? null,
+      driver_name: driverName,
+      company_name: companyName,
+      hst_number: hstNumber,
+      pickup_address: ride.pickup_address,
+      dropoff_address: ride.dropoff_address,
+      fare,
+      pre_discount_fare: preDiscountFare,
+      discount_amount: discountAmount,
+      discount_label: discountLabel,
+      payment_method: ride.payment_method,
+    });
+
+    if (receiptError) {
+      if (receiptError.code === "23505") {
+        console.log(`[send-ride-receipt] ${receiptNumber} already exists — not resending`);
+        return new Response(JSON.stringify({ skipped: "already sent" }), { status: 200 });
+      }
+      // Anything else is a real failure and must NOT be swallowed: without a
+      // row there is nothing to reconcile the email against.
+      console.error("[send-ride-receipt] receipt insert error:", receiptError.message);
+      return new Response(JSON.stringify({ error: receiptError.message }), { status: 500 });
+    }
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -164,31 +224,21 @@ Deno.serve(async (req) => {
     if (!res.ok) {
       const errText = await res.text();
       console.error("[send-ride-receipt] Resend error:", errText);
+      // The row stays, with sent_at null — that is the reconcilable state, and
+      // it is what stops a webhook retry from emailing twice.
       return new Response(JSON.stringify({ error: errText }), { status: 500 });
     }
 
     const resendData = await res.json().catch(() => null);
 
-    const { error: receiptError } = await supabase.from("ride_receipts").insert({
-      receipt_number: receiptNumber,
-      ride_id: ride.id,
-      company_id: ride.company_id,
-      passenger_name: passenger.name ?? null,
-      driver_name: driverName,
-      company_name: companyName,
-      hst_number: hstNumber,
-      pickup_address: ride.pickup_address,
-      dropoff_address: ride.dropoff_address,
-      fare,
-      pre_discount_fare: preDiscountFare,
-      discount_amount: discountAmount,
-      discount_label: discountLabel,
-      payment_method: ride.payment_method,
-      sent_at: new Date().toISOString(),
-      resend_message_id: resendData?.id ?? null,
-    });
-    if (receiptError) {
-      console.error("[send-ride-receipt] receipt insert error:", receiptError.message);
+    // sent_at is written only once Resend has accepted the message, so
+    // "row exists but sent_at is null" means exactly "we tried and it failed".
+    const { error: stampError } = await supabase
+      .from("ride_receipts")
+      .update({ sent_at: new Date().toISOString(), resend_message_id: resendData?.id ?? null })
+      .eq("receipt_number", receiptNumber);
+    if (stampError) {
+      console.error("[send-ride-receipt] sent_at stamp error:", stampError.message);
     }
 
     return new Response(JSON.stringify({ sent: true, receipt_number: receiptNumber }), { status: 200 });

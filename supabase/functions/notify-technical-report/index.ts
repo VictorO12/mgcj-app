@@ -29,6 +29,9 @@ interface ReportWebhookPayload {
   table: string;
   record: {
     id: string;
+    // 20260777 — carried into the subject so a reply thread stays matched to
+    // one report.
+    report_ref: string;
     reporter_id: string;
     reporter_role: string;
     company_id: string | null;
@@ -50,7 +53,7 @@ Deno.serve(async (req) => {
     const payload: ReportWebhookPayload = await req.json();
     const report = payload.record;
 
-    const [{ data: reporter }, { data: company }] = await Promise.all([
+    const [{ data: reporter }, { data: company }, { data: ride }] = await Promise.all([
       supabase
         .from("profiles")
         .select("name, phone")
@@ -58,6 +61,11 @@ Deno.serve(async (req) => {
         .maybeSingle(),
       report.company_id
         ? supabase.from("companies").select("name").eq("id", report.company_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      // The ride's own reference, so this email names the ride the way the
+      // passenger and the dashboard do rather than by raw UUID.
+      report.ride_id
+        ? supabase.from("rides").select("ride_ref").eq("id", report.ride_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
 
@@ -72,10 +80,11 @@ Deno.serve(async (req) => {
         <h2 style="margin-bottom: 4px;">New ${esc(roleLabel.toLowerCase())} report</h2>
         <p style="color: #6B7280; margin-top: 0;">${esc(categoryLabel)}</p>
         <table style="border-collapse: collapse; margin: 12px 0;">
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Reference</td><td style="font-family: ui-monospace, monospace;">${esc(report.report_ref ?? "—")}</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Reported by</td><td>${esc(reporterName)} (${esc(roleLabel)})</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Phone</td><td>${esc(reporterPhone)}</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Company</td><td>${esc(companyName)}</td></tr>
-          ${report.ride_id ? `<tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Ride</td><td>${esc(report.ride_id)}</td></tr>` : ""}
+          ${report.ride_id ? `<tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Ride</td><td style="font-family: ui-monospace, monospace;">${esc((ride as { ride_ref?: string } | null)?.ride_ref ?? report.ride_id)}</td></tr>` : ""}
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Time</td><td>${esc(report.created_at)}</td></tr>
         </table>
         <p style="white-space: pre-wrap; border-left: 3px solid #E8500A; padding-left: 12px;">${esc(report.message)}</p>
@@ -93,7 +102,7 @@ Deno.serve(async (req) => {
         from: FROM_ADDRESS,
         to: TO_ADDRESS,
         reply_to: "support@vellon.ca",
-        subject: `[${roleLabel} report] ${categoryLabel} — ${reporterName}`,
+        subject: `[${report.report_ref ?? `${roleLabel} report`}] ${categoryLabel} — ${reporterName}`,
         html,
       }),
     });

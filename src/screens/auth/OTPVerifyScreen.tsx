@@ -160,7 +160,13 @@ export default function OTPVerifyScreen({ navigation, route }: Props) {
 
       const { error: driverError } = await supabase
         .from("drivers")
-        .upsert({ id: userId, is_active: false }, { onConflict: "id" });
+        // company_id is set here, not left to a later admin edit: the
+        // drivers BEFORE INSERT trigger issues driver_number from this
+        // company's counter, and a row inserted without one gets no number.
+        .upsert(
+          { id: userId, is_active: false, company_id: invite.company_id ?? null },
+          { onConflict: "id" },
+        );
       console.log("[OTP] driver record upsert:", driverError ?? "ok");
 
       releaseLoading();

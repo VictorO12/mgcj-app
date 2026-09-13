@@ -24,6 +24,7 @@ import { useTheme } from "../theme/ThemeContext";
 import type { Colors } from "../theme/colors";
 import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import { safeTop, safeBottom } from "../hooks/useLayout";
+import { formatRideRef } from "../lib/numbering";
 
 interface Props {
   ride: ActiveRide;
@@ -302,6 +303,9 @@ export default function RideTrackingSheet({
                 {ride.driver!.name ?? "Your driver"}
               </Text>
               <Text style={styles.driverVehicle}>
+                {ride.car_number_at_assignment
+                  ? `Car ${ride.car_number_at_assignment} · `
+                  : ""}
                 {ride.driver!.vehicle_make} {ride.driver!.vehicle_model} ·{" "}
                 {ride.driver!.plate_number}
               </Text>
@@ -377,6 +381,13 @@ export default function RideTrackingSheet({
                 ride.fare_estimate?.toFixed(2) ??
                 "--"}
             </Text>
+            {/* The ride reference. Quiet on purpose — it matters only when
+                something has gone wrong and the passenger is on the phone to
+                support, so it needs to be findable without competing with the
+                fare. */}
+            {!!ride.ride_ref && (
+              <Text style={styles.rideRef}>Ride {formatRideRef(ride.ride_ref)}</Text>
+            )}
           </View>
 
           {/* Cancel button logic:
@@ -749,6 +760,7 @@ const makeStyles = (colors: Colors, insets: EdgeInsets) => StyleSheet.create({
     justifyContent: "space-between",
   },
   fareLabel: { fontSize: 12, color: colors.textSecondary },
+  rideRef: { fontSize: 11, color: colors.textSecondary, marginTop: 2, letterSpacing: 0.5 },
   fareAmt: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
   cancelBtn: {
     backgroundColor: "rgba(226,75,74,0.12)",

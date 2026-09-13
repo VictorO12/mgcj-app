@@ -16,6 +16,14 @@ export interface Driver {
 
 export interface ActiveRide {
   id: string
+  // Human-readable ride reference (20260774). Surfaced to the passenger so
+  // they have something to quote to support; the UUID above is unreadable and
+  // unspeakable.
+  ride_ref: string
+  // The car number as it was at assignment (20260775), NOT the driver's
+  // current one — a car number is a reassignable slot, so reading it live
+  // would answer with whoever holds Car 7 today.
+  car_number_at_assignment: string | null
   status: string
   // Carried so the ride chat can honour its 2h post-completion window (D4)
   // during the brief period this hook keeps a completed ride in state.
@@ -260,6 +268,8 @@ export function useActiveRide(passengerId: string | undefined) {
 
     const assembled: ActiveRide = {
       id: rideRow.id,
+      ride_ref: rideRow.ride_ref,
+      car_number_at_assignment: rideRow.car_number_at_assignment ?? null,
       status: rideRow.status,
       completed_at: rideRow.completed_at ?? null,
       pickup_address: rideRow.pickup_address,

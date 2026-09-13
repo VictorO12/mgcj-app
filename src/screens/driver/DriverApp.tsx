@@ -21,6 +21,9 @@ import {
 
 interface ActiveRide {
   id: string;
+  // Human-readable ride reference (20260774), passed through to
+  // DriverActiveRideScreen so the driver can quote a specific ride to dispatch.
+  ride_ref: string;
   status: string;
   pickup_address: string;
   pickup_lat: number;
@@ -761,6 +764,7 @@ export default function DriverApp() {
       .single();
     setActiveRide({
       id: ride.id,
+      ride_ref: ride.ride_ref,
       status: ride.status,
       pickup_address: ride.pickup_address,
       pickup_lat: ride.pickup_lat,

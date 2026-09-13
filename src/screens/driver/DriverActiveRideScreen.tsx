@@ -36,6 +36,7 @@ import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import { safeTop, safeBottom } from "../../hooks/useLayout";
+import { formatRideRef } from "../../lib/numbering";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
@@ -154,6 +155,10 @@ function manoeuvreIcon(manoeuvre?: string): string {
 
 interface ActiveRide {
   id: string;
+  // Human-readable ride reference (20260774). The driver needs this to quote a
+  // specific ride to dispatch over the radio — "the ride" is ambiguous the
+  // moment they have a scheduled one queued behind this one.
+  ride_ref: string;
   status: string;
   pickup_address: string;
   pickup_lat: number;
@@ -1580,6 +1585,11 @@ export default function DriverActiveRideScreen({
                 <Text style={styles.fareText}>
                   Est. ${ride.fare_estimate?.toFixed(2) ?? "--"}
                 </Text>
+                {!!ride.ride_ref && (
+                  <Text style={styles.rideRefText}>
+                    {formatRideRef(ride.ride_ref)}
+                  </Text>
+                )}
                 <View
                   style={[
                     styles.paymentBadge,
@@ -2081,6 +2091,7 @@ const makeStyles = (colors: Colors, insets: EdgeInsets) =>
     },
     farePaymentRow: { flexDirection: "row", alignItems: "center", gap: 8 },
     fareText: { fontSize: 13, color: colors.textTertiary },
+    rideRefText: { fontSize: 11, color: colors.textTertiary, letterSpacing: 0.5, opacity: 0.7 },
     paymentBadge: {
       flexDirection: "row",
       alignItems: "center",

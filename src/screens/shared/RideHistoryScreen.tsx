@@ -19,9 +19,13 @@ import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import { safeTop, safeBottom } from "../../hooks/useLayout";
+import { formatRideRef } from "../../lib/numbering";
 
 interface RideRecord {
   id: string;
+  // Shown on every past ride so a passenger phoning support about one of them
+  // has the reference in hand rather than describing "the one on Tuesday".
+  ride_ref: string;
   status: string;
   completed_at: string | null;
   pickup_address: string;
@@ -288,7 +292,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
     let query = supabase
       .from("rides")
       .select(
-        `id, status, pickup_address, dropoff_address, fare_estimate,
+        `id, ride_ref, status, pickup_address, dropoff_address, fare_estimate,
          fare_final, payment_method, created_at, completed_at, driver_id, passenger_id,
          settlement_route, stripe_fee, platform_fee_percent_at_completion,
          refunded_amount_cents, transfer_reversed_cents,
@@ -319,6 +323,7 @@ export default function RideHistoryScreen({ onClose }: Props) {
         : ride.driver?.profiles?.name ?? null;
       return {
         id: ride.id,
+        ride_ref: ride.ride_ref,
         status: ride.status,
         completed_at: ride.completed_at,
         pickup_address: ride.pickup_address,
@@ -605,6 +610,11 @@ export default function RideHistoryScreen({ onClose }: Props) {
                       <View style={styles.rideCardTop}>
                         <Text style={styles.rideTime}>
                           {formatTime(ride.created_at)}
+                          {!!ride.ride_ref && (
+                            <Text style={styles.rideRefInline}>
+                              {"  ·  "}{formatRideRef(ride.ride_ref)}
+                            </Text>
+                          )}
                         </Text>
                         <View
                           style={[
@@ -1133,6 +1143,7 @@ const makeStyles = (colors: Colors, insets: EdgeInsets) =>
       marginBottom: 10,
     },
     rideTime: { fontSize: 13, fontWeight: "500", color: colors.textTertiary },
+    rideRefInline: { fontSize: 11, fontWeight: "400", color: colors.textMuted, letterSpacing: 0.5 },
     statusBadge: {
       paddingHorizontal: 10,
       paddingVertical: 4,

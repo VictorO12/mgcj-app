@@ -22,6 +22,7 @@ import { useTheme } from "../../theme/ThemeContext";
 import type { Colors } from "../../theme/colors";
 import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import { safeTop, safeBottom } from "../../hooks/useLayout";
+import { formatNumber, type NumberFormat } from "../../lib/numbering";
 
 interface Props {
   onClose: () => void;
@@ -110,6 +111,16 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
         .toUpperCase()
     : "?";
 
+  // Both admin-assigned and read-only here: a driver number names a staff
+  // record and a car number labels a company asset, so neither is the driver's
+  // to change (guard_driver_numbering rejects the write anyway, 20260775).
+  const [driverNumber, setDriverNumber] = useState<number | null>(null);
+  const [carNumber, setCarNumber] = useState<string | null>(null);
+  const [driverNumberFormat, setDriverNumberFormat] = useState<NumberFormat>({
+    prefix: "",
+    pad: 0,
+  });
+
   useEffect(() => {
     loadDriverData();
   }, []);
@@ -119,7 +130,7 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
     const { data } = await supabase
       .from("drivers")
       .select(
-        "vehicle_make, vehicle_model, plate_number, vehicle_year, connect_status",
+        "vehicle_make, vehicle_model, plate_number, vehicle_year, connect_status, driver_number, car_number",
       )
       .eq("id", profile.id)
       .single();
@@ -129,15 +140,21 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
       setPlateNumber(data.plate_number ?? "");
       setYear(data.vehicle_year ? String(data.vehicle_year) : "");
       setConnectStatus((data.connect_status as ConnectStatus) ?? "not_started");
+      setDriverNumber(data.driver_number ?? null);
+      setCarNumber(data.car_number ?? null);
     }
 
     if (profile.company_id) {
       const { data: company } = await supabase
         .from("companies")
-        .select("payout_model")
+        .select("payout_model, driver_number_prefix, driver_number_pad")
         .eq("id", profile.company_id)
         .single();
       setPayoutModel(company?.payout_model ?? "company_settles");
+      setDriverNumberFormat({
+        prefix: company?.driver_number_prefix ?? "",
+        pad: company?.driver_number_pad ?? 0,
+      });
     }
 
     setLoadingData(false);
@@ -418,6 +435,17 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
             <Text style={styles.fieldLabel}>Phone</Text>
             <Text style={styles.fieldReadOnly}>{profile?.phone ?? ""}</Text>
           </View>
+          {driverNumber !== null && (
+            <>
+              <View style={styles.fieldDivider} />
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Driver number</Text>
+                <Text style={styles.fieldReadOnly}>
+                  {formatNumber(driverNumber, driverNumberFormat)}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
         <Text style={styles.fieldNote}>
           Phone number cannot be changed here. Contact dispatch if needed.
@@ -568,6 +596,15 @@ export default function DriverEditProfileScreen({ onClose }: Props) {
               maxLength={8}
             />
           </View>
+          {!!carNumber && (
+            <>
+              <View style={styles.fieldDivider} />
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Car number</Text>
+                <Text style={styles.fieldReadOnly}>{carNumber}</Text>
+              </View>
+            </>
+          )}
         </View>
 
         {/* Payouts section — driver_direct companies only */}

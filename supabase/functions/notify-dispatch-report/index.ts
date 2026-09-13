@@ -25,6 +25,10 @@ interface ReportWebhookPayload {
   table: string;
   record: {
     id: string;
+    // 20260777. Put in the subject so a reply thread stays matched to one
+    // report — this email is the only channel Vellon has for these, and
+    // "the report you filed" was previously unnameable.
+    report_ref: string;
     company_id: string;
     admin_id: string;
     category: string;
@@ -58,6 +62,7 @@ Deno.serve(async (req) => {
         <h2 style="margin-bottom: 4px;">New dispatch report</h2>
         <p style="color: #6B7280; margin-top: 0;">${esc(categoryLabel)}</p>
         <table style="border-collapse: collapse; margin: 12px 0;">
+          <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Reference</td><td style="font-family: ui-monospace, monospace;">${esc(report.report_ref ?? "—")}</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Company</td><td>${esc(companyName)}</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Submitted by</td><td>${esc(adminName)}</td></tr>
           <tr><td style="color: #6B7280; padding: 2px 12px 2px 0;">Time</td><td>${esc(report.created_at)}</td></tr>
@@ -76,7 +81,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         from: FROM_ADDRESS,
         to: TO_ADDRESS,
-        subject: `[Dispatch report] ${categoryLabel} — ${companyName}`,
+        subject: `[${report.report_ref ?? "Dispatch report"}] ${categoryLabel} — ${companyName}`,
         html,
       }),
     });
