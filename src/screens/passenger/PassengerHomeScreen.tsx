@@ -48,6 +48,27 @@ import { useOtaUpdate } from "../../hooks/useOtaUpdate";
 import type { ReloadBlock } from "../../lib/updates";
 import InterstitialMessageCard from "../../components/InterstitialMessageCard";
 import DriverProfileSheet from "../../components/DriverProfileSheet";
+import SavePlaceModal from "../../components/SavePlaceModal";
+import {
+  fetchSavedPlaces,
+  savePlace,
+  deletePlace,
+  updatePlaceKind,
+  touchPlace,
+  findSaved,
+  placeLabel,
+  placeIcon,
+  type SavedPlace,
+  type PlaceKind,
+} from "../../lib/savedPlaces";
+import {
+  fetchRecentPlaces,
+  visibleRecents,
+  type RecentPlace,
+} from "../../lib/recentPlaces";
+import AddressPickerModal, {
+  type PickedAddress,
+} from "../../components/AddressPickerModal";
 import { useTheme } from "../../theme/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Colors } from "../../theme/colors";
@@ -56,15 +77,11 @@ const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl;
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey;
 
-const QUICK_DESTINATIONS = [
-  {
-    label: "🏥 Valley Hospital",
-    address: "Valley Regional Hospital, Kentville, NS",
-  },
-  { label: "🛒 Superstore", address: "Atlantic Superstore, New Minas, NS" },
-  { label: "🎓 Acadia", address: "Acadia University, Wolfville, NS" },
-  { label: "💊 Pharmasave", address: "Pharmasave, Kentville, NS" },
-];
+/**
+ * Chips in the idle row, saved and recent together. Six is about what fits two
+ * scrolls of thumb; past that it stops being a shortcut and becomes a list.
+ */
+const QUICK_ROW_MAX = 6;
 
 interface PaymentMethod {
   id: string;
@@ -243,6 +260,31 @@ export default function PassengerHomeScreen() {
     null,
   );
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
+  // Saved places. This replaced a hardcoded list of four Kentville landmarks
+  // that stored ADDRESS STRINGS — tapping one ran a Places autocomplete and
+  // then a Places details lookup before the passenger had a destination. A row
+  // here carries coordinates, so a tap resolves for free. There is deliberately
+  // no fallback list when this is empty: the chip row simply doesn't render.
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  // Recent destinations — the tier under saved places. Costs no table and no
+  // Places call, and covers anyone who has taken a single ride, which is what
+  // makes the truly-empty chip row rare enough to answer with onboarding.
+  const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>([]);
+  const [savePlaceVisible, setSavePlaceVisible] = useState(false);
+  // What the save-place modal is naming. Not read off dropoffPlace, because a
+  // recent chip can be saved straight from the idle row, where there is no
+  // destination set yet.
+  const [pendingSave, setPendingSave] = useState<{
+    address: string;
+    display: string;
+    lat: number;
+    lng: number;
+  } | null>(null);
+  // Which slot the "Add Home"/"Add Work" picker is filling, if it's open.
+  const [addingKind, setAddingKind] = useState<PlaceKind | null>(null);
+  const [addingBusy, setAddingBusy] = useState(false);
+  const [savingPlace, setSavingPlace] = useState(false);
+  const [savePlaceError, setSavePlaceError] = useState<string | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   // Has the passenger typed since opening the search box? Opening a field
   // pre-fills it with the resolved address and no predictions, which would
@@ -634,6 +676,200 @@ export default function PassengerHomeScreen() {
   function openDriverProfile(driverId: string) {
     setSelectedDriverId(driverId);
     setDriverProfileVisible(true);
+  }
+
+  // Guest passengers are created by dispatch and never hold a session, so the
+  // only way to be here without a real profile is mid-signup. Saving is hidden
+  // rather than failing.
+  const canSavePlaces = !!profile?.id && !profile.is_guest;
+
+  const reloadSavedPlaces = useCallback(async () => {
+    if (!profile?.id) return;
+    setSavedPlaces(await fetchSavedPlaces(profile.id));
+  }, [profile?.id]);
+
+  const reloadRecents = useCallback(async () => {
+    if (!profile?.id) return;
+    setRecentPlaces(await fetchRecentPlaces(profile.id));
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (canSavePlaces) void reloadSavedPlaces();
+  }, [canSavePlaces, reloadSavedPlaces]);
+
+  // Keyed on the active ride's id rather than its status: the interesting
+  // moment is a ride ENDING (the row clears, and its dropoff is now the
+  // newest recent), and id changes exactly once per ride instead of once per
+  // status transition.
+  useEffect(() => {
+    if (canSavePlaces) void reloadRecents();
+  }, [canSavePlaces, reloadRecents, ride?.id]);
+
+  /**
+   * Saved places first, then recents filling what's left. One row, not two:
+   * two labelled chip rows in a booking sheet is how this turns to noise, and
+   * the cap is what keeps it a shortcut rather than a list to read.
+   */
+  const shownRecents = useMemo(
+    () =>
+      visibleRecents(
+        recentPlaces,
+        savedPlaces,
+        pickupPlace?.coords,
+        Math.max(0, QUICK_ROW_MAX - savedPlaces.length),
+      ),
+    [recentPlaces, savedPlaces, pickupPlace?.coords],
+  );
+
+  /**
+   * Tapping a saved or recent place. The whole point of both: the coordinates
+   * are already here, so this sets the field outright — no Places
+   * autocomplete, no Places details, no second tap on a prediction. Mirrors
+   * selectPlace's tail from the point where a ResolvedPlace exists.
+   */
+  function applyPlace(
+    p: { address: string; display: string; lat: number; lng: number },
+    field: "pickup" | "dropoff" = "dropoff",
+  ) {
+    const place: ResolvedPlace = {
+      label: p.address,
+      display: p.display,
+      coords: { latitude: p.lat, longitude: p.lng },
+      source: "search",
+    };
+    if (field === "pickup") {
+      setPickupPlace(place);
+      setPickupText(place.display);
+    } else {
+      setDropoffPlace(place);
+      setDropoffText(place.display);
+    }
+    setPredictions([]);
+    setActiveField(null);
+    setSearchTouched(false);
+
+    const pickup = field === "pickup" ? place : pickupPlace;
+    const dropoff = field === "dropoff" ? place : dropoffPlace;
+    if (pickup && dropoff) {
+      // Same guard as selectPlace: the field we didn't just set may still show
+      // abandoned free text from an earlier search.
+      if (field === "pickup") setDropoffText(dropoff.display);
+      else setPickupText(pickup.display);
+      setSheet("confirm");
+      getFareEstimate(pickup.coords, dropoff.coords);
+      mapRef.current?.fitToCoordinates([pickup.coords, dropoff.coords], {
+        edgePadding: { top: 80, right: 60, bottom: 380, left: 60 },
+        animated: true,
+      });
+    } else {
+      // One field still empty — send them to THAT one, not to the one they
+      // just filled. (Reachable two ways: the GPS fix hasn't landed, or they
+      // opened the pickup field first and set it from this list.)
+      setSheet("search");
+      setActiveField(field === "pickup" ? "dropoff" : "pickup");
+    }
+  }
+
+  function applySavedPlace(
+    sp: SavedPlace,
+    field: "pickup" | "dropoff" = "dropoff",
+  ) {
+    touchPlace(sp.id);
+    // Optimistic, because touchPlace is fire-and-forget: without this the row
+    // keeps its old position until the next fetch, and the chip the passenger
+    // just used appears not to have moved.
+    setSavedPlaces((prev) =>
+      prev.map((p) =>
+        p.id === sp.id ? { ...p, last_used_at: new Date().toISOString() } : p,
+      ),
+    );
+    applyPlace(sp, field);
+  }
+
+  /** Long-press a chip. Rename is deliberately absent — remove and re-save. */
+  function manageSavedPlace(sp: SavedPlace) {
+    const options: any[] = [];
+    if (sp.kind !== "home")
+      options.push({
+        text: "Set as Home",
+        onPress: async () => {
+          const err = await updatePlaceKind(sp.id, "home", null);
+          if (err) Alert.alert("Couldn't update", err);
+          await reloadSavedPlaces();
+        },
+      });
+    if (sp.kind !== "work")
+      options.push({
+        text: "Set as Work",
+        onPress: async () => {
+          const err = await updatePlaceKind(sp.id, "work", null);
+          if (err) Alert.alert("Couldn't update", err);
+          await reloadSavedPlaces();
+        },
+      });
+    options.push({
+      text: "Remove",
+      style: "destructive",
+      onPress: async () => {
+        await deletePlace(sp.id);
+        await reloadSavedPlaces();
+      },
+    });
+    options.push({ text: "Cancel", style: "cancel" });
+    Alert.alert(placeLabel(sp), sp.address, options);
+  }
+
+  function openSavePlace(p: {
+    address: string;
+    display: string;
+    lat: number;
+    lng: number;
+  }) {
+    setPendingSave(p);
+    setSavePlaceError(null);
+    setSavePlaceVisible(true);
+  }
+
+  async function handleSavePlace(kind: PlaceKind, name: string | null) {
+    if (!profile?.id || !pendingSave) return;
+    setSavingPlace(true);
+    setSavePlaceError(null);
+    const err = await savePlace(profile.id, { kind, name, ...pendingSave });
+    setSavingPlace(false);
+    if (err) {
+      setSavePlaceError(err);
+      return;
+    }
+    setSavePlaceVisible(false);
+    setPendingSave(null);
+    await reloadSavedPlaces();
+  }
+
+  /**
+   * "Add Home" / "Add Work" from the empty row. The kind is already known, so
+   * this skips SavePlaceModal entirely and goes straight to an address search
+   * — reusing AddressPickerModal rather than threading a "the next place they
+   * pick becomes Home" flag through the booking search sheet, which would have
+   * to fight activeField and searchTouched for control of the same UI.
+   */
+  async function handleAddKind(picked: PickedAddress) {
+    if (!profile?.id || !addingKind) return;
+    setAddingBusy(true);
+    const err = await savePlace(profile.id, {
+      kind: addingKind,
+      name: null,
+      address: picked.address,
+      display: picked.display ?? picked.address.split(",")[0].trim(),
+      lat: picked.lat,
+      lng: picked.lng,
+    });
+    setAddingBusy(false);
+    if (err) {
+      Alert.alert("Couldn't save", err);
+      return;
+    }
+    setAddingKind(null);
+    await reloadSavedPlaces();
   }
 
   async function searchPlaces(query: string) {
@@ -1495,6 +1731,73 @@ export default function PassengerHomeScreen() {
               <Text style={styles.searchHint}>{searchHint}</Text>
             )}
 
+            {/* Saved places, offered before they start typing. This is the
+                only route to a saved PICKUP — the chip row below is
+                destination-only — and it's what makes the return leg from a
+                saved place one tap. */}
+            {sheet === "search" &&
+              predictions.length === 0 &&
+              !searchTouched &&
+              (savedPlaces.length > 0 || shownRecents.length > 0) && (
+                <ScrollView
+                  style={styles.predictionsList}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {savedPlaces.map((sp) => (
+                    <TouchableOpacity
+                      key={sp.id}
+                      style={styles.predictionRow}
+                      onPress={() =>
+                        applySavedPlace(sp, activeField === "pickup" ? "pickup" : "dropoff")
+                      }
+                    >
+                      <Ionicons
+                        name={placeIcon(sp.kind)}
+                        size={16}
+                        color={colors.textSecondary}
+                        style={{ marginRight: 10 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.predictionText} numberOfLines={1}>
+                          {placeLabel(sp)}
+                        </Text>
+                        <Text style={styles.savedPlaceSub} numberOfLines={1}>
+                          {sp.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                  {shownRecents.map((rp) => (
+                    <TouchableOpacity
+                      key={rp.key}
+                      style={styles.predictionRow}
+                      onPress={() =>
+                        applyPlace(
+                          rp,
+                          activeField === "pickup" ? "pickup" : "dropoff",
+                        )
+                      }
+                    >
+                      <Ionicons
+                        name="time-outline"
+                        size={16}
+                        color={colors.textFaint}
+                        style={{ marginRight: 10 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.predictionText} numberOfLines={1}>
+                          {rp.display}
+                        </Text>
+                        <Text style={styles.savedPlaceSub} numberOfLines={1}>
+                          {rp.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+
             {/* Predictions list */}
             {predictions.length > 0 && (
               <ScrollView
@@ -1522,34 +1825,102 @@ export default function PassengerHomeScreen() {
               </ScrollView>
             )}
 
-            {/* Idle state: quick destinations + card nudge */}
+            {/* Idle state: saved places + card nudge */}
             {sheet === null && predictions.length === 0 && (
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
-                <Text style={styles.sectionLabel}>QUICK DESTINATIONS</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={{ marginBottom: 4 }}
-                >
-                  {QUICK_DESTINATIONS.map((d) => (
-                    <TouchableOpacity
-                      key={d.label}
-                      style={styles.quickChip}
-                      onPress={() => {
-                        setDropoffText(d.label.replace(/^.{2}/, "").trim());
-                        setActiveField("dropoff");
-                        setSearchTouched(true);
-                        searchPlaces(d.address);
-                        setSheet("search");
-                      }}
-                    >
-                      <Text style={styles.quickChipText}>{d.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                {/* One row: saved places, then recent destinations filling
+                    what's left. Never two labelled rows — the label would be
+                    the loudest thing in a sheet whose job is the address
+                    fields. There is no curated fallback when both are empty;
+                    the empty-slot chips below take that case instead. */}
+                {(savedPlaces.length > 0 || shownRecents.length > 0) && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={{ marginBottom: 4 }}
+                  >
+                    {/* Sliced, so the row's cap is a real cap: the table
+                        allows 20 saved places, and 20 chips is a list to read
+                        rather than a shortcut. Ordering is Home/Work first,
+                        so what falls off the end is the least-recently-used
+                        custom place — the right thing to lose. */}
+                    {savedPlaces.slice(0, QUICK_ROW_MAX).map((sp) => (
+                      <TouchableOpacity
+                        key={sp.id}
+                        style={styles.quickChip}
+                        onPress={() => applySavedPlace(sp)}
+                        onLongPress={() => manageSavedPlace(sp)}
+                        delayLongPress={350}
+                      >
+                        <Ionicons
+                          name={placeIcon(sp.kind)}
+                          size={13}
+                          color={colors.textSecondary}
+                        />
+                        <Text style={styles.quickChipText} numberOfLines={1}>
+                          {placeLabel(sp)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    {shownRecents.map((rp) => (
+                      <TouchableOpacity
+                        key={rp.key}
+                        style={styles.quickChip}
+                        onPress={() => applyPlace(rp)}
+                        // Long-press saves it. This is the best capture point
+                        // there is: somewhere they've already been twice.
+                        onLongPress={
+                          canSavePlaces ? () => openSavePlace(rp) : undefined
+                        }
+                        delayLongPress={350}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={13}
+                          color={colors.textFaint}
+                        />
+                        <Text
+                          style={styles.quickChipText}
+                          numberOfLines={1}
+                        >
+                          {rp.display}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                )}
+
+                {/* Nothing saved and nothing ridden — a brand-new passenger.
+                    Offering destinations is hopeless here (we know nothing
+                    about them), so offer the two slots instead: it fills dead
+                    space with onboarding and manufactures the data that fills
+                    this row permanently. */}
+                {canSavePlaces &&
+                  savedPlaces.length === 0 &&
+                  shownRecents.length === 0 && (
+                    <View style={styles.addSlotRow}>
+                      {(["home", "work"] as const).map((k) => (
+                        <TouchableOpacity
+                          key={k}
+                          style={styles.addSlotChip}
+                          onPress={() => setAddingKind(k)}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons
+                            name={placeIcon(k)}
+                            size={13}
+                            color={colors.accentOrange}
+                          />
+                          <Text style={styles.addSlotText}>
+                            Add {k === "home" ? "Home" : "Work"}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                 {showCardNudge && (
                   <TouchableOpacity
                     style={styles.cardNudge}
@@ -1610,6 +1981,32 @@ export default function PassengerHomeScreen() {
                       {dropoffPlace?.label ?? dropoffText}
                     </Text>
                   </View>
+                  {/* Offered here rather than in a settings screen nobody
+                      opens: this is the moment the passenger has a resolved
+                      destination in front of them. Hidden once it's saved. */}
+                  {canSavePlaces &&
+                    dropoffPlace &&
+                    !findSaved(savedPlaces, dropoffPlace.coords) && (
+                      <TouchableOpacity
+                        style={styles.savePlaceBtn}
+                        onPress={() =>
+                          openSavePlace({
+                            address: dropoffPlace.label,
+                            display: dropoffPlace.display,
+                            lat: dropoffPlace.coords.latitude,
+                            lng: dropoffPlace.coords.longitude,
+                          })
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="bookmark-outline"
+                          size={14}
+                          color={colors.accentOrange}
+                        />
+                        <Text style={styles.savePlaceText}>Save this place</Text>
+                      </TouchableOpacity>
+                    )}
                 </View>
 
                 {/* Schedule toggle */}
@@ -2073,6 +2470,31 @@ export default function PassengerHomeScreen() {
         />
       )}
 
+      <SavePlaceModal
+        visible={savePlaceVisible}
+        address={pendingSave?.address ?? ""}
+        takenKinds={savedPlaces.map((p) => p.kind)}
+        saving={savingPlace}
+        error={savePlaceError}
+        onCancel={() => {
+          setSavePlaceVisible(false);
+          setPendingSave(null);
+        }}
+        onSave={handleSavePlace}
+      />
+
+      <AddressPickerModal
+        visible={addingKind !== null}
+        title={addingKind === "work" ? "Add Work" : "Add Home"}
+        note="Saved once, then it's one tap from the booking screen."
+        // Biased to where they are, same as the booking search.
+        near={pickupPlace?.coords ?? null}
+        confirmLabel="Save"
+        busy={addingBusy}
+        onCancel={() => setAddingKind(null)}
+        onConfirm={handleAddKind}
+      />
+
       <DriverProfileSheet
         visible={driverProfileVisible}
         driverId={selectedDriverId}
@@ -2395,6 +2817,9 @@ const makeStyles = (
       marginTop: 4,
     },
     quickChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
       backgroundColor: colors.surface,
       borderRadius: 20,
       paddingVertical: 8,
@@ -2402,6 +2827,45 @@ const makeStyles = (
       marginRight: 8,
       borderWidth: 0.5,
       borderColor: colors.border,
+    },
+    addSlotRow: { flexDirection: "row", gap: 8, marginBottom: 4 },
+    addSlotChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      borderRadius: 20,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: colors.accentOrange,
+      backgroundColor: "rgba(232,80,10,0.06)",
+    },
+    addSlotText: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.accentOrange,
+    },
+    savedPlaceSub: {
+      fontSize: 11,
+      color: colors.textMuted,
+      marginTop: 1,
+    },
+    savePlaceBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      alignSelf: "flex-start",
+      marginTop: 10,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 10,
+      backgroundColor: "rgba(232,80,10,0.08)",
+    },
+    savePlaceText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accentOrange,
     },
     quickChipText: { fontSize: 13, color: colors.textOnSurfaceLight },
 

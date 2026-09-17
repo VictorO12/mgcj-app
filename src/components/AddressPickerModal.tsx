@@ -14,6 +14,14 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useTheme } from "../theme/ThemeContext";
+import { useAuth } from "../hooks/AuthContext";
+import {
+  fetchSavedPlaces,
+  touchPlace,
+  placeLabel,
+  placeIcon,
+  type SavedPlace,
+} from "../lib/savedPlaces";
 import type { Colors } from "../theme/colors";
 
 const MAPS_KEY = Constants.expoConfig?.extra?.googleMapsRoutingKey;
@@ -22,6 +30,12 @@ export interface PickedAddress {
   lat: number;
   lng: number;
   address: string;
+  /**
+   * Short form — Places `main_text`, e.g. "Valley Regional Hospital".
+   * Optional because the callers that only re-point a ride store the full
+   * address and have no use for it; a caller saving the place does.
+   */
+  display?: string;
 }
 
 interface Prediction {
@@ -60,9 +74,14 @@ export default function AddressPickerModal({
   onConfirm,
 }: Props) {
   const { colors } = useTheme();
+  const { profile } = useAuth();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [query, setQuery] = useState(initialQuery);
+  // Saved places, offered before they type. Same table as the booking screen's
+  // chip row — a saved place already has coordinates, so picking one here costs
+  // no Places autocomplete and no Places details call.
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [searching, setSearching] = useState(false);
   const [picked, setPicked] = useState<PickedAddress | null>(null);
@@ -77,6 +96,23 @@ export default function AddressPickerModal({
     setPredictions([]);
     setPicked(null);
   }, [visible, initialQuery]);
+
+  useEffect(() => {
+    if (!visible || !profile?.id) return;
+    void fetchSavedPlaces(profile.id).then(setSavedPlaces);
+  }, [visible, profile?.id]);
+
+  function chooseSaved(sp: SavedPlace) {
+    touchPlace(sp.id);
+    setPicked({
+      lat: sp.lat,
+      lng: sp.lng,
+      address: sp.address,
+      display: sp.display,
+    });
+    setQuery(sp.display);
+    setPredictions([]);
+  }
 
   useEffect(() => {
     return () => {
@@ -123,14 +159,15 @@ export default function AddressPickerModal({
       if (!loc) return;
       // Store the full description, not the short display name — the civic
       // number is in it and the driver needs it, same rule as booking.
+      const display =
+        p.structured_formatting?.main_text || p.description.split(",")[0];
       setPicked({
         lat: loc.lat,
         lng: loc.lng,
         address: stripCountry(p.description),
+        display,
       });
-      setQuery(
-        p.structured_formatting?.main_text || p.description.split(",")[0],
-      );
+      setQuery(display);
       setPredictions([]);
     } catch (e) {
       console.error("[AddressPicker] details", e);
@@ -169,6 +206,35 @@ export default function AddressPickerModal({
               <ActivityIndicator size="small" color={colors.accentOrange} />
             )}
           </View>
+
+          {predictions.length === 0 && !picked && savedPlaces.length > 0 && (
+            <ScrollView
+              style={styles.predictions}
+              keyboardShouldPersistTaps="handled"
+            >
+              {savedPlaces.map((sp) => (
+                <TouchableOpacity
+                  key={sp.id}
+                  style={styles.prediction}
+                  onPress={() => chooseSaved(sp)}
+                >
+                  <Ionicons
+                    name={placeIcon(sp.kind)}
+                    size={18}
+                    color={colors.textSecondary}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.predMain} numberOfLines={1}>
+                      {placeLabel(sp)}
+                    </Text>
+                    <Text style={styles.predSub} numberOfLines={1}>
+                      {sp.address}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
 
           {predictions.length > 0 && (
             <ScrollView

@@ -10,6 +10,12 @@ export interface Profile {
   deactivation_pending: boolean
   deleted_at: string | null
   created_at: string
+  /**
+   * Dispatch-created passenger who has never signed up (20260758). They never
+   * hold a session themselves, so this is only ever false for the signed-in
+   * user — but AuthContext selects it, so the type should carry it.
+   */
+  is_guest: boolean
   student_verified: boolean
   student_institution_id: string | null
   student_verified_at: string | null
