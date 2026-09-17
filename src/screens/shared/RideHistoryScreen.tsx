@@ -316,7 +316,17 @@ export default function RideHistoryScreen({ onClose }: Props) {
     }
 
     const mapped: RideRecord[] = data.map((ride: any) => {
-      const rating = ride.ride_reviews?.[0]?.rating ?? null;
+      // ride_reviews is embedded, and its shape depends on the DB, not on us:
+      // PostgREST returns an OBJECT for a to-one embed and an ARRAY for a
+      // to-many one, and it decides which by whether ride_reviews.ride_id
+      // carries a UNIQUE constraint -- which it does, since a ride gets at
+      // most one review. Indexing `[0]` into an object is undefined, so every
+      // rating silently read as null while the row sat in the table. Accept
+      // both shapes: the sibling embeds in this same select (driver,
+      // passenger) are already read as objects.
+      const reviewEmbed = ride.ride_reviews;
+      const review = Array.isArray(reviewEmbed) ? reviewEmbed[0] : reviewEmbed;
+      const rating = review?.rating ?? null;
       const hasReview = rating != null;
       const otherName = isDriver
         ? ride.passenger?.name ?? null
