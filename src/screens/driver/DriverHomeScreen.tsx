@@ -20,6 +20,7 @@ import { supabase } from "../../lib/supabase";
 import { regionAroundUser } from "../../lib/mapRegion";
 import { useOnReconnect } from "../../lib/connectivity";
 import { useAuth } from "../../hooks/AuthContext";
+import { fetchCompanyRegion, readCachedRegion, NEUTRAL_REGION } from "../../lib/companyRegion";
 import {
   useNotifications,
   registerPushToken,
@@ -151,12 +152,11 @@ interface Props {
   onOpenAvailable?: () => void;
 }
 
-const VALLEY_REGION = {
-  latitude: 45.0773,
-  longitude: -64.3601,
-  latitudeDelta: 0.15,
-  longitudeDelta: 0.15,
-};
+// The map's opening frame comes from the company (service areas -> their city),
+// resolved in src/lib/companyRegion.ts. The hardcoded Annapolis Valley region
+// that used to live here is gone: it was the wrong answer for any company
+// outside it, and having it available as a floor is why no right answer was
+// ever required.
 
 export default function DriverHomeScreen({
   assignedRide,
@@ -303,6 +303,31 @@ export default function DriverHomeScreen({
       );
     })();
   }, []);
+
+  // Frame the map on the company's service areas until the GPS fix lands.
+  // Deliberately gated on location still being null: a real fix is always a better
+  // answer than a company-wide bounding box, and re-framing after one arrives
+  // would drag the map away from the user.
+  useEffect(() => {
+    let cancelled = false;
+    if (!profile?.company_id) return;
+    (async () => {
+      // Disk first: the company frame changes about never, so a cached answer
+      // is right and arrives in milliseconds. The network read then corrects it
+      // if they have drawn something new since.
+      const cached = await readCachedRegion(profile.company_id!);
+      if (!cancelled && cached && !location) {
+        mapRef.current?.animateToRegion(cached, 0);
+      }
+      const region = await fetchCompanyRegion(profile.company_id);
+      if (cancelled || !region || location) return;
+      mapRef.current?.animateToRegion(region, 600);
+    })();
+    return () => { cancelled = true; };
+    // Runs once per company. location is read inside rather than depended on, so a
+    // fix arriving mid-flight cancels the move instead of re-triggering it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.company_id]);
 
   // Gated on `location`, which only gets set after the permission prompt above
   // resolves — watchHeadingAsync throws if it starts first, and there'd be no
@@ -499,7 +524,7 @@ export default function DriverHomeScreen({
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
-        initialRegion={VALLEY_REGION}
+        initialRegion={NEUTRAL_REGION}
         // No blue dot: the driver's own car marker is their position indicator,
         // and showing both put two markers on the same coordinate.
         showsUserLocation={false}

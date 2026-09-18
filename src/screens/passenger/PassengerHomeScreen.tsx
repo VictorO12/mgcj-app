@@ -22,6 +22,7 @@ import * as Notifications from "expo-notifications";
 import { GradientFill } from "../../components/GradientFill";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
+import { fetchCompanyRegion, readCachedRegion, NEUTRAL_REGION } from "../../lib/companyRegion";
 import { useActiveRide } from "../../hooks/useActiveRide";
 import { supabase } from "../../lib/supabase";
 import { regionAroundUser } from "../../lib/mapRegion";
@@ -161,12 +162,11 @@ interface ActiveDriver {
 // supabase/functions/_shared/presence.ts.
 const DRIVER_STALE_MS = 60_000;
 
-const VALLEY_REGION = {
-  latitude: 45.0773,
-  longitude: -64.3601,
-  latitudeDelta: 0.15,
-  longitudeDelta: 0.15,
-};
+// The map's opening frame comes from the company (service areas -> their city),
+// resolved in src/lib/companyRegion.ts. The hardcoded Annapolis Valley region
+// that used to live here is gone: it was the wrong answer for any company
+// outside it, and having it available as a floor is why no right answer was
+// ever required.
 const BUSY_STATUSES = ["offered", "assigned", "driver_arriving", "in_progress"];
 
 type MCIcon = React.ComponentProps<typeof MaterialCommunityIcons>["name"];
@@ -307,6 +307,12 @@ export default function PassengerHomeScreen() {
   const [checkingDiscountCode, setCheckingDiscountCode] = useState(false);
   const [fareLoading, setFareLoading] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
+  // Which end of the trip the company doesn't serve, if any. Null means fine.
+  const [outOfArea, setOutOfArea] = useState<null | "pickup" | "dropoff">(null);
+  // Trip length + the company's confirmation threshold, for the long-trip
+  // guard in confirmBooking.
+  const [tripMetres, setTripMetres] = useState(0);
+  const [longTripKm, setLongTripKm] = useState<number | null>(null);
   const [sheet, setSheet] = useState<"search" | "confirm" | null>(null);
   const [activeDrivers, setActiveDrivers] = useState<ActiveDriver[]>([]);
   const activeDriversDebounce = useRef<ReturnType<typeof setTimeout> | null>(
@@ -500,6 +506,82 @@ export default function PassengerHomeScreen() {
       minute: "2-digit",
     });
   }
+
+  // Service-area pre-check, so the passenger never reaches a refusal.
+  //
+  // The server refuses an out-of-area booking three ways over (the rides
+  // trigger, create-payment-intent, edit-ride) and that is the backstop, not
+  // the experience. It is also NOT enough on its own for card rides: reaching
+  // the refusal means create-payment-intent has already been asked for a hold.
+  // Better that Book is never tappable.
+  //
+  // This calls company_serves_point — the SAME function the trigger runs. It
+  // deliberately does not reimplement point-in-polygon on the client: a preview
+  // that disagreed with enforcement would be worse than none, which is the
+  // lesson from both the $0.75 ride and the un-surcharged vehicle class.
+  useEffect(() => {
+    let cancelled = false;
+    const company = profile?.company_id;
+    if (!company || (!pickupPlace && !dropoffPlace)) {
+      setOutOfArea(null);
+      return;
+    }
+
+    (async () => {
+      const ask = async (
+        coords: { latitude: number; longitude: number },
+        mode: "pickup" | "dropoff",
+      ) => {
+        const { data, error } = await supabase.rpc("company_serves_point", {
+          p_company_id: company,
+          p_lat: coords.latitude,
+          p_lng: coords.longitude,
+          p_mode: mode,
+        });
+        // Fail open on an error: the server still refuses at booking, and a
+        // network blip must not present as "we don't serve you".
+        return error ? true : data !== false;
+      };
+
+      if (pickupPlace && !(await ask(pickupPlace.coords, "pickup"))) {
+        if (!cancelled) setOutOfArea("pickup");
+        return;
+      }
+      if (dropoffPlace && !(await ask(dropoffPlace.coords, "dropoff"))) {
+        if (!cancelled) setOutOfArea("dropoff");
+        return;
+      }
+      if (!cancelled) setOutOfArea(null);
+    })();
+
+    return () => { cancelled = true; };
+  }, [profile?.company_id, pickupPlace, dropoffPlace]);
+
+  // Frame the map on the company's service areas until the GPS fix lands.
+  // Deliberately gated on userLocation still being null: a real fix is always a
+  // better answer than a company-wide bounding box, and re-framing after one
+  // arrives would drag the map away from the passenger.
+  useEffect(() => {
+    let cancelled = false;
+    if (!profile?.company_id) return;
+    (async () => {
+      // Disk first: the company frame changes about never, so a cached answer
+      // is right and arrives in milliseconds. The network read then corrects it
+      // if they have drawn something new since.
+      const cached = await readCachedRegion(profile.company_id!);
+      if (!cancelled && cached && !userLocation) {
+        mapRef.current?.animateToRegion(cached, 0);
+      }
+      const region = await fetchCompanyRegion(profile.company_id);
+      if (cancelled || !region || userLocation) return;
+      mapRef.current?.animateToRegion(region, 600);
+    })();
+    return () => { cancelled = true; };
+    // Runs once per company. userLocation is read inside rather than depended
+    // on, so a fix arriving mid-flight cancels the move instead of retriggering
+    // it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.company_id]);
 
   useEffect(() => {
     (async () => {
@@ -950,7 +1032,7 @@ export default function PassengerHomeScreen() {
           `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.latitude},${pickup.longitude}&destination=${dropoff.latitude},${dropoff.longitude}&key=${MAPS_KEY}`,
         ),
         profile?.company_id
-          ? supabase.from("companies").select("base_fare, rate_per_km").eq("id", profile.company_id).maybeSingle()
+          ? supabase.from("companies").select("base_fare, rate_per_km, long_trip_confirm_km").eq("id", profile.company_id).maybeSingle()
           : Promise.resolve({ data: null }),
         profile?.company_id
           ? supabase.from("vehicle_classes").select("id, name, capacity, surcharge_percent").eq("company_id", profile.company_id).eq("is_active", true).order("display_order")
@@ -960,6 +1042,10 @@ export default function PassengerHomeScreen() {
       ]);
       const metres = (await directionsRes.json()).routes?.[0]?.legs?.[0]?.distance?.value ?? 0;
       const pricing = (pricingRes as any).data;
+      setTripMetres(metres);
+      setLongTripKm(
+        pricing?.long_trip_confirm_km != null ? Number(pricing.long_trip_confirm_km) : null,
+      );
       const baseFareRate = pricing?.base_fare ?? 4;
       const ratePerKm = pricing?.rate_per_km ?? 1.8;
       const baseFare = Math.round((baseFareRate + (metres / 1000) * ratePerKm) * 100) / 100;
@@ -1081,7 +1167,33 @@ export default function PassengerHomeScreen() {
     }
   }
 
+  // An unusually long trip is confirmed, never refused. The trip is legitimate
+  // — this company does airport runs — but a mis-tapped autocomplete row is
+  // not, and only the passenger can tell the two apart. Service areas already
+  // make the catastrophic version unreachable; this catches the bounded but
+  // surprising one, where someone means the mall and taps the airport.
+  function confirmLongTrip(): Promise<boolean> {
+    const km = tripMetres / 1000;
+    if (!longTripKm || km <= longTripKm) return Promise.resolve(true);
+    const fare = classFares[selectedClassId ?? ""] ?? fareEstimate ?? 0;
+    return new Promise(resolve => {
+      Alert.alert(
+        "That's a long trip",
+        `This is about ${Math.round(km)} km` +
+          (fare ? `, around $${fare.toFixed(2)}` : "") +
+          ". Is that right?",
+        [
+          { text: "Go back", style: "cancel", onPress: () => resolve(false) },
+          { text: "Yes, book it", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+  }
+
   async function confirmBooking() {
+    if (!(await confirmLongTrip())) return;
+
     if (!pickupPlace || !dropoffPlace || !profile) {
       Alert.alert(
         "Missing info",
@@ -1420,7 +1532,7 @@ export default function PassengerHomeScreen() {
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
-        initialRegion={VALLEY_REGION}
+        initialRegion={NEUTRAL_REGION}
         showsUserLocation
         showsMyLocationButton={false}
         customMapStyle={resolvedTheme === "dark" ? darkMapStyle : []}
@@ -2315,7 +2427,7 @@ export default function PassengerHomeScreen() {
                 <TouchableOpacity
                   style={[
                     styles.bookBtn,
-                    (bookingLoading || noDriversForImmediate) && {
+                    (bookingLoading || noDriversForImmediate || outOfArea) && {
                       opacity: 0.6,
                     },
                   ]}
@@ -2323,9 +2435,9 @@ export default function PassengerHomeScreen() {
                   onPressIn={pressBookIn}
                   onPressOut={pressBookOut}
                   onPress={confirmBooking}
-                  disabled={bookingLoading || noDriversForImmediate}
+                  disabled={bookingLoading || noDriversForImmediate || !!outOfArea}
                 >
-                  {!noDriversForImmediate && (
+                  {!noDriversForImmediate && !outOfArea && (
                     <GradientFill
                       colors={["#F97316", "#E8500A", "#C2410C"]}
                       style={[StyleSheet.absoluteFill, styles.bookBtnGradient]}
@@ -2336,13 +2448,17 @@ export default function PassengerHomeScreen() {
                   ) : (
                     <View style={styles.bookBtnInner}>
                       <Text style={styles.bookBtnText}>
-                        {noDriversForImmediate
-                          ? "No drivers available"
-                          : isScheduled
-                            ? "Schedule ride"
-                            : "Book ride"}
+                        {outOfArea === "pickup"
+                          ? "We don't pick up there"
+                          : outOfArea === "dropoff"
+                            ? "We don't drop off there"
+                            : noDriversForImmediate
+                              ? "No drivers available"
+                              : isScheduled
+                                ? "Schedule ride"
+                                : "Book ride"}
                       </Text>
-                      {!noDriversForImmediate && (
+                      {!noDriversForImmediate && !outOfArea && (
                         <Ionicons
                           name={isScheduled ? "calendar" : "arrow-forward"}
                           size={17}
