@@ -17,6 +17,7 @@ import CarMarker from "../../components/CarMarker";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { regionAroundUser } from "../../lib/mapRegion";
 import { useOnReconnect } from "../../lib/connectivity";
 import { useAuth } from "../../hooks/AuthContext";
 import {
@@ -297,7 +298,7 @@ export default function DriverHomeScreen({
       };
       setLocation(coords);
       mapRef.current?.animateToRegion(
-        { ...coords, latitudeDelta: 0.08, longitudeDelta: 0.08 },
+        regionAroundUser(coords),
         800,
       );
     })();
@@ -727,7 +728,7 @@ export default function DriverHomeScreen({
           ]}
           onPress={() =>
             mapRef.current?.animateToRegion(
-              { ...location, latitudeDelta: 0.08, longitudeDelta: 0.08 },
+              regionAroundUser(location),
               600,
             )
           }

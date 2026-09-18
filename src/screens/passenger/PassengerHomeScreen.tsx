@@ -24,6 +24,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../hooks/AuthContext";
 import { useActiveRide } from "../../hooks/useActiveRide";
 import { supabase } from "../../lib/supabase";
+import { regionAroundUser } from "../../lib/mapRegion";
 import { invokeFunction } from "../../lib/invokeFunction";
 import RideTrackingSheet from "../../components/RideTrackingSheet";
 import RideChatScreen from "../shared/RideChatScreen";
@@ -525,7 +526,7 @@ export default function PassengerHomeScreen() {
       });
       setPickupText("My location");
       mapRef.current?.animateToRegion(
-        { ...coords, latitudeDelta: 0.08, longitudeDelta: 0.08 },
+        regionAroundUser(coords),
         800,
       );
       try {
@@ -1327,7 +1328,7 @@ export default function PassengerHomeScreen() {
     setScheduledDate(null);
     if (userLocation)
       mapRef.current?.animateToRegion(
-        { ...userLocation, latitudeDelta: 0.08, longitudeDelta: 0.08 },
+        regionAroundUser(userLocation),
         600,
       );
   }
@@ -1603,7 +1604,7 @@ export default function PassengerHomeScreen() {
           style={styles.recenterBtn}
           onPress={() =>
             mapRef.current?.animateToRegion(
-              { ...userLocation, latitudeDelta: 0.08, longitudeDelta: 0.08 },
+              regionAroundUser(userLocation),
               600,
             )
           }
