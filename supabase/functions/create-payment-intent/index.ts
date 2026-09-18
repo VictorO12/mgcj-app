@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { computeAuthoritativeFare } from '../_shared/fare.ts'
+import { checkTrip, outOfAreaMessage } from '../_shared/serviceArea.ts'
 
 const STRIPE_SECRET_KEY  = Deno.env.get('STRIPE_SECRET_KEY')!
 const STRIPE_API         = 'https://api.stripe.com/v1'
@@ -90,6 +91,31 @@ Deno.serve(async (req) => {
 
     if (!passenger?.stripe_customer_id) {
       return new Response(JSON.stringify({ error: 'No saved payment method found. Please add a card first.' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Service area, BEFORE Stripe. Ordering is the whole point of doing this
+    // here as well as in the rides trigger: this function runs before the ride
+    // row exists, so a trigger-only design would take the card hold, and only
+    // then have the INSERT refused — leaving the passenger with a ~7-day
+    // authorization for a ride that does not exist.
+    const badEnd = await checkTrip(
+      serviceClient,
+      passenger.company_id,
+      { lat: pickup_lat, lng: pickup_lng },
+      { lat: dropoff_lat, lng: dropoff_lng },
+    )
+    if (badEnd) {
+      const { data: company } = await serviceClient
+        .from('companies')
+        .select('name')
+        .eq('id', passenger.company_id)
+        .maybeSingle()
+      return new Response(JSON.stringify({
+        error: outOfAreaMessage(company?.name ?? null, badEnd),
+        code:  badEnd === 'pickup' ? 'pickup_out_of_area' : 'dropoff_out_of_area',
+      }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }

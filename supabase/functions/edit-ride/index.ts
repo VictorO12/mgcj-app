@@ -64,6 +64,7 @@ import {
   routeMetres, routeLegMetres, fareFromMetres, getCompanyPricing, getVehicleSurcharge,
 } from '../_shared/fare.ts'
 import { evaluate, COMMITMENT_LOOKAHEAD_MINS, type Commitment } from '../_shared/commitment.ts'
+import { checkTrip, outOfAreaMessage } from '../_shared/serviceArea.ts'
 import { sendPush as sendPushShared } from '../_shared/push.ts'
 
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY')!
@@ -334,12 +335,13 @@ Deno.serve(async (req) => {
       vehicle_class_id: newVehicleClassId,
       fare_override,
       confirm_conflict,
+      confirm_out_of_area,
     } = body
 
     const isAdmin = actor === 'admin'
     if (!isAdmin && (
       newScheduledAtRaw != null || newVehicleClassId !== undefined ||
-      fare_override != null || confirm_conflict
+      fare_override != null || confirm_conflict || confirm_out_of_area
     )) {
       // Not merely unsupported — these are the fields that let a caller set
       // their own price and move a booked time past the reschedule branch's
@@ -397,6 +399,40 @@ Deno.serve(async (req) => {
       if (!Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) {
         return json({ error: 'Missing or invalid coordinates' }, 400)
       }
+    }
+
+    // ── Service area ────────────────────────────────────────────
+    // THE FOURTH DOOR. guard_ride_service_area is a BEFORE INSERT trigger and
+    // exempts service_role, so neither of those sees a relocate: book a legal
+    // ride, then move the dropoff to Montreal. That is the same shape as the
+    // bug this whole function was built to close (move the destination, leave
+    // the fare pinned) arriving through the same door a second time, so the
+    // check has to live here, in the caller.
+    //
+    // Only the END THAT MOVED is checked. Re-checking a coordinate the caller
+    // did not touch would let a service-area edit retroactively strand rides
+    // that were legal when booked — a passenger would be unable to fix a
+    // typo'd destination because their untouched pickup had since fallen out
+    // of the area.
+    const areaCheck = await checkTrip(
+      supabase,
+      ride.company_id,
+      pickup  ? { lat: Number(newPickup.lat),  lng: Number(newPickup.lng)  } : null,
+      dropoff ? { lat: Number(newDropoff.lat), lng: Number(newDropoff.lng) } : null,
+    )
+    // Dispatch confirms through it, a passenger cannot — same asymmetry as the
+    // commitment conflict below, and for the same reason: dispatch IS the
+    // escape hatch, and a hard block leaves nobody able to make the call.
+    if (areaCheck && !(isAdmin && confirm_out_of_area)) {
+      const { data: company } = await supabase
+        .from('companies').select('name').eq('id', ride.company_id).maybeSingle()
+      return json({
+        error: isAdmin
+          ? `That address is outside your service areas (${areaCheck}).`
+          : outOfAreaMessage(company?.name ?? null, areaCheck),
+        requires_confirmation: isAdmin,
+        code: areaCheck === 'pickup' ? 'pickup_out_of_area' : 'dropoff_out_of_area',
+      }, 409)
     }
 
     // Only a change to WHERE the ride goes, what class of car it is, or the
